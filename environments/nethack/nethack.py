@@ -51,6 +51,11 @@ class GameSpec:
     description: str
     success_criterion: str      # human-readable, codified in rubric
     success_milestone: Any = None
+    # Which env class setup_state instantiates: "full" -> NetHackCoreEnv (the
+    # standard ascension game); "primitives" -> the six-floor honest-navigation
+    # CurriculumPrimitivesEnv (lazily imported so the default game never depends
+    # on the engine's invocation hooks).
+    task_kind: str = "full"
 
 
 FULL_GAME_SPEC = GameSpec(
@@ -61,6 +66,41 @@ FULL_GAME_SPEC = GameSpec(
     description="The full game. Ascend.",
     success_criterion="ascended",
 )
+
+# The six-floor "primitives" curriculum: an honest-navigation task (no
+# descend/ascend mega-skill). The agent navigates onto real stairs and presses
+# '>'/'<' through a compressed 6-floor down / 6-floor up tour
+# (DoD 1-2-3 <-> Gehennom 48-49-50). At the DoD3->Gehennom boundary it is handed
+# the invocation ritual kit; on Gehennom's Invocation level it is staged beside
+# the vibrating square and completes the ritual itself. Backed by
+# nethack_harness.curriculum.CurriculumPrimitivesEnv (subclass of NetHackCoreEnv),
+# so it is a drop-in for the harness. `task_kind="primitives"` routes setup_state
+# to that env class. See docs/CURRICULUM_PRIMITIVES_RESULTS.md.
+#
+# NOTE: depends on the engine's public invocation hooks (grant_invocation_kit /
+# invocation_pos / seat_on_invocation_square), which land with engine PR #37
+# (feat/4b-six-floor-hooks). Until that reaches nethack-core main, selecting this
+# spec requires a nethack-core built from that branch.
+PRIMITIVES_GAME_SPEC = GameSpec(
+    name="six_floor_primitives",
+    nle_task="engine",
+    des_file=None,
+    max_episode_steps=100_000,
+    description=(
+        "Six-floor primitives curriculum: navigate DoD 1->2->3, cross into "
+        "Gehennom, descend to the Invocation level, and complete the invocation "
+        "ritual — using only primitive stair navigation."
+    ),
+    success_criterion="reached_invocation_level",
+    task_kind="primitives",
+)
+
+# Registry of selectable task specs (by GameSpec.name), resolved in setup_state
+# from the env's `task_spec` kwarg. Default is the full ascension game.
+GAME_SPECS: dict[str, "GameSpec"] = {
+    FULL_GAME_SPEC.name: FULL_GAME_SPEC,
+    PRIMITIVES_GAME_SPEC.name: PRIMITIVES_GAME_SPEC,
+}
 
 
 # ---------- verifiers 0.1.14 compat shim ----------
@@ -200,6 +240,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self,
         *args,
         interface: str = "skill",
+        # Which task spec to run, keyed by GameSpec.name in GAME_SPECS.
+        # "full_nle" (default) is the standard ascension game;
+        # "six_floor_primitives" is the honest-navigation curriculum.
+        task_spec: str = "full_nle",
         sub_lm=None,
         subgoal_proposer=None,
         # Compaction knobs (survey rec). Set via load_environment kwargs.
@@ -262,6 +306,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         **kwargs,
     ):
         self.interface = interface
+        self.task_spec = task_spec
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -361,21 +406,34 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         task: dict = state["task"]
         info: dict = state.get("info") or {}
-        # The env runs the standard full NetHack ascension game ("full_nle").
+        # Resolve the task spec (default: the full NetHack ascension game).
         seed: int = task.get("seed", info.get("seed", random.randint(0, 2**31 - 1)))
-        spec = FULL_GAME_SPEC
+        spec = GAME_SPECS.get(self.task_spec, FULL_GAME_SPEC)
 
         # Game-setup overrides (difficulty/generation knobs, state pokes, custom
         # level). None = vanilla NetHack generation; these are the interface
         # flags that turn the standard game into a customized scenario.
-        env = NetHackCoreEnv(
-            task_name=spec.nle_task,
-            max_episode_steps=spec.max_episode_steps,
-            des_file=spec.des_file,
-            tune=self._setup_tune,
-            modify=self._setup_modify,
-            level_blob=self._setup_level_blob,
-        )
+        if spec.task_kind == "primitives":
+            # Six-floor honest-navigation curriculum. Lazily imported so the
+            # default game never requires the engine's invocation hooks (which
+            # ship with engine PR #37 / feat/4b-six-floor-hooks).
+            from nethack_harness.curriculum import CurriculumPrimitivesEnv
+            env = CurriculumPrimitivesEnv(
+                task_name=spec.nle_task,
+                max_episode_steps=spec.max_episode_steps,
+                tune=self._setup_tune,
+                modify=self._setup_modify,
+                level_blob=self._setup_level_blob,
+            )
+        else:
+            env = NetHackCoreEnv(
+                task_name=spec.nle_task,
+                max_episode_steps=spec.max_episode_steps,
+                des_file=spec.des_file,
+                tune=self._setup_tune,
+                modify=self._setup_modify,
+                level_blob=self._setup_level_blob,
+            )
         env.seed(core=seed, disp=seed)
         # NB: bootstrap_character() is currently a stub; once wired up it
         # auto-invokes #attributes and stores role/race/alignment in state.
@@ -1279,6 +1337,10 @@ def load_environment(
     seed: int = 0,
     max_turns: int = 200,
     interface: str = "skill",
+    # Which task spec to run (GameSpec.name in GAME_SPECS). "full_nle" (default)
+    # is the standard ascension game; "six_floor_primitives" is the honest-
+    # navigation six-floor curriculum (CurriculumPrimitivesEnv).
+    task_spec: str = "full_nle",
     # --- Game-setup overrides: the difficulty / generation knobs from our
     # engine interface. All default to None = vanilla NetHack. Pass these to
     # customize the game instead of the standard ascension run; e.g.
@@ -1319,6 +1381,11 @@ def load_environment(
         interface: "skill" (default — one tool per skill, OpenAI function-calling)
             or "code" (a single `code` tool that runs sandboxed Python against
             an `nh` namespace; the Track B / RLM-research path).
+        task_spec: which task to run, keyed by GameSpec.name in GAME_SPECS.
+            "full_nle" (default) is the standard ascension game;
+            "six_floor_primitives" runs the honest-navigation six-floor
+            curriculum (CurriculumPrimitivesEnv). The latter needs the engine's
+            invocation hooks (engine PR #37 / feat/4b-six-floor-hooks).
         compact_obs: enable per-turn observation compaction (strip blank tty rows,
             glyph-run encoding, inventory diff). Default True; set False for raw v0.0.15
             rendering (replay/debugging).
@@ -1404,6 +1471,7 @@ def load_environment(
         tools=tool_callables,
         max_turns=max_turns,
         interface=interface,
+        task_spec=task_spec,
         sub_lm=sub_lm,
         subgoal_proposer=subgoal_proposer,
         compact_obs=compact_obs,
@@ -1432,6 +1500,10 @@ def load_environment(
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "GameSpec",
+    "FULL_GAME_SPEC",
+    "PRIMITIVES_GAME_SPEC",
+    "GAME_SPECS",
     "_strip_blank_rows",
     "_glyph_run_encode",
     "_inventory_fingerprint",
