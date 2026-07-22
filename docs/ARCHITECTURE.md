@@ -6,10 +6,10 @@ downstream repos: `nethack-hub` (the Prime Intellect environment) and
 `nethack-console` (the viewer).
 
 ```mermaid
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, ui-sans-serif, system-ui, sans-serif','fontSize':'14px','lineColor':'#94a3b8'},'flowchart':{'curve':'basis','htmlLabels':true,'nodeSpacing':38,'rankSpacing':64}}}%%
-flowchart TB
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, ui-sans-serif, system-ui, sans-serif','fontSize':'14px','lineColor':'#94a3b8'},'flowchart':{'curve':'basis','htmlLabels':true,'nodeSpacing':30,'rankSpacing':40,'padding':10}}}%%
+flowchart LR
   subgraph ENGINE["nethack-engine — the NLE replacement"]
-    direction LR
+    direction TB
     SRC["Multi-threaded<br/>NetHack source"]:::src
     subgraph CUST["Customizability"]
       direction TB
@@ -22,10 +22,13 @@ flowchart TB
       C2["Guided teleport"]:::curr
       C3["Custom navigation"]:::curr
     end
+    SRC ~~~ CUST
+    CUST ~~~ CURR
   end
 
   subgraph HUB["nethack-hub — Prime Intellect"]
     direction TB
+    H0["Custom encodings"]:::hub
     H1["Continual harness"]:::hub
     H2["Go-Explore"]:::hub
     H3["Voyager"]:::hub
@@ -55,11 +58,11 @@ flowchart TB
 
 ## The three parts
 
-- **nethack-engine** — the NLE replacement. Wraps a custom NetHack fork through a
-  ctypes binding and adds what the `nle` wrapper can't: **customizability**
-  (in-memory snapshotting, live difficulty knobs) and **curriculum-learning**
-  hooks (custom dungeon floors, guided teleport, custom navigation).
-- **nethack-hub** — the Prime Intellect environment: the `nethack` Verifiers env
+- **nethack-engine** — the NLE replacement. Built up from the NetHack source:
+  **customizability** (in-memory snapshotting, live difficulty knobs) and, on top
+  of that, **curriculum-learning** hooks (custom dungeon floors, guided teleport,
+  custom navigation).
+- **nethack-hub** — the Prime Intellect environment: custom observation encodings
   and the exploration experiments (continual harness, Go-Explore, Voyager).
 - **nethack-console** — the viewer: rollout viewer, web play, replay export.
 
