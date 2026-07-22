@@ -1,0 +1,27 @@
+# fixes harness overlay (Experiment 2 — the candidate architecture under test).
+# This is a TEMPLATE: fill in the actual architectural fixes you iterate on with
+# Gemini, then validate the SAME file across GLM and GPT-5.5. Every field is
+# consumed by environments/nethack/harness_overlay.py.
+name = "fixes"
+
+[system_prompt]
+mode = "patch"     # line-prefix patch over the default SYSTEM_PROMPT
+text = """
+- Navigation: prefer autoexplore + move_to over single-step moves; never re-walk a blacklisted frontier.
+- Memory: pin the current objective and overwrite stale journal notes; do not re-derive map state each turn.
+"""
+
+[per_step_prompt]
+template = ""      # keep default variant unless a fix needs a different formatter
+
+# Action-surface fix example: restrict to the high-level skills that reduce
+# malformed tool calls on weaker policies. Empty `enabled` = no mask.
+[tools]
+enabled = []
+disabled = []
+
+# Reward-shaping fix example (keys are the stripped `_reward` suffix). Empty =
+# keep shipped weights. Progression itself is informational, not a reward.
+[rewards]
+# descent = 1.0
+# scout   = 0.5

@@ -1,0 +1,18 @@
+# baseline harness overlay (Experiment 2). Documents the shipped default as an
+# explicit no-op: no prompt change, full skill set, default reward weights.
+# Equivalent to leaving NETHACK_HARNESS unset. Schema mirrors the fields
+# environments/nethack/harness_overlay.py consumes.
+name = "baseline"
+
+[system_prompt]
+mode = "append"   # replace | append | patch
+text = ""          # empty => no change
+
+[per_step_prompt]
+template = ""      # empty => keep the env's default variant formatter
+
+[tools]
+enabled = []       # empty => no mask (all registered skills available)
+disabled = []
+
+[rewards]          # empty => shipped default weights

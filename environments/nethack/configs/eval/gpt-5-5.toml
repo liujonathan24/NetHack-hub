@@ -1,0 +1,25 @@
+# GPT-5.5 (Experiment 2 — harness modifications). A VALIDATION model: re-run
+# the frozen harness on a third, architecturally-distinct frontier model to show
+# the progression gain generalizes beyond Gemini and GLM.
+#
+# Reachable via OpenAI (base https://api.openai.com/v1, key OPENAI_API_KEY) —
+# see configs/endpoints.toml [openai].
+# !! OPENAI_API_KEY is NOT set on the current dev box. Export it before running
+#    this cell, or the rollout fails fast. (tools/harness_sweep.py --dry-run
+#    reports key_present=False for this model.)
+# Confirm the exact live id before spending. Uncomment exactly one.
+model = "gpt-5.5"
+# model = "gpt-5.5-mini"
+# model = "gpt-5"
+
+num_examples = 20
+rollouts_per_example = 3
+max_tokens = 2048
+
+[[eval]]
+env_id = "nethack"
+# Keep env-args identical to gemini.toml / glm.toml so the harness is the only
+# moving part. Sweep model x harness with tools/harness_sweep.py.
+# env-args (per prime eval `-a`): {"tier": "corridor_explore", "max_turns": 200}
+
+# Hosted Training docs: https://docs.primeintellect.ai/hosted-training

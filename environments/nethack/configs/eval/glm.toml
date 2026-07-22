@@ -1,0 +1,23 @@
+# GLM (Experiment 2 — harness modifications). A VALIDATION model: after the
+# Gemini fix-iterate loop settles the harness, re-run the frozen harness on GLM
+# to show the progression gain is not Gemini-specific.
+#
+# Reachable via Prime Inference (z-ai/* on base https://api.pinference.ai/api/v1,
+# key PI_API_KEY) — team-billed. See configs/endpoints.toml [pinference-glm].
+# Uncomment exactly one; confirm the id is live on Prime before spending.
+model = "z-ai/glm-5"
+# model = "z-ai/glm-5.2"
+# model = "z-ai/glm-5.1"
+# model = "z-ai/glm-4.7"
+
+num_examples = 20
+rollouts_per_example = 3
+max_tokens = 2048
+
+[[eval]]
+env_id = "nethack"
+# Keep env-args identical to gemini.toml / gpt-5-5.toml so the harness is the
+# only moving part. Sweep model x harness with tools/harness_sweep.py.
+# env-args (per prime eval `-a`): {"tier": "corridor_explore", "max_turns": 200}
+
+# Hosted Training docs: https://docs.primeintellect.ai/hosted-training

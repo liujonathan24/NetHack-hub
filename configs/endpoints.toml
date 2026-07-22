@@ -8,7 +8,17 @@
 id   = "openai"
 url  = "https://api.openai.com/v1"
 key  = "OPENAI_API_KEY"
-models = ["gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "o1-mini", "o1"]
+models = ["gpt-5.5", "gpt-5.5-mini", "gpt-5", "gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "o1-mini", "o1"]
+
+# Google Gemini via the OpenAI-compatible Generative Language endpoint.
+# Used as the Experiment 2 rapid fix-iterate model (GEMINI_API_KEY is set on the
+# dev box). Model ids are `gemini-*`; confirm the live id before spending. See
+# approaches/voyager/reverse_curriculum_sweep.py::_endpoint_for for the same map.
+[[endpoints]]
+id   = "google"
+url  = "https://generativelanguage.googleapis.com/v1beta/openai"
+key  = "GEMINI_API_KEY"
+models = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 [[endpoints]]
 id   = "anthropic"

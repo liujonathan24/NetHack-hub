@@ -1,0 +1,25 @@
+# Gemini (Experiment 2 — harness modifications). The RAPID-ITERATION model:
+# GEMINI_API_KEY is set on the dev box, so Gemini is the loop we edit harness
+# code against before validating on the other frontier models.
+#
+# Reachable via the Google Generative Language OpenAI-compatible endpoint
+# (base https://generativelanguage.googleapis.com/v1beta/openai, key
+# GEMINI_API_KEY) — see configs/endpoints.toml [google] and
+# approaches/voyager/reverse_curriculum_sweep.py::_endpoint_for.
+# Confirm the exact live id (`gemini-*`) before spending. Uncomment exactly one.
+model = "gemini-2.5-flash"
+# model = "gemini-2.5-pro"
+# model = "gemini-2.5-flash-lite"
+
+num_examples = 20
+rollouts_per_example = 3
+max_tokens = 2048
+
+[[eval]]
+env_id = "nethack"
+# Cross-model harness sweep: keep env-args identical across models so the only
+# thing that changes is the model (and the NETHACK_HARNESS overlay version).
+# Drive the model x harness matrix with tools/harness_sweep.py.
+# env-args (per prime eval `-a`): {"tier": "corridor_explore", "max_turns": 200}
+
+# Hosted Training docs: https://docs.primeintellect.ai/hosted-training
