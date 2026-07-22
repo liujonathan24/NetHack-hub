@@ -48,6 +48,20 @@ _ENV_DIR = _REPO / "environments" / "nethack"
 
 # Pixel encodings need a vision model; text encodings use the instruct model.
 _PIXEL_VARIANTS = {"IMG", "IMG_TTY"}
+
+# Experiment 1 (Encoding Ablations) prior-framework baselines. These are FAITHFUL
+# ports of NetPlay's and Glyphbox's *native* observation text, registered as the
+# NETPLAY / GLYPHBOX variants (nethack_harness.prompt.rendering). They are text
+# encodings (instruct model, not VLM). The variants' turn_template currently
+# raises NotImplementedError — porting the two renderers is the remaining work
+# (see docs/experiments/exp1_encoding_ablations.md §(e)); until then a real run of
+# these cells will fail loudly rather than silently substitute our own render.
+# Opt in with `--include-baselines`; they are OFF by default so the shipped text
+# vs pixel matrix keeps running unchanged.
+BASELINE_ENCODINGS = [
+    {"variant": "NETPLAY", "map_detail": None},
+    {"variant": "GLYPHBOX", "map_detail": None},
+]
 # Verified available on Prime Inference (2026-06). The TOML default
 # "Qwen/Qwen3.5-VL-7B" does NOT exist on the platform — closest real VLM is
 # qwen/qwen3-vl-8b-instruct.
@@ -247,16 +261,23 @@ if __name__ == "__main__":  # pragma: no cover - manual operational entrypoint
     p.add_argument("--tier", default="corridor_explore")
     p.add_argument("--n-examples", type=int, default=8)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--include-baselines", action="store_true",
+                   help="Append the NETPLAY / GLYPHBOX prior-framework baseline "
+                        "encodings (stubs — raise until ported; see "
+                        "docs/experiments/exp1_encoding_ablations.md §(e)).")
     args = p.parse_args()
 
+    encodings = [
+        {"variant": "B1", "map_detail": None},
+        {"variant": "JSON", "map_detail": "full"},
+        {"variant": "TOON", "map_detail": "full"},
+        {"variant": "IMG", "map_detail": None},
+        {"variant": "IMG_TTY", "map_detail": None},
+    ]
+    if args.include_baselines:
+        encodings += BASELINE_ENCODINGS
     matrix = {
-        "encodings": [
-            {"variant": "B1", "map_detail": None},
-            {"variant": "JSON", "map_detail": "full"},
-            {"variant": "TOON", "map_detail": "full"},
-            {"variant": "IMG", "map_detail": None},
-            {"variant": "IMG_TTY", "map_detail": None},
-        ],
+        "encodings": encodings,
         "models": [None],  # None -> auto (instruct for text, VLM for pixels)
     }
     runner = make_runner(
