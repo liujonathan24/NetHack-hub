@@ -14,14 +14,19 @@ text = """
 [per_step_prompt]
 template = ""      # keep default variant unless a fix needs a different formatter
 
-# Action-surface fix example: restrict to the high-level skills that reduce
-# malformed tool calls on weaker policies. Empty `enabled` = no mask.
+# Action-surface fix: retire the single-step `move` primitive so the policy must
+# route through the high-level navigation skills the system prompt now mandates
+# (autoexplore / move_to / find_and_descend). Reduces malformed step-by-step
+# tool calls on weaker policies. `enabled = []` keeps every other skill; the
+# mask is expressed purely via `disabled`.
 [tools]
 enabled = []
-disabled = []
+disabled = ["move"]
 
-# Reward-shaping fix example (keys are the stripped `_reward` suffix). Empty =
-# keep shipped weights. Progression itself is informational, not a reward.
+# Reward-shaping fix (keys are the stripped `_reward` suffix). The shipped rubric
+# weights every reward at 1.0; this overlay up-weights genuine descent (2.0) and
+# halves the scout/exploration bonus (0.5) so credit tracks depth reached rather
+# than map churn. Unlisted rewards (success, ascension) keep the shipped 1.0.
 [rewards]
-# descent = 1.0
-# scout   = 0.5
+descent = 2.0
+scout   = 0.5

@@ -22,13 +22,24 @@ from nethack_harness.memory.journal import Journal
 from nethack_core.observations import shape as shape_observation
 from nethack_harness.tools.skills import registry as skill_registry, list_skills
 
-try:
-    from environments.nethack import harness_overlay as _harness_overlay
-except ModuleNotFoundError:
-    # Fallback when imported from the package directory (e.g. tests run with
-    # cwd=environments/nethack) rather than the repo root, where the
-    # `environments.nethack` namespace package resolves.
-    import harness_overlay as _harness_overlay
+# Load the harness overlay from the file that sits next to *this* module, by
+# absolute path. A plain `from environments.nethack import harness_overlay` (or
+# `import harness_overlay`) can silently resolve to a *different* checkout's copy
+# when several `environments/` trees share sys.path (e.g. the engine checkout on
+# PYTHONPATH), which would bypass this repo's overlay loader and make the
+# NETHACK_HARNESS sweep a no-op. Loading by __file__-relative path guarantees the
+# hub's own overlay is always used.
+import importlib.util as _ilu
+import os as _os
+import sys as _sys_boot
+
+_ho_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "harness_overlay.py")
+_ho_spec = _ilu.spec_from_file_location("nethack_harness_overlay", _ho_path)
+_harness_overlay = _ilu.module_from_spec(_ho_spec)
+# Register before exec so dataclasses can resolve the module during class
+# creation (sys.modules[cls.__module__] must exist under deferred annotations).
+_sys_boot.modules[_ho_spec.name] = _harness_overlay
+_ho_spec.loader.exec_module(_harness_overlay)
 
 
 # ---------- game spec ----------
@@ -1450,7 +1461,12 @@ def load_environment(
     _reward_funcs = _harness_overlay.apply_reward_weights(
         [scout_reward, descent_reward, success_reward, ascension_reward], _overlay_cfg,
     )
-    rubric = vf.Rubric(funcs=_reward_funcs)
+    # vf.Rubric scores from its `weights=` list (default [1.0]*n), not fn.weight,
+    # so the overlay's reward re-weighting only takes effect if we pass the
+    # resolved weights here. Returns None when no overlay/rewards → weights=None
+    # → the shipped default, keeping baseline behavior bit-identical.
+    _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
+    rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
     if interface == "skill":
         tool_callables = _build_skill_adapter_callables(

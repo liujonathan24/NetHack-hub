@@ -40,18 +40,140 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Optional
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
 _ENV_VAR = "NETHACK_HARNESS"
+# Optional override for the directory holding ``<name>.toml`` overlay files.
+_DIR_ENV_VAR = "NETHACK_HARNESS_DIR"
 
 
-def _load_cfg(name: str):
-    """Import the launchpad harness loader lazily so a missing tools package
-    never breaks the default no-overlay path."""
-    from tools.launchpad.core.harness import load_harness  # local import
-    return load_harness(name)
+# --------------------------------------------------------------------------- #
+# Resolved-overlay schema (mirrors configs/harness/*.toml exactly).
+#
+# ``apply_overlay`` / ``filter_tool_callables`` / ``apply_reward_weights``
+# consume these attributes:
+#   cfg.system_prompt.{mode,text}   cfg.per_step_prompt.template
+#   cfg.tools.{enabled,disabled}    cfg.rewards  (name -> weight)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class SystemPromptOverlay:
+    mode: str = "append"          # replace | append | patch
+    text: str = ""               # empty => no change
+
+
+@dataclass(frozen=True)
+class PerStepPromptOverlay:
+    template: str = ""           # empty => keep the env's default variant
+
+
+@dataclass(frozen=True)
+class ToolsOverlay:
+    enabled: Tuple[str, ...] = ()   # empty => no mask (all skills available)
+    disabled: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HarnessConfig:
+    name: str
+    system_prompt: SystemPromptOverlay = field(default_factory=SystemPromptOverlay)
+    per_step_prompt: PerStepPromptOverlay = field(default_factory=PerStepPromptOverlay)
+    tools: ToolsOverlay = field(default_factory=ToolsOverlay)
+    rewards: Dict[str, float] = field(default_factory=dict)
+
+
+def _harness_dirs() -> list[Path]:
+    """Candidate directories that may hold ``<name>.toml`` overlay files.
+
+    Priority: explicit ``NETHACK_HARNESS_DIR`` override, then ``configs/harness``
+    resolved from this file's repo root (``.../environments/nethack/`` -> repo
+    root), then the same relative to the current working directory.
+    """
+    dirs: list[Path] = []
+    override = os.environ.get(_DIR_ENV_VAR)
+    if override:
+        dirs.append(Path(override))
+    # harness_overlay.py lives at <repo>/environments/nethack/harness_overlay.py
+    repo_root = Path(__file__).resolve().parents[2]
+    dirs.append(repo_root / "configs" / "harness")
+    dirs.append(Path.cwd() / "configs" / "harness")
+    # De-duplicate while preserving order.
+    seen: set[Path] = set()
+    uniq: list[Path] = []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            uniq.append(d)
+    return uniq
+
+
+def _find_toml(name: str) -> Path:
+    """Locate ``<name>.toml`` in the candidate harness dirs, else raise."""
+    for d in _harness_dirs():
+        candidate = d / f"{name}.toml"
+        if candidate.is_file():
+            return candidate
+    searched = ", ".join(str(d) for d in _harness_dirs())
+    raise FileNotFoundError(
+        f"harness overlay {name!r}: no {name}.toml found (searched: {searched})"
+    )
+
+
+def _as_str_tuple(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(v) for v in value)
+    raise ValueError(f"expected a list of strings, got {type(value).__name__}")
+
+
+def _load_cfg(name: str) -> HarnessConfig:
+    """Self-contained TOML overlay loader (replaces the un-vendored
+    ``tools.launchpad.core.harness.load_harness``).
+
+    Reads ``configs/harness/<name>.toml`` and returns a ``HarnessConfig`` whose
+    attributes match exactly what ``apply_overlay`` and friends consume. Missing
+    tables/keys fall back to no-op defaults, so a sparse TOML (e.g. baseline)
+    resolves to the shipped default behavior.
+    """
+    path = _find_toml(name)
+    with path.open("rb") as fh:
+        data = tomllib.load(fh)
+
+    sp = data.get("system_prompt", {}) or {}
+    psp = data.get("per_step_prompt", {}) or {}
+    tools = data.get("tools", {}) or {}
+    rewards_raw = data.get("rewards", {}) or {}
+
+    rewards: Dict[str, float] = {}
+    for key, val in rewards_raw.items():
+        try:
+            rewards[str(key)] = float(val)
+        except (TypeError, ValueError):
+            log.warning(
+                "harness overlay %r: reward %r has non-numeric weight %r; skipping",
+                name, key, val,
+            )
+
+    return HarnessConfig(
+        name=str(data.get("name", name)),
+        system_prompt=SystemPromptOverlay(
+            mode=str(sp.get("mode", "append")),
+            text=str(sp.get("text", "") or ""),
+        ),
+        per_step_prompt=PerStepPromptOverlay(
+            template=str(psp.get("template", "") or ""),
+        ),
+        tools=ToolsOverlay(
+            enabled=_as_str_tuple(tools.get("enabled")),
+            disabled=_as_str_tuple(tools.get("disabled")),
+        ),
+        rewards=rewards,
+    )
 
 
 def _apply_system_prompt(module, overlay) -> None:
@@ -143,19 +265,29 @@ def filter_tool_callables(tool_callables: list, cfg) -> list:
     return out
 
 
+def _reward_key(fn) -> str:
+    """Map a reward callable to its overlay key (stripped ``_reward`` suffix)."""
+    nm = getattr(fn, "__name__", "")
+    return nm[: -len("_reward")] if nm.endswith("_reward") else nm
+
+
 def apply_reward_weights(reward_funcs: list, cfg) -> list:
-    """Rebind ``.weight`` on each reward func per ``cfg.rewards``.
+    """Rebind ``.weight`` on each reward func per ``cfg.rewards`` (back-compat).
 
     Key match is by stripped ``_reward`` suffix (so ``scout`` -> ``scout_reward``).
-    Mutates the function objects in place because ``vf.reward`` stores weight as
-    a function attribute. Returns the same list for caller chaining.
+    Mutates the function objects in place. NOTE: ``vf.Rubric`` derives its scoring
+    weights from the ``weights=`` constructor arg (defaulting to ``1.0`` each) and
+    does *not* read ``fn.weight``, so this mutation alone is not observed by the
+    rubric — use :func:`resolve_reward_weights` to build the explicit ``weights``
+    list the rubric actually consumes. This function is retained so any code that
+    reads ``fn.weight`` directly still sees the overlaid value. Returns the same
+    list for caller chaining.
     """
     if cfg is None or not cfg.rewards:
         return reward_funcs
     weight_map = dict(cfg.rewards)
     for fn in reward_funcs:
-        nm = getattr(fn, "__name__", "")
-        key = nm[:-len("_reward")] if nm.endswith("_reward") else nm
+        key = _reward_key(fn)
         if key in weight_map:
             try:
                 fn.weight = float(weight_map[key])
@@ -164,4 +296,35 @@ def apply_reward_weights(reward_funcs: list, cfg) -> list:
     return reward_funcs
 
 
-__all__ = ["apply_overlay", "filter_tool_callables", "apply_reward_weights"]
+def resolve_reward_weights(reward_funcs: list, cfg, default: float = 1.0) -> Optional[list]:
+    """Build the explicit ``weights`` list for ``vf.Rubric(funcs=..., weights=...)``.
+
+    Returns ``None`` when ``cfg is None`` or declares no reward overrides, so the
+    caller passes ``weights=None`` and the rubric keeps its shipped default of
+    ``[1.0] * n`` — bit-identical to the pre-overlay path. Otherwise returns one
+    weight per func: the ``cfg.rewards`` override (matched by stripped ``_reward``
+    suffix) when present, else ``default`` (the rubric's shipped per-func weight).
+    """
+    if cfg is None or not cfg.rewards:
+        return None
+    weight_map = dict(cfg.rewards)
+    out: list[float] = []
+    for fn in reward_funcs:
+        key = _reward_key(fn)
+        if key in weight_map:
+            try:
+                out.append(float(weight_map[key]))
+                continue
+            except (TypeError, ValueError):
+                log.warning("reward weight for %r is not a number: %r", key, weight_map[key])
+        out.append(float(default))
+    return out
+
+
+__all__ = [
+    "apply_overlay",
+    "filter_tool_callables",
+    "apply_reward_weights",
+    "resolve_reward_weights",
+    "HarnessConfig",
+]
