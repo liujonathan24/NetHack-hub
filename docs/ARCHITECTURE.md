@@ -1,60 +1,67 @@
 # Architecture — repositories & their functions
 
-Three parts, flowing left to right: the upstream game becomes a controllable
-**engine**, which feeds both the **hub** (the Prime Intellect environment) and the
-**console** (the viewer).
+`nethack-engine` turns upstream NetHack into a controllable substrate — the NLE
+replacement, with customizability and curriculum-learning built in. It powers two
+downstream repos: `nethack-hub` (the Prime Intellect environment) and
+`nethack-console` (the viewer).
 
 ```mermaid
-graph LR
-  NH["🎮 NetHack<br/>upstream game (C sources)"]
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, ui-sans-serif, system-ui, sans-serif','fontSize':'14px','lineColor':'#94a3b8'},'flowchart':{'curve':'basis','htmlLabels':true,'nodeSpacing':38,'rankSpacing':64}}}%%
+flowchart TB
+  subgraph ENGINE["nethack-engine — the NLE replacement"]
+    direction LR
+    SRC["Multi-threaded<br/>NetHack source"]:::src
+    subgraph CUST["Customizability"]
+      direction TB
+      S1["Snapshotting"]:::cust
+      S2["Difficulty knobs"]:::cust
+    end
+    subgraph CURR["Curriculum learning"]
+      direction TB
+      C1["Custom dungeon floors"]:::curr
+      C2["Guided teleport"]:::curr
+      C3["Custom navigation"]:::curr
+    end
+  end
 
-  subgraph ENGINE["🛠️ nethack-engine · the NLE replacement + enhancers"]
+  subgraph HUB["nethack-hub — Prime Intellect"]
     direction TB
-    CORE["ctypes binding over a custom NetHack fork → libnethack.so<br/>(nethack_core · nethack_interface)"]
-    CUST["🎛️ Customizability<br/>17 difficulty / generation knobs · secure modify() ·<br/>snapshot / restore / branch · portable level blobs"]
-    CURR["🎓 Curriculum-learning hooks<br/>stair &amp; branch signals · invocation ritual ·<br/>state injection (six-floor primitives)"]
+    H1["Continual harness"]:::hub
+    H2["Go-Explore"]:::hub
+    H3["Voyager"]:::hub
   end
 
-  subgraph HUB["📦 nethack-hub · Prime Intellect environment"]
+  subgraph CONSOLE["nethack-console — viewer"]
     direction TB
-    ENVH["Verifiers env: skills + code-mode ·<br/>prompt + BALROG · navigation · memory"]
-    TASKS["curriculum tasks: full_nle · six_floor_primitives"]
-    EXP["experiments tab:<br/>encoding · harness · continual · explore · variance · ablations"]
+    V1["Rollout viewer"]:::con
+    V2["Web play"]:::con
+    V3["Replay export"]:::con
   end
 
-  subgraph CONSOLE["🖥️ nethack-console · viewer"]
-    RV["rollout viewer · web play · replay export"]
-  end
+  ENGINE ==> HUB
+  ENGINE ==> CONSOLE
 
-  NH --> ENGINE
-  ENGINE --> HUB
-  ENGINE --> CONSOLE
+  classDef src  fill:#f8fafc,stroke:#64748b,color:#0f172a;
+  classDef cust fill:#ecfeff,stroke:#0e7490,color:#083344;
+  classDef curr fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b;
+  classDef hub  fill:#ecfdf5,stroke:#047857,color:#064e3b;
+  classDef con  fill:#fff7ed,stroke:#b45309,color:#7c2d12;
+  style ENGINE  fill:#ffffff,stroke:#cbd5e1,stroke-width:2px;
+  style CUST    fill:#f6feff,stroke:#a5f3fc;
+  style CURR    fill:#f7f8ff,stroke:#c7d2fe;
+  style HUB     fill:#ffffff,stroke:#6ee7b7,stroke-width:2px;
+  style CONSOLE fill:#ffffff,stroke:#fdba74,stroke-width:2px;
 ```
 
 ## The three parts
 
-| Part | What it is |
-|---|---|
-| **NetHack** | The upstream game (C sources), vendored as the fork submodule. |
-| **nethack-engine** | The **NLE replacement**: drives a custom NetHack fork through a ctypes binding (`nethack_core` + `nethack_interface`) instead of the `nle` gym wrapper, and adds the **enhancers** the wrapper structurally can't — **customizability** (17 live difficulty/generation knobs, secure `modify()`, in-memory snapshot/restore/**branch**, portable level blobs) and **curriculum-learning hooks** (stair/branch signals, the invocation ritual, state injection for the six-floor primitives). |
-| **nethack-hub** | The **Prime Intellect environment**: the `nethack` Verifiers env (skills + code-mode, prompt + BALROG progression, navigation, memory), the curriculum tasks (`full_nle`, `six_floor_primitives`), and the **experiments tab**. Depends on the engine as an external package. |
-| **nethack-console** | The **viewer**: rollout viewer, web play, and replay export. |
+- **nethack-engine** — the NLE replacement. Wraps a custom NetHack fork through a
+  ctypes binding and adds what the `nle` wrapper can't: **customizability**
+  (in-memory snapshotting, live difficulty knobs) and **curriculum-learning**
+  hooks (custom dungeon floors, guided teleport, custom navigation).
+- **nethack-hub** — the Prime Intellect environment: the `nethack` Verifiers env
+  and the exploration experiments (continual harness, Go-Explore, Voyager).
+- **nethack-console** — the viewer: rollout viewer, web play, replay export.
 
 Dependencies flow one way — the hub and console build on the engine; the engine
 never depends on them.
-
-## The experiments tab
-
-`python -m experiments.run <name> [--smoke | --real]` is the single entry point;
-each experiment is defined there and delegates to its runner, all on shared
-post-monolith plumbing (`experiments/common.py`). Full write-ups:
-[`docs/experiments/`](experiments/).
-
-| name | Experiment | Runner |
-|---|---|---|
-| `encoding`  | Exp 1 encoding ablations | `tools/encoding_eval/` |
-| `harness`   | Exp 2 harness modifications | `tools/harness_sweep.py` |
-| `continual` | Exp 3 continual-harness loop | `approaches/continuous_harness/` |
-| `explore`   | Exp 3 go-explore / `branch()` | `approaches/go_explore/` |
-| `variance`  | Exp 3 cross-seed variance (6-floor) | `approaches/analysis/seed_variance.py` |
-| `ablations` | level-modification ablations | `tools/ablation_sweep.py` |
