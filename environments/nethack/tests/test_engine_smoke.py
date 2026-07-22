@@ -23,25 +23,33 @@ def test_two_instances_sequential():
 
 
 def test_start_without_end_does_not_leak():
-    """Calling start() a second time without end() must clean up the first game."""
+    """Re-entering start() without end() must not leak hackdirs.
+
+    The engine keeps ONE writable hackdir per instance and reuses it across
+    start()/reset() (a perf optimization — see RawEngine._ensure_hackdir: a
+    ~28x-faster reset that avoids re-copying the data tree). So a second start()
+    without end() cleans and REUSES the same directory rather than allocating a
+    fresh one — which is precisely why nothing leaks. Only end() removes it.
+    """
     env = _engine.RawEngine()
     env.start(core=1, disp=1)
     first_hackdir = env._hackdir
 
-    # Re-enter start() without calling end() first.
+    # Re-enter start() without calling end() first: the hackdir is reused, not
+    # re-allocated, so the SAME directory persists (no second, orphaned dir).
     env.start(core=2, disp=2)
-
-    # The first temp hackdir must be gone — no leak.
-    assert not os.path.exists(first_hackdir), (
-        f"First hackdir was not cleaned up on re-entry: {first_hackdir}"
+    assert env._hackdir == first_hackdir, (
+        "start() re-entry should reuse the same hackdir, not allocate a new one"
+    )
+    assert os.path.isdir(first_hackdir), (
+        f"the reused hackdir should still exist between games: {first_hackdir}"
     )
 
     # Engine must still be functional after re-entry.
     env.step(0)
-    second_hackdir = env._hackdir
-    env.end()
 
-    # The second hackdir must also be gone after end().
-    assert not os.path.exists(second_hackdir), (
-        f"Second hackdir was not cleaned up after end(): {second_hackdir}"
+    # end() is the sole teardown that removes the (single, reused) hackdir.
+    env.end()
+    assert not os.path.exists(first_hackdir), (
+        f"hackdir was not cleaned up after end(): {first_hackdir}"
     )
