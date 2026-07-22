@@ -260,6 +260,92 @@ def _format_obs_glyphbox(structured, journal, state, journal_max_chars: int) -> 
     )
 
 
+# ---------- Experiment 1 baseline encodings (faithful ports — STUBS) ----------
+#
+# The `G` (Glyphbox) and `N` (NetPlay) variants above are *approximations* built
+# on OUR observation extraction: `G` reuses `format_observation_as_chat`, and `N`
+# reuses the canonical ASCII grid and only swaps the skill set. They are NOT the
+# baselines' native observation encodings, so a token-efficiency / long-horizon
+# comparison against them is apples-to-oranges (we are comparing our render under
+# a different tool set, not the prior framework's own state serialization).
+#
+# For Experiment 1 (Encoding Ablations) we want an apples-to-apples comparison of
+# the *encodings themselves*: our structured maps (B1/JSON/TOON) vs. the exact
+# textual state each prior framework feeds its LLM. These two functions are the
+# seam for that. They deliberately raise NotImplementedError until a faithful
+# port lands, so the `NETPLAY` / `GLYPHBOX` variants are registered and routable
+# (see prompt_spec.VARIANT_REGISTRY and tools/encoding_eval/prime_runner.py) but
+# fail loudly rather than silently emitting our own render mislabeled as a
+# baseline.
+
+
+def _format_obs_netplay(structured, journal, state, journal_max_chars: int) -> str:
+    """Variant NETPLAY: faithful port of NetPlay's native observation text.
+
+    Source: Jeurissen et al., "Playing NetHack with LLMs" (CoG 2024),
+    github.com/CommanderCero/NetPlay — `nethack_agent/agent.py ::
+    describe_current_state()` rendered over the persistent
+    `nethack_agent/tracking.py :: Level` model. See docs/netplay-vs-our-harness.md
+    for the full pseudocode of that model.
+
+    What a faithful port must emit (NO ASCII grid — NetPlay never shows one):
+      * A natural-language enumeration of the ROOM / CORRIDOR graph the agent has
+        discovered (nodes + exits), derived from the persistent `Level.features`
+        + `Level.graph`, not from a per-step glyph grid.
+      * Per-tile memory surfaced as prose: which regions are fully explored vs.
+        still border unseen rock (`Level.has_seen`), open/closed doors and
+        `door_open_attempts`, `search_count` hotspots.
+      * Visible + remembered items and monsters as a described list (kind, rough
+        location relative to the player / room), the message log, inventory, and
+        blstats status line.
+
+    Why it is a stub: NetPlay's description is a projection of a *stateful* Level
+    model that accumulates across turns. Our harness rebuilds a stateless grid
+    each step (docs/netplay-vs-our-harness.md §2), so a faithful port must either
+    (a) port `tracking.Level` (has_seen / room graph / search_count / door
+    attempts) and render its `describe_current_state`, or (b) vendor NetPlay's
+    renderer against our `raw_obs`. Until then this raises so the variant is
+    registered but never silently substitutes our own text.
+    """
+    raise NotImplementedError(
+        "NETPLAY baseline encoding is a stub. Port NetPlay's describe_current_state "
+        "over a persistent Level model (see docstring + docs/netplay-vs-our-harness.md) "
+        "before running the NETPLAY variant. The `N` variant is NOT this — it is our "
+        "canonical ASCII obs with NetPlay's skill set only."
+    )
+
+
+def _format_obs_glyphbox_native(structured, journal, state, journal_max_chars: int) -> str:
+    """Variant GLYPHBOX: faithful port of Glyphbox's native observation text.
+
+    Source: Ken (Ken Wang) Glyphbox harness, github.com/kenforthewin/glyphbox.
+    See nethack_harness/tools/code_mode.py (which already implements Glyphbox's
+    *code-execution action surface*) and nethack_harness/navigation/pathfinding.py
+    (which notes where we deliberately diverge from glyphbox's glyph routing).
+
+    What a faithful port must emit (Glyphbox's own state serialization):
+      * Glyphbox's glyph->text map serialization of the observed grid using
+        `nle.nethack.glyph_id_to_...` class routing (its native scheme), rather
+        than our cleaned `glyph_clean_chars` LUT — the token footprint differs and
+        that difference is exactly what Experiment 1 measures.
+      * Its status / inventory / message blocks in Glyphbox's own layout and
+        wording, so token counts are comparable to the published harness.
+      * Paired with the code-execution tool (interface="code", code_mode.py), which
+        IS already the Glyphbox action surface — the observation is the missing half.
+
+    Why it is a stub: the `G` variant reuses OUR `format_observation_as_chat`
+    render; a token-efficiency comparison needs Glyphbox's *own* serialization.
+    Until that renderer is vendored/ported this raises so GLYPHBOX is registered
+    and routable but never silently emits our render mislabeled as the baseline.
+    """
+    raise NotImplementedError(
+        "GLYPHBOX baseline encoding is a stub. Port Glyphbox's native glyph->text "
+        "serialization (github.com/kenforthewin/glyphbox; see code_mode.py for its "
+        "already-ported action surface) before running the GLYPHBOX variant. The `G` "
+        "variant is NOT this — it reuses our canonical formatter."
+    )
+
+
 def _format_obs_summarize_reset(structured, journal, state, journal_max_chars: int) -> str:
     """Variant R: CPP/GPP summarize-and-reset. Same per-turn formatter as
     B1; the difference lives in get_prompt_messages — see _compact_chat_history
@@ -543,6 +629,10 @@ _VARIANT_FORMATTERS = {
     "G": _format_obs_glyphbox,
     "B": _format_obs_balrog,
     "N": None,         # NetPlay differs only in skill_set, not in obs formatter
+    # Experiment 1 baseline encodings (faithful ports — STUBS, raise until
+    # implemented). Distinct from G/N above, which reuse OUR extraction.
+    "NETPLAY": _format_obs_netplay,
+    "GLYPHBOX": _format_obs_glyphbox_native,
     "R": _format_obs_summarize_reset,
     "P": None,         # Continual Harness uses canonical formatter + refinement directive
     "CH": None,        # Full Continual Harness — same formatter; addendum/macros injected in get_prompt_messages

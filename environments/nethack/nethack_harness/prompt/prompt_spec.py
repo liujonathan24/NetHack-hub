@@ -31,6 +31,8 @@ from nethack_harness.prompt.rendering import (
     format_observation_as_chat,
     _format_obs_balrog,
     _format_obs_glyphbox,
+    _format_obs_netplay,
+    _format_obs_glyphbox_native,
     _format_obs_summarize_reset,
 )
 from nethack_harness.helpers import (
@@ -324,6 +326,15 @@ def _build_registry(system_prompt: str) -> dict:
         "B": canonical("B", turn_template=_formatter_template(_format_obs_balrog)),
         # Glyphbox: canonical render, paired with interface=code by the caller.
         "G": canonical("G", turn_template=_formatter_template(_format_obs_glyphbox)),
+        # Experiment 1 baseline encodings — FAITHFUL ports of the prior
+        # frameworks' *native* observation text (NOT the G/N approximations
+        # above). The turn_template raises NotImplementedError until the port
+        # lands (see rendering._format_obs_netplay / _format_obs_glyphbox_native),
+        # so these variants register and route apples-to-apples through
+        # prime_runner but fail loudly rather than silently substituting our own
+        # render. See docs/experiments/exp1_encoding_ablations.md §(e).
+        "NETPLAY": canonical("NETPLAY", turn_template=_formatter_template(_format_obs_netplay)),
+        "GLYPHBOX": canonical("GLYPHBOX", turn_template=_formatter_template(_format_obs_glyphbox_native)),
         # Summarize-and-reset: canonical-equivalent render; the drop is driven by
         # the orthogonal summarize_and_reset kwarg, not the variant.
         "R": canonical("R", turn_template=_formatter_template(_format_obs_summarize_reset)),
