@@ -14,6 +14,11 @@ dependencies = [
     # never imports the Hub. If the NetHack-engine URL 404s (repo not yet
     # populated), fall back to the pre-split source: NetHackHarness.git.
     "nethack-core @ git+https://github.com/liujonathan24/NetHack-engine.git",
+    # The engine's raw typed interface (layer 1), imported as `nethack_interface`.
+    # nethack_harness.interface subclasses its NetHackInterface to add the typed
+    # Action/skill path (which needs the Hub's skill registry). Same repo as the
+    # engine; same NetHackHarness.git fallback applies until the rename lands.
+    "nethack-interface @ git+https://github.com/liujonathan24/NetHack-engine.git#subdirectory=nethack_interface",
     "verifiers>=0.1.14",
     "gymnasium>=0.29",
     "numpy>=1.24",
