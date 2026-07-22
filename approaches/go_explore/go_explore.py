@@ -96,6 +96,7 @@ class Cell:
     traj: list[int]             # action sequence from start that reached the cell
     n_visits: int = 0
     pos: tuple[int, int] = (0, 0)
+    divergence: float = 0.0     # frontier promise from env.branch() (0 if unprobed)
 
 
 @dataclass
@@ -109,19 +110,55 @@ class Result:
     seed: int
     trace_path: str = ""
     cell_keys: list = field(default_factory=list)
+    mean_branch_divergence: float = 0.0   # avg env.branch() divergence over probed cells
+    n_branch_probes: int = 0              # how many times engine.branch() was invoked
 
 
 def _select_cell(archive: dict, rng: random.Random) -> tuple:
-    """Weighted-random pick biased toward deeper / less-visited cells.
+    """Weighted-random pick biased toward deeper / less-visited / more-divergent
+    cells.
 
-    weight = (1 + depth) / (1 + n_visits)  — deeper cells and cells we have
-    returned to less often are more attractive.
+    weight = (1 + depth) * (1 + divergence) / (1 + n_visits)  — deeper cells,
+    cells we have returned to less often, and (when the branch probe is on)
+    cells whose continuations diverge more under reseeding are more attractive.
+    ``divergence`` is 0 unless a cell has been probed via env.branch(), so with
+    the probe off this reduces to the original (1 + depth) / (1 + n_visits).
     """
     keys = list(archive.keys())
     weights = [
-        (1.0 + archive[k].depth) / (1.0 + archive[k].n_visits) for k in keys
+        (1.0 + archive[k].depth)
+        * (1.0 + archive[k].divergence)
+        / (1.0 + archive[k].n_visits)
+        for k in keys
     ]
     return rng.choices(keys, weights=weights, k=1)[0]
+
+
+def _branch_divergence(
+    env: EngineEnv, handle, *, n: int, horizon: int, action: int = _SEARCH
+) -> float:
+    """Frontier "promise" of a cell, measured with the engine's branch() primitive.
+
+    Restores the cell's snapshot and asks the engine for ``n`` reseeded
+    continuations via ``EngineEnv.branch`` (snapshot once, restore n times,
+    reseed-after-restore, roll out ``horizon`` steps of ``action``, return one
+    char-trace per branch). The fraction of DISTINCT traces (0..1) is how much
+    random chance makes this state's futures diverge: high = an unsettled
+    frontier worth returning to, low = a quiescent / dead spot.
+
+    branch() leaves the engine on the last branch's endpoint, so the caller must
+    re-restore before exploring. A branch that throws is scored as 0 divergence
+    rather than aborting the run.
+    """
+    env.restore(handle)
+    try:
+        branches = env.branch(n, reseed=True, horizon=horizon, action=action)
+    except Exception:
+        return 0.0
+    if not branches:
+        return 0.0
+    distinct = len({tuple(b) for b in branches})
+    return (distinct - 1) / max(len(branches) - 1, 1)
 
 
 def _evict_if_needed(env: EngineEnv, archive: dict) -> None:
@@ -150,6 +187,9 @@ def run_go_explore(
     explore_steps: int,
     seed: int,
     verbose: bool = True,
+    branch_probe: bool = False,
+    branch_n: int = 4,
+    branch_horizon: int = 20,
 ) -> tuple[Result, EngineEnv]:
     """Run the archive→return→explore loop. Returns (Result, env).
 
@@ -177,10 +217,25 @@ def run_go_explore(
     best_traj: list[int] = []
     best_cell = start_key
 
+    div_total = 0.0   # sum of branch-probe divergences (for the run mean)
+    n_probes = 0
+
     for it in range(iterations):
         key = _select_cell(archive, rng)
         cell = archive[key]
         cell.n_visits += 1
+
+        # BRANCH PROBE (optional): exercise the engine's branch() primitive on
+        # this cell to measure how much its continuations diverge under
+        # reseeding, and remember it on the cell so _select_cell biases future
+        # returns toward unsettled frontiers. branch() restores the snapshot
+        # internally and moves the engine, so the RETURN below re-restores.
+        if branch_probe:
+            cell.divergence = _branch_divergence(
+                env, cell.handle, n=branch_n, horizon=branch_horizon
+            )
+            div_total += cell.divergence
+            n_probes += 1
 
         # RETURN: restore the cell's snapshot, then reseed so chance diverges.
         env.restore(cell.handle)
@@ -250,6 +305,8 @@ def run_go_explore(
         explore_steps=explore_steps,
         seed=seed,
         cell_keys=sorted(archive.keys()),
+        mean_branch_divergence=(div_total / n_probes) if n_probes else 0.0,
+        n_branch_probes=n_probes,
     )
     return result, env
 
@@ -352,12 +409,25 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--no-trace", action="store_true", help="skip writing the NDJSON trace"
     )
+    parser.add_argument(
+        "--branch-probe",
+        action="store_true",
+        help="probe each returned cell's continuation divergence via "
+        "engine.branch() and bias selection toward unsettled frontiers",
+    )
+    parser.add_argument("--branch-n", type=int, default=4,
+                        help="branches per probe (env.branch n)")
+    parser.add_argument("--branch-horizon", type=int, default=20,
+                        help="rollout steps per branch (env.branch horizon)")
     args = parser.parse_args(argv)
 
     result, env = run_go_explore(
         iterations=args.iterations,
         explore_steps=args.explore_steps,
         seed=args.seed,
+        branch_probe=args.branch_probe,
+        branch_n=args.branch_n,
+        branch_horizon=args.branch_horizon,
     )
 
     trace_path = ""
@@ -375,6 +445,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     print(f"max depth reached : {result.max_depth}")
     print(f"best-traj length  : {len(result.best_traj)}")
     print(f"best-depth cell   : {result.best_depth_cell}  (dlvl, x//8, y//8)")
+    if result.n_branch_probes:
+        print(f"branch probes     : {result.n_branch_probes} "
+              f"(mean divergence {result.mean_branch_divergence:.3f})")
     if trace_path:
         print(f"trace             : {trace_path}")
 
