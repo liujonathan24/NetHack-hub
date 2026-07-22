@@ -50,6 +50,12 @@ include = ["nethack.py", "nethack_harness/**/*.py", "nethack_core/**/*.py", "wik
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 
+[tool.hatch.metadata]
+# The engine deps (nethack-core / nethack-interface) are git/direct references;
+# hatchling rejects those in project.dependencies unless this is enabled. Required
+# for `uv pip install` of this env and for `prime env push` / `prime eval run`.
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["nethack_core", "nethack_harness"]
 # The fork engine (libnethack.so) + NetHack data files (dat/) are placed in
