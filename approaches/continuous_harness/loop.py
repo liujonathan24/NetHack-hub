@@ -146,11 +146,31 @@ def write_bootstrap(bootstrap_dir: Path, cfg: HarnessConfig) -> Path:
 # ---------------------------------------------------------------------------- #
 # depth parsing
 # ---------------------------------------------------------------------------- #
+def _coerce_depth(v: Any) -> Optional[int]:
+    """Best-effort int coercion for a depth value (accepts int or float-int)."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return None
+
+
 def _depth_from_ndjson(path: Path) -> Optional[int]:
-    """Per-rollout depth = max `max_dlvl_reached` over its turns
-    (fallback: max `dlvl`)."""
+    """Per-rollout depth = max depth over the trace's turns.
+
+    Reads whichever depth-bearing key the current trace schema populates, in
+    priority order:
+      1. top-level `max_dlvl_reached` (deepest dlvl reached so far)
+      2. top-level `dlvl`            (current dungeon level)
+      3. `status.depth`             (parsed status-line depth — the post-monolith
+                                     schema always carries this, whereas the
+                                     top-level mirrors can be null)
+    """
     best_max = None
     best_dlvl = None
+    best_status = None
     try:
         for line in path.read_text().splitlines():
             line = line.strip()
@@ -160,44 +180,163 @@ def _depth_from_ndjson(path: Path) -> Optional[int]:
                 rec = json.loads(line)
             except Exception:
                 continue
-            v = rec.get("max_dlvl_reached")
-            if isinstance(v, int):
+            v = _coerce_depth(rec.get("max_dlvl_reached"))
+            if v is not None:
                 best_max = v if best_max is None else max(best_max, v)
-            d = rec.get("dlvl")
-            if isinstance(d, int):
+            d = _coerce_depth(rec.get("dlvl"))
+            if d is not None:
                 best_dlvl = d if best_dlvl is None else max(best_dlvl, d)
+            status = rec.get("status")
+            if isinstance(status, dict):
+                sd = _coerce_depth(status.get("depth"))
+                if sd is not None:
+                    best_status = sd if best_status is None else max(best_status, sd)
     except Exception:
         return None
     if best_max is not None:
         return best_max
-    return best_dlvl
+    if best_dlvl is not None:
+        return best_dlvl
+    return best_status
 
 
-def parse_iteration_depth(trace_dir: Path) -> tuple[float, list[int]]:
-    """Mean per-rollout depth over all NDJSON trace files under trace_dir.
-    Returns (mean_depth, per_rollout_depths)."""
+# results.jsonl depth keys, in priority order. The prime/verifiers rubric writes
+# one row per rollout; if it ever carries a scalar depth we prefer it (single
+# authoritative number) over re-deriving from the per-turn NDJSON.
+_RESULTS_DEPTH_KEYS = ("max_dlvl_reached", "max_dlvl", "dlvl", "depth")
+
+
+def _depths_from_results_jsonl(results_dir: Path) -> Optional[list[int]]:
+    """Per-rollout depths from prime's results.jsonl, if it carries a scalar
+    depth column. Returns None when no results.jsonl (or no depth key) is found,
+    so the caller can fall back to the NDJSON trace. Depth may be nested under a
+    `metrics` dict (that's where the rubric puts descent/scout rewards)."""
+    files = sorted(results_dir.rglob("results.jsonl")) if results_dir.exists() else []
+    for rf in files:
+        depths: list[int] = []
+        found_key = False
+        try:
+            for line in rf.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+                for key in _RESULTS_DEPTH_KEYS:
+                    val = row.get(key)
+                    if val is None:
+                        val = metrics.get(key)
+                    d = _coerce_depth(val)
+                    if d is not None:
+                        found_key = True
+                        depths.append(d)
+                        break
+        except Exception:
+            continue
+        if found_key:
+            return depths
+    return None
+
+
+def parse_iteration_depth(
+    trace_dir: Path, results_dir: Optional[Path] = None
+) -> tuple[float, list[int]]:
+    """Mean per-rollout depth for the iteration. Returns (mean_depth, depths).
+
+    Source priority (post-monolith split layout):
+      1. prime's results.jsonl scalar depth column, if present (authoritative,
+         one number per rollout) — searched under `results_dir`.
+      2. the per-turn NDJSON traces the env writes into `trace_dir` (its
+         `trace_dir` env-arg): max depth per file. This is the normal path today
+         because the current rubric does not emit a scalar depth.
+
+    On an empty result, logs WHERE it looked so the breakage is diagnosable
+    rather than a silent [].
+    """
+    # 1. Prefer a scalar depth from results.jsonl.
+    if results_dir is not None:
+        r_depths = _depths_from_results_jsonl(results_dir)
+        if r_depths:
+            mean = sum(r_depths) / len(r_depths)
+            return mean, r_depths
+
+    # 2. Fall back to per-turn NDJSON traces.
     depths: list[int] = []
+    trace_files: list[Path] = []
     if trace_dir.exists():
-        for f in sorted(trace_dir.glob("*.ndjson")):
+        trace_files = sorted(trace_dir.glob("*.ndjson"))
+        for f in trace_files:
             d = _depth_from_ndjson(f)
             if d is not None:
                 depths.append(d)
+
+    if not depths:
+        looked = [f"trace_dir={trace_dir} (exists={trace_dir.exists()}, "
+                  f"*.ndjson found={len(trace_files)})"]
+        if results_dir is not None:
+            n_results = (len(list(results_dir.rglob('results.jsonl')))
+                         if results_dir.exists() else 0)
+            looked.append(f"results_dir={results_dir} "
+                          f"(exists={results_dir.exists()}, "
+                          f"results.jsonl found={n_results})")
+        print("[parse_iteration_depth] no depth parsed; looked in: "
+              + "; ".join(looked), file=sys.stderr)
+
     mean = (sum(depths) / len(depths)) if depths else 0.0
     return mean, depths
 
 
-def parse_mean_reward(results_root: Path) -> Optional[float]:
-    """Best-effort: pull a mean reward from vf-eval's saved results metadata.
-    vf-eval writes under <cwd>/outputs/evals/.../metadata.json; we scan for the
-    newest metadata.json and look for a reward-ish mean. Returns None if absent."""
+def parse_mean_reward(results_dir: Path) -> Optional[float]:
+    """Mean rubric reward for THIS iteration, from prime's results.jsonl.
+
+    Prefers the authoritative per-rollout `reward` column in
+    `<results_dir>/**/results.jsonl` (mean over rows). Falls back to a
+    reward-ish mean in vf-eval's metadata.json. Returns None if absent.
+
+    NOTE: `results_dir` must be scoped to this iteration's own eval output (we
+    pass `--output-dir` to vf-eval for exactly this). Scanning a shared
+    ancestor would pick up STALE results from unrelated prior runs and report a
+    bogus reward — the failure mode that previously masked broken evals."""
+    if not results_dir.exists():
+        print(f"[parse_mean_reward] results_dir does not exist: {results_dir}",
+              file=sys.stderr)
+        return None
+    # 1. results.jsonl reward column (one row per rollout).
+    results_files = sorted(
+        results_dir.rglob("results.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for rf in results_files:
+        rewards: list[float] = []
+        try:
+            for line in rf.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                v = row.get("reward")
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    rewards.append(float(v))
+        except Exception:
+            continue
+        if rewards:
+            return sum(rewards) / len(rewards)
+    # 2. Fall back to metadata.json reward mean.
     try:
         candidates = sorted(
-            results_root.rglob("metadata.json"),
+            results_dir.rglob("metadata.json"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
     except Exception:
-        return None
+        candidates = []
     for meta in candidates[:5]:
         try:
             data = json.loads(meta.read_text())
@@ -205,7 +344,7 @@ def parse_mean_reward(results_root: Path) -> Optional[float]:
             continue
         for key in ("reward", "mean_reward", "avg_reward"):
             v = data.get(key)
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 return float(v)
         # nested {"metrics": {"reward": {"mean": ...}}}
         metrics = data.get("metrics")
@@ -213,6 +352,9 @@ def parse_mean_reward(results_root: Path) -> Optional[float]:
             r = metrics.get("reward")
             if isinstance(r, dict) and isinstance(r.get("mean"), (int, float)):
                 return float(r["mean"])
+    print(f"[parse_mean_reward] no reward found under {results_dir} "
+          f"(results.jsonl={len(results_files)}, metadata.json={len(candidates)})",
+          file=sys.stderr)
     return None
 
 
@@ -224,6 +366,7 @@ def run_eval(
     cfg: HarnessConfig,
     bootstrap_dir: Path,
     trace_dir: Path,
+    results_dir: Path,
     *,
     env_sh: str,
     dry_run: bool,
@@ -234,9 +377,16 @@ def run_eval(
         return _synthesize_dry_run(cfg, trace_dir)
 
     env_args = cfg.to_env_args(str(bootstrap_dir), str(trace_dir))
+    results_dir.mkdir(parents=True, exist_ok=True)
     # Build the vf-eval command. We source the teacher creds first (env_sh
     # exports PI_API_KEY / REFINER_API_KEY / REFINER_BASE_URL) then invoke
     # vf-eval with --provider prime for the policy.
+    #
+    # `--output-dir` pins results.jsonl to THIS iteration's own dir (absolute).
+    # Without it, vf-eval writes under <cwd>/environments/nethack/outputs/... and
+    # reward-parsing would instead pick up STALE metadata from unrelated prior
+    # runs sitting in the worktree — reporting a bogus reward while the real eval
+    # failed. Per-iteration scoping is what makes reward/depth trustworthy.
     eval_cmd = [
         "uv", "run", "vf-eval", "nethack",
         "--provider", "prime",
@@ -246,6 +396,7 @@ def run_eval(
         "-a", json.dumps(env_args),
         "--disable-tui",
         "--save-results",
+        "--output-dir", str(results_dir),
     ]
     # `source` requires a shell; wrap in bash -lc.
     shell_cmd = (
@@ -332,7 +483,10 @@ def run_loop(args: argparse.Namespace) -> dict[str, Any]:
         iter_dir = current / ".claude" / "worktrees" / "harness-iter" / f"iter{i}"
         trace_dir = out_dir / f"iter{i}" / "trace"
         bootstrap_dir = out_dir / f"iter{i}" / "bootstrap"
-        results_root = iter_dir / "outputs"
+        # Per-iteration eval output (absolute, outside the worktree) so
+        # results.jsonl lands in a known place and never collides with stale
+        # output from other runs. Passed to vf-eval as --output-dir.
+        results_dir = out_dir / f"iter{i}" / "eval_out"
 
         print(f"\n=== Iteration {i} ===")
         print(f"config: {json.dumps(cfg.summary())}")
@@ -347,7 +501,7 @@ def run_loop(args: argparse.Namespace) -> dict[str, Any]:
             # must remain untouched.
             assert_engine_untouched(iter_dir)
             eval_result = run_eval(
-                iter_dir, cfg, bootstrap_dir, trace_dir,
+                iter_dir, cfg, bootstrap_dir, trace_dir, results_dir,
                 env_sh=args.env_sh, dry_run=args.dry_run,
             )
             assert_engine_untouched(iter_dir)
@@ -359,11 +513,11 @@ def run_loop(args: argparse.Namespace) -> dict[str, Any]:
             if not args.keep_worktrees and iter_dir.exists():
                 remove_iteration_worktree(current, iter_dir, iter_branch)
 
-        mean_depth, per_rollout = parse_iteration_depth(trace_dir)
+        mean_depth, per_rollout = parse_iteration_depth(
+            trace_dir, None if args.dry_run else results_dir)
         mean_reward = None
         if not args.dry_run:
-            mean_reward = parse_mean_reward(results_root if results_root.exists()
-                                            else out_dir)
+            mean_reward = parse_mean_reward(results_dir)
 
         rec = {
             "iteration": i,
@@ -378,6 +532,7 @@ def run_loop(args: argparse.Namespace) -> dict[str, Any]:
                      if k != "stdout_tail" or args.verbose},
             "trace_dir": str(trace_dir),
             "bootstrap_dir": str(bootstrap_dir),
+            "results_dir": str(results_dir),
         }
         iteration_records.append(rec)
         print(f"iteration {i}: mean_depth={mean_depth:.2f} "
