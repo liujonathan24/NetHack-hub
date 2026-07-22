@@ -1,0 +1,66 @@
+[project]
+name = "nethack"
+description = "Training-grade NetHack environment for LM agents with skill-based tools, milestone curriculum, replay capture, and journal memory."
+tags = ["games", "long-horizon", "tool-use", "procgen", "train", "eval"]
+version = "0.0.68"
+requires-python = ">=3.10,<3.14"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Jonathan Liu", email = "jl0796@princeton.edu" }]
+
+dependencies = [
+    # The engine (layer 1). The Hub DEPENDS ON the engine as an EXTERNAL package
+    # and imports it under the `nethack_core` namespace (unchanged). The engine
+    # never imports the Hub. If the NetHack-engine URL 404s (repo not yet
+    # populated), fall back to the pre-split source: NetHackHarness.git.
+    "nethack-core @ git+https://github.com/liujonathan24/NetHack-engine.git",
+    "verifiers>=0.1.14",
+    "gymnasium>=0.29",
+    "numpy>=1.24",
+    "datasets>=2.14",
+    # Image-observation raster path (tty PNG). The glyph-tile IMG path needs the
+    # optional 'img' extra (minihack's GlyphMapper tileset); without it,
+    # image_render degrades with a clear "tileset unavailable" error.
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+wiki     = ["chromadb>=0.4", "sentence-transformers>=2.2"]
+dev      = ["pytest", "pytest-asyncio", "ruff", "mypy"]
+# Glyph-tile image rendering (IMG / IMG_TTY variants). Pulls in minihack's
+# GlyphMapper tileset (and its nle dep). Not needed for the text/tty paths.
+img      = ["minihack>=1.0.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# NOTE (engine split): `nethack_core` is now an EXTERNAL dependency (see
+# [project].dependencies) rather than a committed vendored copy. The wheel-deploy
+# mechanism below (hatch_build.py hook + artifacts/force-include) is preserved
+# INTACT so the Prime Hub wheel can still carry the engine .so + dat/. The gap:
+# building the wheel still expects a `nethack_core/` directory to be present in
+# this env at build time (previously produced by the now-removed
+# tools/bundle_for_hub.py, or the vendored copy). Before `prime env push`, that
+# directory must be materialized from the installed engine package (or the fork
+# build dir). See hub_notes.md ("Prime/Hub deploy gap") for the exact reconciliation.
+[tool.hatch.build]
+include = ["nethack.py", "nethack_harness/**/*.py", "nethack_core/**/*.py", "wiki/*.json", "README.md"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nethack_core", "nethack_harness"]
+# The fork engine (libnethack.so) + NetHack data files (dat/) are placed in
+# nethack_core/ at build time by the hatch_build.py hook above (or ahead of time
+# by tools/bundle_for_hub.py) when the fork source is available — e.g. a local
+# `prime env push`, whose uploaded wheel then carries the engine.
+#
+# `artifacts` (NOT force-include) un-VCS-ignores them so they're added to the
+# wheel WHEN PRESENT, but the build still SUCCEEDS when they're absent — which is
+# what lets the Hub's source-build integration test (`uv pip install <src>`, run
+# in a clean container with no fork source) pass. force-include would instead
+# hard-fail with "Forced include not found". The engine targets Linux x86-64.
+artifacts = ["nethack_core/libnethack.so", "nethack_core/dat/**/*"]
+force-include = { "nethack.py" = "nethack.py", "wiki/snapshot.json" = "wiki/snapshot.json" }

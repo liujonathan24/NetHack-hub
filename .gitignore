@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.venv-*/
+venv/
+
+# Env / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.so
+
+# Engine build artifacts (nethack_core is an external dependency; never vendor it here)
+environments/nethack/nethack_core/
+libnethack.so
+dat/
+
+# OS / editor
+.DS_Store
+*.swp
