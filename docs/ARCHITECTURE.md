@@ -1,67 +1,53 @@
 # Architecture — repositories & their functions
 
-The stack is split into three repositories by responsibility, plus the shared
-residency registry. Dependencies point **downward** only: the Hub depends on the
-engine, the console reads both, and nothing points back up into the Hub (the
-engine imports nothing from the Hub — enforced by the coupling fix). Every
-experiment runs **post-monolith**: this machine orchestrates the environment
-(CPU) and the model is called remotely from Prime Inference.
+Three parts, flowing left to right: the upstream game becomes a controllable
+**engine**, which feeds both the **hub** (the Prime Intellect environment) and the
+**console** (the viewer).
 
 ```mermaid
-graph TB
-  subgraph ENGINE["🛠️ NetHack-engine · layer 1 · the substrate"]
+graph LR
+  NH["🎮 NetHack<br/>upstream game (C sources)"]
+
+  subgraph ENGINE["🛠️ nethack-engine · the NLE replacement + enhancers"]
     direction TB
-    FORK["third_party/NetHack (submodule)<br/>custom NetHack fork → libnethack.so<br/>invocation hooks · luck knob"]
-    NC["nethack_core<br/>ctypes binding over the fork<br/>• NetHackCoreEnv (nle-gym path)<br/>• EngineEnv: snapshot / restore / branch,<br/>&nbsp;&nbsp;tune (17 knobs), modify, state hooks<br/>• map_model · glyphs · rewards"]
-    NI["nethack_interface<br/>typed Observation + RawAction<br/>(pure substrate — no Hub dep)"]
-    FORK --> NC
+    CORE["ctypes binding over a custom NetHack fork → libnethack.so<br/>(nethack_core · nethack_interface)"]
+    CUST["🎛️ Customizability<br/>17 difficulty / generation knobs · secure modify() ·<br/>snapshot / restore / branch · portable level blobs"]
+    CURR["🎓 Curriculum-learning hooks<br/>stair &amp; branch signals · invocation ritual ·<br/>state injection (six-floor primitives)"]
   end
 
-  subgraph HUB["📦 NetHack-hub · layer 2 · the environment"]
+  subgraph HUB["📦 nethack-hub · Prime Intellect environment"]
     direction TB
-    ENV["environments/nethack — pkg 'nethack'<br/>Verifiers env · GAME_SPECS:<br/>full_nle · six_floor_primitives"]
-    HARN["nethack_harness<br/>skills + code-mode · prompt + BALROG ·<br/>navigation · memory · interface (typed Action) ·<br/>curriculum (six-floor)"]
-    APPR["approaches<br/>continuous_harness · go_explore ·<br/>voyager · analysis (seed variance)"]
-    TOOLS["tools<br/>encoding_eval · harness_sweep · ablation_sweep"]
-    TAB["experiments/ — THE TAB<br/>run.py + common.py (post-monolith plumbing)<br/>encoding · harness · continual · explore · variance · ablations"]
-    ENV --> HARN
-    TAB --> APPR
-    TAB --> TOOLS
-    TAB --> ENV
+    ENVH["Verifiers env: skills + code-mode ·<br/>prompt + BALROG · navigation · memory"]
+    TASKS["curriculum tasks: full_nle · six_floor_primitives"]
+    EXP["experiments tab:<br/>encoding · harness · continual · explore · variance · ablations"]
   end
 
-  subgraph CONSOLE["🖥️ NetHack-console · layer 3 · the viewer"]
-    RV["tools/rollout_view · deploy/<br/>trace viewer · web play · replay export"]
+  subgraph CONSOLE["🖥️ nethack-console · viewer"]
+    RV["rollout viewer · web play · replay export"]
   end
 
-  subgraph RES["🌐 RL-Residency/residency-environments"]
-    REP["environments/nethack (branch feat/nethack)<br/>= the Hub env, contributed as a subdir"]
-  end
-
-  PRIME["☁️ Prime Inference<br/>Qwen / GLM / … — model runs remote;<br/>THIS box orchestrates the env (CPU)"]
-
-  HUB -->|"depends on (external pkg): imports<br/>nethack_core + nethack_interface"| ENGINE
-  CONSOLE -->|reads nethack_interface + nethack_core| ENGINE
-  CONSOLE -->|reads nethack_harness + nethack| HUB
-  HUB -.->|env subdir published| RES
-  TAB -.->|"prime eval / vf-eval (team-billed)"| PRIME
+  NH --> ENGINE
+  ENGINE --> HUB
+  ENGINE --> CONSOLE
 ```
 
-## Repositories
+## The three parts
 
-| Repo | Layer | Function |
-|---|---|---|
-| **NetHack-engine** (`NetHackHarness`) | 1 · substrate | The controllable NetHack: `nethack_core` (ctypes over the fork → `libnethack.so`; `EngineEnv` with snapshot/restore/**branch**, 17 tune knobs, `modify`, state hooks) + `nethack_interface` (typed `Observation` + `RawAction`). Imports nothing from the Hub. |
-| **NetHack-hub** (`NetHack-hub`) | 2 · environment | The training/eval env (`nethack`): skills + code-mode, prompt + BALROG progression, navigation, memory, typed `Action`, the six-floor curriculum; research `approaches/`; eval `tools/`; the **experiments tab**. Depends on the engine as an external package. |
-| **NetHack-console** (`NetHack-console`) | 3 · viewer | Rollout viewers, web play, replay export. Reads the engine (`nethack_interface`/`nethack_core`) and the Hub (`nethack_harness`/`nethack`). |
-| **residency-environments** (`RL-Residency`) | registry | Shared org repo; the Hub's `environments/nethack/` is contributed as a subdirectory on branch `feat/nethack`. |
+| Part | What it is |
+|---|---|
+| **NetHack** | The upstream game (C sources), vendored as the fork submodule. |
+| **nethack-engine** | The **NLE replacement**: drives a custom NetHack fork through a ctypes binding (`nethack_core` + `nethack_interface`) instead of the `nle` gym wrapper, and adds the **enhancers** the wrapper structurally can't — **customizability** (17 live difficulty/generation knobs, secure `modify()`, in-memory snapshot/restore/**branch**, portable level blobs) and **curriculum-learning hooks** (stair/branch signals, the invocation ritual, state injection for the six-floor primitives). |
+| **nethack-hub** | The **Prime Intellect environment**: the `nethack` Verifiers env (skills + code-mode, prompt + BALROG progression, navigation, memory), the curriculum tasks (`full_nle`, `six_floor_primitives`), and the **experiments tab**. Depends on the engine as an external package. |
+| **nethack-console** | The **viewer**: rollout viewer, web play, and replay export. |
+
+Dependencies flow one way — the hub and console build on the engine; the engine
+never depends on them.
 
 ## The experiments tab
 
-`experiments/run.py <name> [--smoke | --real]` is the one entry point. Each
-experiment is **defined** there and **delegates** to its runner; the shared
-post-monolith plumbing (`experiments/common.py`: locate `libnethack.so`, team
-billing, `uv`) is not duplicated per experiment. Full write-ups live in
+`python -m experiments.run <name> [--smoke | --real]` is the single entry point;
+each experiment is defined there and delegates to its runner, all on shared
+post-monolith plumbing (`experiments/common.py`). Full write-ups:
 [`docs/experiments/`](experiments/).
 
 | name | Experiment | Runner |
