@@ -32,6 +32,25 @@ grep -c _standard_tier environments/nethack/nethack.py                         #
 ls environments/nethack/nethack_harness/prompt/balrog_achievements.json        # absent => Task 3 needed
 ```
 
+### RESOLVED 2026-07-25 — Tasks 1–3 are NO-OPS
+
+PR #16 ("Experiment 1 + real BALROG metric + 1b/1c/1d infrastructure") merged to `main` as
+`1fbbc3a` and brought all three source fixes plus the eval tooling. Verified on `1fbbc3a`:
+
+| check | result | task |
+|---|---|---|
+| `grep -c allowed_skill_names nethack.py` | **7** | Task 1 — skip |
+| `grep -c _standard_tier nethack.py` | **2** | Task 2 — skip |
+| `balrog_achievements.json` | **present**; `balrog.py` 53 → 102 lines, exports `balrog_progress` | Task 3 — skip |
+| `tests/test_balrog_progress.py` | asserts the 12.56% DL10/XL6 anchor | Task 3 — skip |
+| `tools/encoding_eval/` | `_verify_gate.py`, `aggregate_run.py`, `launch_cell.sh`, `_smoke.sh` present | Task 11 unblocked |
+
+**Still required:** Task 11, Step 1. `configs/endpoints.toml` line 41 keeps `z-ai/glm-5.2` under
+`pinference-glm` (no team header); the funded `prime-team` block at line 50 lists Gemini only.
+GLM will bill the $0 personal balance and **hang**.
+
+**Execution starts at Task 4.**
+
 ## Global Constraints
 
 Every task inherits these. Values copied verbatim from the spec.
