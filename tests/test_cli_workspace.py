@@ -1,4 +1,4 @@
-import pathlib, sys
+import pathlib, stat, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from tools.cli_harness_eval.workspace import build_workspace
 
@@ -9,6 +9,17 @@ def test_builds_all_three_affordances(tmp_path):
     assert (ws / "CLAUDE.md").read_text() == (ws / "AGENTS.md").read_text()
     assert len(list((ws / "wiki").glob("*.md"))) >= 100
     assert "Descend" in (ws / "memory" / "objective.md").read_text()
+
+
+def test_wiki_pages_are_read_only(tmp_path):
+    # Load-bearing global constraint: an arm must not be able to corrupt its
+    # own reference corpus mid-run and diverge from the other arms. A
+    # refactor that silently drops the chmod(0o444) must fail this test.
+    ws = build_workspace(tmp_path / "ws", objective="x")
+    pages = list((ws / "wiki").glob("*.md"))
+    assert pages
+    for page in pages:
+        assert stat.S_IMODE(page.stat().st_mode) == 0o444
 
 
 def test_agents_md_carries_the_system_prompt(tmp_path):
