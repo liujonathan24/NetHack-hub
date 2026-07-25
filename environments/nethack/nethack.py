@@ -255,6 +255,14 @@ def _normalize_cell_schema(cell_schema) -> set:
     return {t for t in (str(x).strip().lower() for x in tokens) if t in _VALID_CELL_ATTRS}
 
 
+# Sentinel key `_parse_tool_call` uses to hand "the model emitted no tool call
+# at all" across to `_apply_tool_call` through the `skill_args` dict, since
+# that case has no real skill_name/skill_args to dispatch. Shared as a
+# constant (not a literal duplicated in both methods) so the two ends of the
+# handoff can't silently drift apart.
+_NO_TOOL_CALL_SENTINEL = "__no_tool_call__"
+
+
 class NetHackVerifiersEnv(vf.StatefulToolEnv):
     """
     Per-rollout state: a live NetHackCoreEnv plus character + cumulative scout count.
@@ -669,7 +677,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # Filter harness-owned skills from the suggestion list — they
             # don't appear in the actual tool schema sent to the model.
             agent_tools = [s for s in list_skills() if s not in ("menu_option", "inventory_item")]
-            return "", {"__no_tool_call__": "You must call a tool. Available tools: " + ", ".join(agent_tools)}
+            return "", {_NO_TOOL_CALL_SENTINEL: "You must call a tool. Available tools: " + ", ".join(agent_tools)}
 
         # Apply the first tool call (NetHack is turn-based; we ignore multi-call this turn).
         # Verifiers passes tool calls in two shapes depending on version:
@@ -729,8 +737,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # this sentinel (there is no skill to apply, so nothing below — the
         # gate, dispatch, engine stepping — applies). Surface the same
         # "must call a tool" text the pre-split env_response returned verbatim.
-        if skill_name == "" and "__no_tool_call__" in skill_args:
-            return skill_args["__no_tool_call__"]
+        if skill_name == "" and _NO_TOOL_CALL_SENTINEL in skill_args:
+            return skill_args[_NO_TOOL_CALL_SENTINEL]
 
         env: NetHackCoreEnv = state["env"]
 
