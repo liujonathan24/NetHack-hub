@@ -575,14 +575,41 @@ def _self_dispatching(v0env, tool, obs_mode: str):
 
 
 def _terse(content) -> str:
-    """Strip everything but MESSAGES + the trailing feedback line."""
+    """Return only the game messages plus the trailing feedback line.
+
+    `on_demand` withholds the map until the agent asks for it. Used by the
+    visibility sub-experiment (spec §5); `push` is the default and never
+    calls this.
+    """
     from nethack_harness.prompt.content import content_to_text
-    text = content_to_text(content)
-    keep, emit = ("=== MESSAGES ===", "["), []
-    for line in text.splitlines():
-        if line.startswith(keep) or line.startswith(emit):
-            emit.append(line)
-    return "\n".join(emit) or "(no message)"
+
+    out, in_messages = [], False
+    for line in content_to_text(content).splitlines():
+        if line.startswith("==="):
+            in_messages = line.startswith("=== MESSAGES ===")
+            continue
+        if in_messages and line.strip():
+            out.append(line)
+        elif line.startswith("["):          # feedback from the skill call
+            out.append(line)
+    return "\n".join(out) or "(no message)"
+```
+
+**Scope note for the implementer:** `obs_mode="on_demand"` is plumbing only in this task. The
+`look` tool it refers to does **not** exist in the netplay set, so `on_demand` currently withholds
+the map with no way to request it. That is acceptable — this task ships `push` (the default, and
+the only mode any v1 arm uses) and reserves the flag. Do **not** add a `look` tool here; it belongs
+to the visibility sub-experiment. Add a test asserting `push` is the default, and leave
+`on_demand` covered only by the `_terse` unit test below.
+
+```python
+def test_terse_drops_the_map_but_keeps_messages_and_feedback():
+    from nethack_v1 import _terse
+    text = "=== MAP ===\n#####\n\n=== MESSAGES ===\nYou hit it.\n[search: nothing found]"
+    out = _terse(text)
+    assert "#####" not in out
+    assert "You hit it." in out
+    assert "[search: nothing found]" in out
 ```
 
 - [ ] **Step 5: Thread the flags through `load_taskset`**
