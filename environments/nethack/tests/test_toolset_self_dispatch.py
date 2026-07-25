@@ -49,6 +49,27 @@ def test_self_dispatch_and_obs_mode_default():
     assert all(not hasattr(t, "__wrapped__") for t in ts.toolsets[0].tools)
 
 
+def test_self_dispatch_tool_signature_exposes_state_for_runtime_injection():
+    # The v1 Runtime's generic tool-calling path (used when an external CLI
+    # harness drives these tools over MCP, e.g. Codex/Prime Agent — Tasks 9/10)
+    # decides whether to inject `state` by checking
+    # `"state" in inspect.signature(tool).parameters`. `functools.wraps` sets
+    # `__wrapped__`, which makes plain `inspect.signature` resolution follow
+    # straight through to the original schema-only adapter's signature (no
+    # `state` param) unless `_self_dispatching` overrides `__signature__`
+    # explicitly. Assert on the introspected signature, not on `__wrapped__`
+    # presence/absence — a test on `__wrapped__` would pass even if this
+    # regressed.
+    import inspect
+
+    cfg = m.NetHackTasksetConfig(task_spec="full_nle", n_examples=1,
+                                 self_dispatch=True,
+                                 env_args={"skill_set": "netplay"})
+    ts = m.load_taskset(cfg)
+    wrapped = next(t for t in ts.toolsets[0].tools if t.__name__ == "search")
+    assert "state" in inspect.signature(wrapped).parameters
+
+
 def test_self_dispatch_tool_actually_executes_and_returns_observation():
     # The whole point: unlike the schema-only v0 adapters (which raise if
     # called directly), a self_dispatch-wrapped tool must run the skill

@@ -286,6 +286,7 @@ def _self_dispatching(v0env, tool, obs_mode: str):
     adapter's identity to `_apply_tool_call`.
     """
     import functools
+    import inspect
 
     @functools.wraps(tool)
     async def _run(state, **kwargs):
@@ -293,6 +294,25 @@ def _self_dispatching(v0env, tool, obs_mode: str):
         if obs_mode == "on_demand" and tool.__name__ != "look":
             return _terse(content)
         return content
+
+    # `functools.wraps` sets `_run.__wrapped__ = tool`, and `inspect.signature`
+    # follows `__wrapped__` by default — so without this, introspecting `_run`
+    # returns `tool`'s original schema-only signature (no `state` param) rather
+    # than `_run`'s actual `(state, **kwargs)`. That matters because the v1
+    # Runtime's tool-calling path (used when an external CLI harness drives
+    # these tools over MCP, e.g. Codex/Prime Agent) decides whether to inject
+    # `state` by checking `"state" in inspect.signature(tool).parameters` — so
+    # left alone, MCP-driven calls would never receive `state` and would crash.
+    # An explicit `__signature__` attribute takes priority over `__wrapped__`
+    # resolution, so set one that prepends `state` to `tool`'s own parameters.
+    # The runtime's schema-builder separately strips `state`/`task`/etc. by
+    # name before exposing the tool to the model, so this doesn't leak into
+    # the JSON schema an agent sees — only fixes the call-time introspection.
+    _original_sig = inspect.signature(tool)
+    _state_param = inspect.Parameter("state", inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    _run.__signature__ = _original_sig.replace(
+        parameters=[_state_param, *_original_sig.parameters.values()]
+    )
 
     return _run
 
