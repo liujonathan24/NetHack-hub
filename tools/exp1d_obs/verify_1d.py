@@ -44,7 +44,7 @@ _SKILL_SET_1D = (
 
 async def _setup(variant):
     env = load_environment(
-        tier="full_nle", variant=variant, skill_set=_SKILL_SET_1D,
+        task_spec="full_nle", variant=variant, skill_set=_SKILL_SET_1D,
         compact_obs=False, max_turns=40, character="Val-hum-neu-fem",
         explicit_seeds=[0],
     )

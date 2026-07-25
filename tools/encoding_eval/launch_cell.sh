@@ -30,7 +30,7 @@ mkdir -p "$OUTDIR/trace"
 SEEDS="[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]"
 
 ARGS=$(cat <<JSON
-{"tier":"full_nle","variant":"${VARIANT}","skill_set":"netplay","compact_obs":false,"max_turns":${MAX_TURNS},"character":"Val-hum-neu-fem","explicit_seeds":${SEEDS},"trace_dir":"${OUTDIR}/trace"}
+{"task_spec":"full_nle","variant":"${VARIANT}","skill_set":"netplay","compact_obs":false,"max_turns":${MAX_TURNS},"character":"Val-hum-neu-fem","explicit_seeds":${SEEDS},"trace_dir":"${OUTDIR}/trace"}
 JSON
 )
 

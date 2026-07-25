@@ -15,7 +15,7 @@ def _make_toolcall(name, args):
 
 async def main():
     env = load_environment(
-        tier="full_nle", variant="B0", skill_set="netplay",
+        task_spec="full_nle", variant="B0", skill_set="netplay",
         compact_obs=False, max_turns=10, character="Val-hum-neu-fem",
         explicit_seeds=[0],
     )

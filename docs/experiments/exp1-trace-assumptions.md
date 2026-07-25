@@ -21,7 +21,7 @@ evidence (file, line/turn, quoted snippet).
   `move_to`, `explore_and_descend`, `search`, `attack`, `descend`, … and **no low-level
   `move(direction=…)`** primitive and no `dir8` tools. Evidence: the tool schema / tool_calls
   in the trace.
-- **A5 · Uncapped tier.** `tier="full_nle"`: episodes are NOT force-terminated at dungeon
+- **A5 · Uncapped tier.** `task_spec="full_nle"`: episodes are NOT force-terminated at dungeon
   level 6. Any rollout that reaches dlvl 6 keeps going (ends on death or the turn cap), and
   no rollout shows `succeeded=True` fired by a dlvl-6 milestone. Evidence: termination reason;
   a rollout at dlvl≥6 that continued.

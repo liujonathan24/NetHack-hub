@@ -29,7 +29,7 @@ includes `reveal`, `request_map`).
 
 ## The arms (`-a` JSON, drop into `vf-eval nethack -a '<...>'`)
 
-Shared spine (every arm): `"tier":"full_nle"`, `"interface":"skill"`,
+Shared spine (every arm): `"task_spec":"full_nle"`, `"interface":"skill"`,
 `"character":"Val-hum-neu-fem"`, `"skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map"`,
 `"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]`. Model resolved from
 `configs/endpoints.toml` (prime-team block) with `-m google/gemini-3-flash-preview`
@@ -43,20 +43,20 @@ map every turn) are the every-turn deliveries these arms are measured against.
 Full **ASCII** map only on material change or `request_map`; placeholder
 otherwise.
 ```json
-{"tier":"full_nle","variant":"DM","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map","explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"DM","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map","explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 2. delayed-map × JSON
 Full **JSON** map only on material change or `request_map`; placeholder
 otherwise.
 ```json
-{"tier":"full_nle","variant":"DM_JSON","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map","explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"DM_JSON","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map","explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 3. bounding-box on-demand
 Map hidden; only `reveal(x1,y1,x2,y2)` exposes a region (no game turn consumed).
 ```json
-{"tier":"full_nle","variant":"BBOX","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map","explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"BBOX","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,add_note,recall,pin_objective,wiki_lookup,wiki_search,reveal,request_map","explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ## In-process verification

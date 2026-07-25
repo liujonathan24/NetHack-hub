@@ -44,7 +44,7 @@ map object contains.
 
 ## The five arms (`-a` JSON, drop into `vf-eval nethack -a '<...>'`)
 
-Shared spine (every arm), matching the Exp-1 encoding sweep: `"tier":"full_nle"`,
+Shared spine (every arm), matching the Exp-1 encoding sweep: `"task_spec":"full_nle"`,
 `"variant":"JSON"`, `"interface":"skill"`, `"skill_set":"netplay"`,
 `"character":"Val-hum-neu-fem"`, `"map_detail":"full"`,
 `"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]`. Model resolved from
@@ -53,27 +53,27 @@ Shared spine (every arm), matching the Exp-1 encoding sweep: `"tier":"full_nle"`
 
 ### 1. base (identification-rich JSON, no cell metadata)
 ```json
-{"tier":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":[],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":[],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 2. + seen
 ```json
-{"tier":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["seen"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["seen"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 3. + visited
 ```json
-{"tier":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["visited"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["visited"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 4. + reach
 ```json
-{"tier":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["reach"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["reach"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 5. + all (seen + visited + reach)
 ```json
-{"tier":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["seen","visited","reach"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"JSON","interface":"skill","skill_set":"netplay","character":"Val-hum-neu-fem","map_detail":"full","cell_schema":["seen","visited","reach"],"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ## Smoke verification

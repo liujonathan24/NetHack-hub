@@ -22,7 +22,7 @@ ablation possible (both landed on `exp/encoding-sweep`):
 
 ## The four arms (`-a` JSON, drop into `vf-eval nethack -a '<...>'`)
 
-Shared spine (every arm): `"tier":"full_nle"`, `"variant":"B0"`,
+Shared spine (every arm): `"task_spec":"full_nle"`, `"variant":"B0"`,
 `"interface":"skill"`, `"character":"Val-hum-neu-fem"`,
 `"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]`. Model resolved from
 `configs/endpoints.toml` (prime-team block) with `-m google/gemini-3-flash-preview`
@@ -32,20 +32,20 @@ Shared spine (every arm): `"tier":"full_nle"`, `"variant":"B0"`,
 Journal tools available (netplay includes `add_note`/`recall`/`pin_objective`);
 no periodic belief distillation; no chat reset.
 ```json
-{"tier":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"netplay","belief_state_interval":0,"summarize_and_reset":false,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"netplay","belief_state_interval":0,"summarize_and_reset":false,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 2. + belief-state
 journal-only **plus** a real-LM belief note every 25 turns.
 ```json
-{"tier":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"netplay","belief_state_interval":25,"sub_lm_model":"google/gemini-3-flash-preview","summarize_and_reset":false,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"netplay","belief_state_interval":25,"sub_lm_model":"google/gemini-3-flash-preview","summarize_and_reset":false,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 3. summarize-and-reset (variant R)
 belief-state **plus** hard-drop of every chat turn older than the most recent
 `belief_state:tN` checkpoint — "the belief state IS the memory, chat is disposable."
 ```json
-{"tier":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"netplay","belief_state_interval":25,"sub_lm_model":"google/gemini-3-flash-preview","summarize_and_reset":true,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"netplay","belief_state_interval":25,"sub_lm_model":"google/gemini-3-flash-preview","summarize_and_reset":true,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 ### 4. no-memory
@@ -53,7 +53,7 @@ No journal tools (netplay **minus** `add_note`/`recall`/`pin_objective`), no
 belief distillation, no setup objective pin → journal never renders. Small
 full-history window so old turns are dropped rather than re-summarized.
 ```json
-{"tier":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,wiki_lookup,wiki_search","belief_state_interval":0,"pin_objective_on_setup":false,"history_keep_full":2,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
+{"task_spec":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","skill_set":"move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,wiki_lookup,wiki_search","belief_state_interval":0,"pin_objective_on_setup":false,"history_keep_full":2,"explicit_seeds":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]}
 ```
 
 The `skill_set` above is exactly the netplay whitelist

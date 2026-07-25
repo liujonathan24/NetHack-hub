@@ -14,7 +14,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "$REPO"
 export PYTHONPATH=".:environments/nethack"
 export PI_API_KEY="${PI_API_KEY:-$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.prime/config.json')))['api_key'])")}"
 
-SPINE='"tier":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","compact_obs":false,"explicit_seeds":[0]'
+SPINE='"task_spec":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","compact_obs":false,"explicit_seeds":[0]'
 NETPLAY_NOMEM="move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,wiki_lookup,wiki_search"
 MODEL="google/gemini-3-flash-preview"
 
