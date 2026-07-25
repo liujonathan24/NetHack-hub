@@ -649,7 +649,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         return state
 
-    async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+    def _parse_tool_call(self, messages: vf.Messages, state: vf.State) -> tuple[str, dict]:
         # Parse the assistant's tool call from messages[-1].
         # In v0 we expect native function calling (OpenAI tool format).
         assistant_msg = messages[-1]
@@ -658,11 +658,18 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             tool_calls = assistant_msg.get("tool_calls") or []
         else:
             tool_calls = getattr(assistant_msg, "tool_calls", None) or []
+        # Stashed for the trace write in `_apply_tool_call`, which no longer
+        # shares this method's local scope now that parsing and applying are
+        # split. MCP-driven callers that invoke `_apply_tool_call` directly
+        # (bypassing this method) simply leave these unset; the trace write
+        # degrades gracefully (see `_write_trace_entry`'s None handling).
+        state["_last_assistant_msg"] = assistant_msg
+        state["_last_tool_calls"] = tool_calls
         if not tool_calls:
             # Filter harness-owned skills from the suggestion list — they
             # don't appear in the actual tool schema sent to the model.
             agent_tools = [s for s in list_skills() if s not in ("menu_option", "inventory_item")]
-            return [vf.UserMessage(role="user", content="You must call a tool. Available tools: " + ", ".join(agent_tools))]
+            return "", {"__no_tool_call__": "You must call a tool. Available tools: " + ", ".join(agent_tools)}
 
         # Apply the first tool call (NetHack is turn-based; we ignore multi-call this turn).
         # Verifiers passes tool calls in two shapes depending on version:
@@ -701,6 +708,29 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             except (ValueError, TypeError):
                 # Malformed JSON — same recovery path.
                 skill_args = {}
+        return skill_name, skill_args
+
+    async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+        skill_name, skill_args = self._parse_tool_call(messages, state)
+        content = await self._apply_tool_call(state, skill_name, skill_args)
+        return [vf.UserMessage(role="user", content=content)]
+
+    async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
+        """Execute one skill against the engine and return the rendered observation.
+
+        This is the whole `env_response` body minus tool-call parsing: the gate,
+        journal short-circuit, registry dispatch, engine stepping, menu drain,
+        terminal detection, reward bookkeeping, banner re-scrub, render, and
+        trace write. Split out so MCP-driven CLI harnesses (which must return the
+        observation from the tool call itself) share one code path with the
+        native harness.
+        """
+        # `_parse_tool_call` encodes "the model emitted no tool call at all" as
+        # this sentinel (there is no skill to apply, so nothing below — the
+        # gate, dispatch, engine stepping — applies). Surface the same
+        # "must call a tool" text the pre-split env_response returned verbatim.
+        if skill_name == "" and "__no_tool_call__" in skill_args:
+            return skill_args["__no_tool_call__"]
 
         env: NetHackCoreEnv = state["env"]
 
@@ -723,7 +753,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 obs_text,
                 [f"[Tool {skill_name!r} is not available. Call one of: {avail}]"],
             )
-            return [vf.UserMessage(role="user", content=content)]
+            return content
 
         # dir8 baseline: rewrite north/northeast/.../northwest calls to
         # move(direction=...) so the existing dispatcher handles them.
@@ -811,7 +841,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 journal_max_chars=self.journal_render_max_chars,
             )
             content = compose_user_content(obs_text, [f"[{feedback}]"] if feedback else [])
-            return [vf.UserMessage(role="user", content=content)]
+            return content
 
         # Capture pre-step scout set size so scout_reward can return a per-step delta
         # rather than a cumulative count. See onboarding/scout_reward.md.
@@ -1234,12 +1264,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             prefix_parts.append(f"[{result.feedback}]")
         content = compose_user_content(obs_text, prefix_parts)
         # Per-turn trace (NDJSON) for replay/debugging. No-op when trace_dir
-        # is unset; never raises.
+        # is unset; never raises. assistant_msg/tool_calls are stashed on
+        # `state` by `_parse_tool_call` (see comment there) since this method
+        # no longer shares that method's local scope.
         _write_trace_entry(
-            self, state, assistant_msg, tool_calls,
+            self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
             action_indices, total_reward, content_to_text(content), obs_content=content,
         )
-        return [vf.UserMessage(role="user", content=content)]
+        return content
 
     async def is_completed(self, state: vf.State) -> bool:
         # Game-over (death/ascension/NLE truncation) ends the rollout.
