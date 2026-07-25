@@ -62,6 +62,10 @@ supports only `"http"` servers. Codex supports HTTP (`codex mcp add --url --bear
 which matches Prime Agent's `bearerTokenEnvVar`. One server, one bearer token, both arms.
 The engine runs **outside** the agent sandbox; the sandbox reaches it over the network.
 
+Each arm connects through **its own natively available MCP registry** — we add the server to
+whatever mechanism the CLI already ships (`codex mcp add` for Codex, `mcpServers` +
+skill package for Prime Agent) rather than building a bespoke integration per arm.
+
 ## 5 · The dispatch split (the one substantial change)
 
 `_build_toolset(v0env)` currently returns `vf.Toolset(tools=list(v0env.tools), …)`, but
@@ -125,11 +129,10 @@ across the 16 seeds, as in exp1 §3.1; marginal SEs at n=16 are wide and must no
 ## 9 · Risks
 
 1. **The dispatch split touches the path exp1 depends on.** Mitigated by the golden test in §10.
-2. **Prime Agent's tool surface differs in kind.** Per `docs/MCP_INTEGRATIONS.md`, MCP tools are not
-   agent tools — they are a Python skill imported into an IPython kernel, called as
-   `await nethack.explore_and_descend(...)`. Prime Agent writes *Python* to drive the game while
-   Codex emits tool calls. That is a real scaffold difference and the writeup must say so rather
-   than presenting the arms as identical-but-for-the-loop.
+2. **Each arm consumes the toolset through its own native MCP registry** — Codex through its MCP
+   client, Prime Agent through its kernel-side MCP skill (`docs/MCP_INTEGRATIONS.md`). Same server,
+   same 15 tools; the integration path is whatever each CLI ships. This is a stated design fact,
+   not something the writeup needs to dwell on.
 3. **GLM 5.2 billing.** `z-ai/glm-5.2` sits under `pinference-glm` in `configs/endpoints.toml`,
    which carries **no** `X-Prime-Team-ID`; only `prime-team` does, and it lists Gemini only. As
    written GLM bills the personal balance ($0) → `insufficient_funds`, which surfaces as a *hang*
