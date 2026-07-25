@@ -110,6 +110,10 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     # "push" = every tool result carries the observation; "on_demand" = terse
     # feedback only, map gated behind an explicit look() call.
     obs_mode: str = "push"
+    # Hard per-rollout budget on executed skill calls. Enforced toolset-side so
+    # it binds every harness, including CLI agents whose internal loop we do not
+    # control. One call == one v0 LM turn. <= 0 disables the cap.
+    max_skill_calls: int = 150
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob, etc.). Kept opaque so the v1 layer
     # never has to track the full v0 kwarg surface.
@@ -238,7 +242,7 @@ _FRAMEWORK_KEYS = frozenset(
 
 
 def _build_toolset(v0env, *, self_dispatch: bool = False,
-                    obs_mode: str = "push") -> vf.Toolset:
+                    obs_mode: str = "push", budget: int = 150) -> vf.Toolset:
     async def _nethack_setup(task, state) -> None:
         # Create the long-lived engine + game state for this rollout (v0 logic).
         await v0env.setup_state(state)
@@ -267,7 +271,7 @@ def _build_toolset(v0env, *, self_dispatch: bool = False,
 
     tools = list(v0env.tools)
     if self_dispatch:
-        tools = [_self_dispatching(v0env, t, obs_mode) for t in tools]
+        tools = [_self_dispatching(v0env, t, obs_mode, budget) for t in tools]
 
     return vf.Toolset(
         tools=tools,
@@ -277,19 +281,33 @@ def _build_toolset(v0env, *, self_dispatch: bool = False,
     )
 
 
-def _self_dispatching(v0env, tool, obs_mode: str):
+def _self_dispatching(v0env, tool, obs_mode: str, budget: int):
     """Wrap a schema-only v0 tool adapter into one that actually executes.
 
     The v0 adapters carry the JSON schema (name/signature/docstring) but do not
     touch the engine — dispatch lives in env_response. CLI harnesses call tools
     over MCP and must get the result back from the call itself, so we bind the
     adapter's identity to `_apply_tool_call`.
+
+    `budget` is the hard cap on executed skill calls for the rollout (one call
+    == one v0 LM turn) — this is the cross-arm referee: `max_turns` only binds
+    harnesses we control, but every arm (including external CLI agents) passes
+    through this toolset, so the cap has to live here. `budget <= 0` disables
+    it. Refused calls do not increment `state["skill_calls"]` and do not reach
+    the engine.
     """
     import functools
     import inspect
 
     @functools.wraps(tool)
     async def _run(state, **kwargs):
+        used = int(state.get("skill_calls", 0))
+        if budget > 0 and used >= budget:
+            state["terminated"] = True
+            state["stop_reason"] = "call_budget_exhausted"
+            return f"[Call budget exhausted: {budget} skill calls used. The episode is over.]"
+        state["skill_calls"] = used + 1
+
         content = await v0env._apply_tool_call(state, tool.__name__, kwargs)
         if obs_mode == "on_demand" and tool.__name__ != "look":
             return _terse(content)
@@ -446,7 +464,8 @@ def load_taskset(config: NetHackTasksetConfig | dict | None = None) -> vf.Taskse
         system_prompt=v0env.spec.system_prompt,
         rewards=REWARDS,
         toolsets=[_build_toolset(v0env, self_dispatch=cfg.self_dispatch,
-                                 obs_mode=cfg.obs_mode)],
+                                 obs_mode=cfg.obs_mode,
+                                 budget=cfg.max_skill_calls)],
         taskset_id=f"nethack:{spec.name}",
     )
 
