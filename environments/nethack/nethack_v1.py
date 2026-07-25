@@ -103,6 +103,13 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     max_turns: int = 200
     # Optional per-turn NDJSON trace dir (one file per rollout).
     trace_dir: Optional[str] = None
+    # When True, each tool executes the skill and RETURNS the rendered
+    # observation, so MCP-driven CLI agents get self-contained calls. False =
+    # the v0/harness-driven loop where env_response applies the previous call.
+    self_dispatch: bool = False
+    # "push" = every tool result carries the observation; "on_demand" = terse
+    # feedback only, map gated behind an explicit look() call.
+    obs_mode: str = "push"
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob, etc.). Kept opaque so the v1 layer
     # never has to track the full v0 kwarg surface.
@@ -230,7 +237,8 @@ _FRAMEWORK_KEYS = frozenset(
 )
 
 
-def _build_toolset(v0env) -> vf.Toolset:
+def _build_toolset(v0env, *, self_dispatch: bool = False,
+                    obs_mode: str = "push") -> vf.Toolset:
     async def _nethack_setup(task, state) -> None:
         # Create the long-lived engine + game state for this rollout (v0 logic).
         await v0env.setup_state(state)
@@ -257,12 +265,57 @@ def _build_toolset(v0env) -> vf.Toolset:
                 except Exception:
                     pass
 
+    tools = list(v0env.tools)
+    if self_dispatch:
+        tools = [_self_dispatching(v0env, t, obs_mode) for t in tools]
+
     return vf.Toolset(
-        tools=list(v0env.tools),
+        tools=tools,
         setups=[_nethack_setup],
         cleanups=[_nethack_cleanup],
         scope="rollout",
     )
+
+
+def _self_dispatching(v0env, tool, obs_mode: str):
+    """Wrap a schema-only v0 tool adapter into one that actually executes.
+
+    The v0 adapters carry the JSON schema (name/signature/docstring) but do not
+    touch the engine — dispatch lives in env_response. CLI harnesses call tools
+    over MCP and must get the result back from the call itself, so we bind the
+    adapter's identity to `_apply_tool_call`.
+    """
+    import functools
+
+    @functools.wraps(tool)
+    async def _run(state, **kwargs):
+        content = await v0env._apply_tool_call(state, tool.__name__, kwargs)
+        if obs_mode == "on_demand" and tool.__name__ != "look":
+            return _terse(content)
+        return content
+
+    return _run
+
+
+def _terse(content) -> str:
+    """Return only the game messages plus the trailing feedback line.
+
+    `on_demand` withholds the map until the agent asks for it. Used by the
+    visibility sub-experiment (spec §5); `push` is the default and never
+    calls this.
+    """
+    from nethack_harness.prompt.content import content_to_text
+
+    out, in_messages = [], False
+    for line in content_to_text(content).splitlines():
+        if line.startswith("==="):
+            in_messages = line.startswith("=== MESSAGES ===")
+            continue
+        if in_messages and line.strip():
+            out.append(line)
+        elif line.startswith("["):          # feedback from the skill call
+            out.append(line)
+    return "\n".join(out) or "(no message)"
 
 
 # --------------------------------------------------------------------------- #
@@ -372,7 +425,8 @@ def load_taskset(config: NetHackTasksetConfig | dict | None = None) -> vf.Taskse
         source=_make_source(cfg),
         system_prompt=v0env.spec.system_prompt,
         rewards=REWARDS,
-        toolsets=[_build_toolset(v0env)],
+        toolsets=[_build_toolset(v0env, self_dispatch=cfg.self_dispatch,
+                                 obs_mode=cfg.obs_mode)],
         taskset_id=f"nethack:{spec.name}",
     )
 
