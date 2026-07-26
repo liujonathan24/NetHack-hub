@@ -247,3 +247,39 @@ def test_move_to_reaches_a_reachable_tile():
         assert (agent.blstats.x, agent.blstats.y) != (sx, sy), "move_to did not move"
     finally:
         env.close()
+
+
+def test_explore_level_plus_down_descends_past_dlvl_1():
+    """The capability this port exists to restore.
+
+    Half of a prior experiment's rollouts never left dungeon level 1. NetPlay
+    splits this into two LLM decisions -- explore_level until a down-staircase
+    is visible, then down(x, y), which pathfinds to the stairs and descends --
+    where our own `explore_and_descend` fuses them and caps its search.
+    """
+    import netplay.nethack_utils.glyphs as G
+    from nethack_harness.tools import netplay_true as npt
+
+    env = _fresh_env()
+    try:
+        start_depth = int(npt.get_agent(env).blstats.depth)
+
+        for _ in range(25):
+            agent = npt.get_agent(env)
+            stairs = list(agent.current_level.get_features([G.SS.S_dnstair]))
+            if stairs:
+                _, pos = stairs[0]
+                res = registry.call(
+                    "np_down", env, None, x=int(pos.x), y=int(pos.y)
+                )
+                assert res.pre_executed is True
+                if int(npt.get_agent(env).blstats.depth) > start_depth:
+                    return
+            else:
+                registry.call("np_explore_level", env, None)
+
+        pytest.fail(
+            f"never descended below dlvl {start_depth} within the explore budget"
+        )
+    finally:
+        env.close()
