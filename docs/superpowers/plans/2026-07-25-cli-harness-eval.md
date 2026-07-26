@@ -1716,3 +1716,75 @@ pinned seed and assert it moves the game — not a mock.
 
 The 208 existing tests must still pass; `.venv-cli-eval` stays stock apart from any deliberate
 `nle` install, which must be recorded.
+
+---
+
+### Task 17: Repair the observation layer
+
+**Goal stated by the human partner: reach parity with or beat NetPlay/BALROG. Every bug below must
+be caught by a regression test that fails before the fix.** A fix without a failing-first test does
+not count as done — this class of defect survived an entire prior experiment undetected.
+
+Source: `.superpowers/sdd/2026-07-25-cli-harness-eval/research-prompt-quality.md`.
+
+These live in `nethack_harness/prompt/rendering.py` and `nethack_core`'s extractors, shared by
+**all three arms**, so `test_golden_parity.py` and `test_v1_taskset.py` must stay green and any
+behaviour change to the control must be stated and quantified.
+
+- [ ] **Bug 1 (highest impact) — the coordinate frames disagree by one row.**
+
+`VISIBLE FEATURES` emits **tty-row** coordinates while `Pos:` and every skill (`move_to`,
+`a_star`, `descend`) use **map** coordinates, which are tty-row minus one. Verified on the
+committed artifact `tools/cli_harness_eval/acceptance/task13_claude_code_seed0.turns.ndjson`
+(turn 2):
+
+```
+"stairs UP at (50,18)"  ->  raw_grid[18][50] == '<'   # tty frame
+"Pos: (75,13)"          ->  raw_grid[14][75] == '@'   # map frame (tty-1)
+```
+
+So an agent that reads `stairs DOWN at (x,y)` off the prompt and calls `move_to(x, y)` targets one
+row **below** the stairs. Unify on the map frame (`extract_visible_features` emitting `y-1`, or the
+equivalent at the render seam — pick one and make it the single source of truth).
+
+**Required test:** for every feature the renderer emits as `<name> at (x,y)`, assert the underlying
+`chars[y][x]` is that feature's glyph. Drive it on a real seeded engine, not a fixture. This test
+makes the entire class of frame bug impossible to reintroduce.
+
+- [ ] **Bug 2 — `(` and `)` are swapped in `_FEATURE_GLYPHS`**, so weapons are reported as tools
+  and tools as weapons. Test: assert each glyph maps to its NetHack meaning.
+
+- [ ] **Bug 3 — the "only exit is a door" hint is routinely false.** The `re.search` sees only the
+  first of three coordinates, so the hint fires when other exits exist. Test: a room with multiple
+  exits must not produce the single-exit hint.
+
+- [ ] **Bug 4 — seven sites advertise `move`, which `skill_set="netplay"` does not publish.** The
+  agent is told to use a tool it cannot call (exp1 measured 232 rejected `move` attempts under
+  ASCII). Remove or gate every mention so the advertised surface matches the published surface.
+  **Test:** every tool named in the rendered system prompt must exist in the exposed set for that
+  `skill_set` — a generic assertion, so it also catches future drift.
+
+- [ ] **Bug 5 — `Character: unknown (unknown, unknown)`** persists all rollout despite
+  `character="Val-hum-neu-fem"` being pinned. The agent never learns it is a Valkyrie. Test:
+  a pinned character surfaces in the rendered observation.
+
+- [ ] **Bug 6 — monsters are unnamed and have no distance/bearing.** We emit a bare `B`; NetPlay
+  and BALROG emit species plus distance. `extract_hostiles_in_sight` already carries the glyph
+  data. Test: a known monster renders with its species name.
+
+- [ ] **Bug 7 — closed-loop skills have runaway budgets.** `explore_and_descend` spends 400
+  in-game steps per call (three calls returned 0 floors: ~1,600 game turns to Dlvl 3, by which
+  point the hero is Weak from hunger), and a single `move_to` toward an unreachable tile consumed
+  **611 seconds** of wall-clock in the smoke2 prime_agent rollout. Add a step/time bound and a
+  fast unreachable-target exit. **Test:** `move_to` toward an unreachable tile returns promptly
+  and reports failure rather than churning.
+
+- [ ] **Verification: measure, do not assume.** After the fixes, re-run
+  `tools/cli_harness_eval/run_sweep.sh smoke3 20 1` and compare depth and BALROG % against
+  smoke2's table (`control 3.00 / claude_code 1.00 / prime_agent 2.00`). Report the delta. n=1 is
+  noise, so do not claim improvement from it — the claim to support is only that nothing regressed
+  and the coordinate assertions now hold on live data.
+
+**Note for the writeup:** exp1's published numbers were produced with Bug 1 live. Its
+encoding-ranking conclusions may still hold (the bug is encoding-independent), but its absolute
+depths understate what the harness can do.

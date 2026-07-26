@@ -1,0 +1,14 @@
+2026-07-26 06:31:41 - verifiers.serve.server.env_worker.EnvWorker - DEBUG - Loading environment nethack for worker nethack-0 (env_args={'task_spec': 'full_nle', 'variant': 'JSON', 'skill_set': 'netplay', 'map_detail': 'full', 'cell_schema': ['seen', 'visited', 'reach'], 'compact_obs': False, 'max_turns': 6, 'character': 'Val-hum-neu-fem', 'explicit_seeds': [0], 'trace_dir': '/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/exp1b_smoke/full/trace'}, extra_env_kwargs={'concurrency': 1})
+2026-07-26 06:31:41 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 06:31:42 - verifiers.utils.env_utils - INFO - Using provided args: task_spec=full_nle, character=Val-hum-neu-fem, variant=JSON, map_detail=full, compact_obs=False, explicit_seeds=[0], max_turns=6, trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/exp1b_smoke/full/trace, skill_set=netplay, cell_schema=['seen', 'visited', 'reach']
+2026-07-26 06:31:42 - verifiers.utils.env_utils - INFO - Using default args: bootstrap_dir=None, pin_objective_on_setup=True, history_keep_full=5, level_blob=None, journal_render_max_chars=2000, subgoal_proposer=None, seed=0, refiner=None, refine_interval=20, tune=None, modify=None, belief_state_interval=25, continual_lives=5, continual=False, sub_lm_model=None, history_drop_after=100, refiner_model=None, sub_lm=None, refine=False, interface='skill', n_examples=256, summarize_and_reset=False
+2026-07-26 06:31:42 - verifiers.rubrics.rubric.RubricGroup - DEBUG - Initialized RubricGroup with 2 rubrics
+2026-07-26 06:31:42 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 06:31:42 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 06:31:42 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-0 on ipc:///tmp/vf-dfa8dea373c8-nethack-0
+2026-07-26 06:31:42 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 06:31:42 - verifiers.utils.thread_utils - DEBUG - Installed default executor (max_workers=512) on loop 97658336
+2026-07-26 06:31:42 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-0
+2026-07-26 06:46:31 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 06:46:31 - verifiers.serve.server.env_worker.EnvWorker - INFO - Cancelling 1 active tasks on worker nethack-0
+2026-07-26 06:46:31 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-0

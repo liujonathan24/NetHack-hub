@@ -1,0 +1,7 @@
+run_name    run1
+started     2026-07-26T06:20:59-04:00
+max_calls   400
+seeds       first 5 of the pinned explicit_seeds (shuffle=false => seeds 0..4)
+arms        control claude_code prime_agent
+git_head    2186cbc83ac8a0aafb0ae1e4dd1595ee1fff3f57
+git_dirty   yes

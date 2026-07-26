@@ -24,7 +24,13 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "$REPO"
 # The compiled engine (`nethack_core`) lives in the NetHack-engine repo and must
 # lead PYTHONPATH; it is not pip-installed. Override with ENGINE_REPO if needed.
 ENGINE_REPO="${ENGINE_REPO:-/scratch/gpfs/ZHUANGL/jl0796/NetHackHarness}"
-export PYTHONPATH="${ENGINE_REPO}:.:environments/nethack"
+# tools/pycompat FIRST so its sitecustomize.py is imported at interpreter start
+# in the main process AND in every worker subprocess vf-eval spawns. It widens
+# ChatCompletion.service_tier, which Prime intermittently returns as
+# "provisioned" — a value no released OpenAI SDK accepts. Patching at env-import
+# time is not enough: response parsing does not always happen in a process that
+# imported the env, which is why only some seeds died.
+export PYTHONPATH="${REPO}/tools/pycompat:${ENGINE_REPO}:.:environments/nethack"
 export PI_API_KEY="${PI_API_KEY:-$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.prime/config.json')))['api_key'])")}"
 
 # Absolute, so traces survive regardless of the runner's working directory.
@@ -38,8 +44,13 @@ echo "[calib] max_turns=${MT} n=${N} seeds=${SEEDS}"
 echo "[calib] out=${OUTDIR}"
 # No `-p prime`: that overrides the registry and drops the X-Prime-Team-ID
 # billing header. The model resolves from the prime-team block instead.
+#
+# Concurrency == N: every seed runs simultaneously, so wall-clock is the slowest
+# single seed rather than staggered waves. exp1's launch_cell.sh used -c 3, but
+# only because it ran FIVE cells at once (5x3 = 15-way against Prime); one cell
+# at N-way is well inside that envelope.
 .venv-cli-eval/bin/vf-eval nethack --env-dir-path environments \
   -m "$MODEL" --endpoints-path configs/endpoints.toml \
-  -a "$ARGS" -n "$N" -r 1 -c 3 --num-workers 3 --max-tokens 2048 \
+  -a "$ARGS" -n "$N" -r 1 -c "$N" --num-workers "$N" --max-tokens 2048 \
   --save-results --output-dir "$OUTDIR" --disable-tui
 echo "[calib] vf-eval exit=$?"

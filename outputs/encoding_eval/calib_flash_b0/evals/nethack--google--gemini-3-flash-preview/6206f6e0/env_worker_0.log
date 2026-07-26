@@ -1,0 +1,8 @@
+2026-07-26 13:30:01 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 13:30:02 - verifiers.utils.env_utils - INFO - Using provided args: trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, compact_obs=False, skill_set=netplay_true, variant=B0, task_spec=full_nle, map_detail=full, explicit_seeds=[0, 1, 2, 3, 4], character=Val-hum-neu-fem, max_turns=400
+2026-07-26 13:30:02 - verifiers.utils.env_utils - INFO - Using default args: n_examples=256, belief_state_interval=25, journal_render_max_chars=2000, tune=None, interface='skill', level_blob=None, history_keep_full=5, refiner_model=None, pin_objective_on_setup=True, modify=None, history_drop_after=100, summarize_and_reset=False, bootstrap_dir=None, refine=False, cell_schema=None, subgoal_proposer=None, seed=0, continual_lives=5, refiner=None, continual=False, refine_interval=20, sub_lm_model=None, sub_lm=None
+2026-07-26 13:30:02 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 13:30:02 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 13:30:02 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-0 on ipc:///tmp/vf-af7a6d02e156-nethack-0
+2026-07-26 13:30:02 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 13:30:02 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-0
