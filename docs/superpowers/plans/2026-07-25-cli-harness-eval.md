@@ -1534,3 +1534,72 @@ git add tools/cli_harness_eval/configs/ tests/test_tools_scripts.py \
         environments/nethack/tests/test_cross_route_trace_equivalence.py
 git commit -m "feat(cli-eval): Claude Code arm — proven MCP boot, arm configs, tools/ under test"
 ```
+
+---
+
+### Task 14: Scoring correctness — stop on death, and make the traces measurable
+
+**Splits from Task 11** (with Task 15). Everything here is env/taskset-side and touches **all three
+arms**, including the control — so treat arm-0 fidelity as the binding constraint.
+
+**Why this exists.** The committed arm-2 acceptance rollout died at call 6 and was scored
+`died = 0`, with 7 of its 12 calls draining into a tombstone `--More--`. Two detectors both missed:
+`_detect_terminal_outcome` reads the raw obs and did not match, and the fallback at
+`nethack.py:1024-1026` waits on NLE's `terminated`, which never arrives because NetHack's death
+sequence parks on a prompt chain the 8-iteration auto-dismiss loop (`nethack.py:955`) cannot
+outlast. Meanwhile `hp == 0` sits in the status of every turn and nothing consults it — even though
+`tools/encoding_eval/aggregate_run.py` already detects death exactly that way when post-processing.
+
+**Files:**
+- Modify: `environments/nethack/nethack.py` (terminal detection in `_apply_tool_call`)
+- Modify: `environments/nethack/nethack_harness/helpers.py` (`_write_trace_entry` — timestamps)
+- Modify: `tools/cli_harness_eval/configs/{control,claude_code}.toml` (`trace_dir`)
+- Test: `environments/nethack/tests/test_death_termination.py`
+
+**Interfaces:**
+- Produces: rollouts terminate at `hp == 0`; every trace line carries a monotonic timestamp;
+  `trace_dir` absolute in all three arm configs. Task 15's aggregator consumes all three.
+
+- [ ] **Step 1: Write the failing test**
+
+Drive a rollout to `hp == 0` (set it via the env's `modify` hook — `modify={"hp": 1}` then take
+damage, or poke the state directly) and assert: `state["died"] is True`, `state["terminated"] is
+True`, and that a subsequent tool call does **not** step the engine (turn counter frozen).
+
+- [ ] **Step 2: Run it, confirm it fails**
+
+Expected: `died` stays False and the engine keeps accepting calls — the current behaviour.
+
+- [ ] **Step 3: Terminate on zero HP**
+
+In `_apply_tool_call`, after `_detect_terminal_outcome(last_obs, state)` and beside the existing
+NLE-`terminated` fallback, add an HP check. `hitpoints == 0` in the shaped status is authoritative
+for death; set `state["died"] = True`, `state["terminated"] = True`, and record
+`death_dlvl`. Keep the existing detectors — this is an additional path, not a replacement.
+
+**Arm-0 constraint:** the control runs this same code through the legacy bridge. Confirm
+`environments/nethack/tests/test_golden_parity.py` and `test_v1_taskset.py` still pass, and say in
+the report whether any previously-passing rollout now ends earlier. Ending earlier on a dead
+character is the *intent*, but it must be a stated, measured change, not a silent one.
+
+- [ ] **Step 4: Add per-turn timestamps**
+
+`_write_trace_entry` currently emits no time field, so the latency growth curve cannot be measured
+(verified: zero timestamped lines in both committed acceptance NDJSONs). Add a monotonic wall-clock
+field to every trace line. Task 15 uses it to report seconds/call and to detect superlinear growth
+as context grows.
+
+- [ ] **Step 5: Make `trace_dir` absolute in the remaining two configs**
+
+`prime_agent.toml` was fixed in Task 10. `control.toml` and `claude_code.toml` still hold relative
+paths, which resolve inside the tool server's `/tmp/vf-<id>` workdir and are deleted at teardown
+**silently** — so the per-turn NDJSON would be lost on the real runs.
+
+- [ ] **Step 6: Green the suite and commit**
+
+```bash
+git add environments/nethack/nethack.py environments/nethack/nethack_harness/helpers.py \
+        environments/nethack/tests/test_death_termination.py \
+        tools/cli_harness_eval/configs/control.toml tools/cli_harness_eval/configs/claude_code.toml
+git commit -m "fix(nethack): terminate on death; timestamp traces; absolute trace_dir"
+```
