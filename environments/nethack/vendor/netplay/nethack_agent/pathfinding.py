@@ -45,7 +45,14 @@ def nethack_bfs(x, y, walkable_mask: np.ndarray, diagonally_walkable_mask: np.nd
     buf[index] = (y, x)
     size = 1
     while index < size:
-        y, x = buf[index]
+        # ADAPTED (numpy 2.x): upstream is `y, x = buf[index]`, which yields
+        # numpy uint32 scalars. Under numpy 1.x, `uint32 + (-1)` promoted to a
+        # signed integer, so the `py < 0` bounds check below worked. NumPy 2's
+        # NEP 50 promotion rules instead raise
+        #   OverflowError: Python integer -1 out of bounds for uint32
+        # Casting to Python ints restores exactly the numpy 1.x arithmetic this
+        # BFS was written against; no traversal behaviour changes.
+        y, x = int(buf[index][0]), int(buf[index][1])
         index += 1
 
         for (dx, dy) in ((0,1),(1,0),(0,-1),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)):
