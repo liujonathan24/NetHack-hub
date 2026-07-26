@@ -108,12 +108,14 @@ with the header it returns 200.
 ## 4. Acceptance: a Claude Code agent actually played
 
 One rollout, `explicit_seeds = [0]`, `max_skill_calls = 20`, `Val-hum-neu-fem`,
-`task_spec = "full_nle"`, `z-ai/glm-5.2`. Evidence is in
-`.superpowers/sdd/2026-07-25-cli-harness-eval/task-13-report.md` §4; headline: 21
-`mcp__nethack__*` calls and **zero** non-MCP tool calls, rendered observations returned as
-tool results, `skill_calls` accumulated to the cap over the `/state` channel
-(`stop_condition = "call_budget_exhausted"`), `moves_executed = 0`, and the agent descended
-a floor (`descent_reward = 10.0`).
+`task_spec = "full_nle"`, `z-ai/glm-5.2`: 21 `mcp__nethack__*` calls and **zero** non-MCP
+tool calls, rendered observations returned as tool results, `skill_calls` accumulated to the
+cap over the `/state` channel (`stop_condition = "call_budget_exhausted"`),
+`moves_executed = 0`, and the agent descended two floors.
+
+**The run itself is committed** — trace, per-turn NDJSON and resolved config — under
+[`../acceptance/`](../acceptance/README.md). Narrative in
+`.superpowers/sdd/2026-07-25-cli-harness-eval/task-13-report.md` §4.
 
 ## 5. Caveats you should know before spending a 16-seed run
 
@@ -135,3 +137,34 @@ a floor (`descent_reward = 10.0`).
 5. **The workspace is rebuilt per rollout** (`NetHackTask.setup` -> `build_workspace`),
    which wipes `memory/`. That is deliberate: a CLI arm must not carry notes across seeds
    when the control arm's Journal cannot.
+6. **`/tmp/vf-scripts` is a shared-node landmine, and it already went off here.**
+   `Runtime.prepare_uv_script` (`v1/runtimes/base.py:172`) writes its prepared script to a
+   **hard-coded, non-per-user** path, `/tmp/vf-scripts/{sha256}.py`. On this cluster node that
+   directory belongs to someone else:
+
+   ```
+   $ ls -ld /tmp/vf-scripts
+   drwxr-xr-x. 2 rf7382 orfe 81 Jul 25 17:35 /tmp/vf-scripts
+
+   HarnessError: harness setup: PermissionError: [Errno 13] Permission denied:
+     '/tmp/vf-scripts/a849337f8e4e87e3...py.9190ec7e....tmp'
+   ```
+
+   So **every harness that goes through `prepare_uv_script` is dead here** — `null`, `bash`,
+   and therefore this taskset's own default `NetHackHarness`. `claude_code` escapes only
+   because it installs to `/tmp/vf-claude-code-<version>` instead
+   (`claude_code/harness.py:13-14`) — the **same design**, so if another user's job creates
+   that directory first, this arm breaks identically. Two consequences:
+   * there is no fallback harness available if `claude_code` misbehaves mid-run;
+   * on a fresh node, check `ls -ld /tmp/vf-scripts /tmp/vf-claude-code-2.1.214` before
+     launching, and move nodes if either is foreign — the paths are not overridable by
+     config or environment.
+
+   This is also why `test_cross_route_trace_equivalence.py` cannot make the two routes' agent
+   loops shape-comparable: the `null` harness that would have done it cannot start.
+7. **The v0 `vf-eval` endpoint registry (`configs/endpoints.toml`) is on neither arm's path**
+   (§3). Editing it will have no effect on these runs.
+8. **The action budget is not exactly equal across the arms** — the CLI arm gets exactly 150
+   executed skills, the control arm at most 150 (a v0 turn can pass without executing a
+   skill, and extra parallel tool calls in one turn are dropped). See the `max_turns` note in
+   `control.toml`; Task 11 must normalize on the measured counts.

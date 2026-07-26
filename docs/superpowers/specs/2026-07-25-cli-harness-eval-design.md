@@ -27,7 +27,7 @@ alive-at-cap, death %, tokens/turn, `turns_used`.
 | character | `Val-hum-neu-fem` | taskset config |
 | tier | `full_nle`, uncapped | ends on death or the call cap |
 | action surface | `skill_set="netplay"` (15 skills) | same registry, same gate |
-| budget | 150 skill calls | toolset-side counter (§5) |
+| budget | 150 skill calls (**CLI arms exactly; control arm at most** — see §7) | toolset-side counter (§5) |
 | affordances | strategy primer, wiki, memory | prompt+tools (arm 0) vs files (CLI arms), §6 |
 
 Only the **harness** varies.
@@ -129,6 +129,46 @@ arms and un-gameable regardless of a CLI's internal loop.
 
 **Early stop counts as terminal** (decided): if an agent quits at call 40, that is its result.
 `turns_used` is reported so a loss by quitting is visible as such rather than silent.
+
+### 7.1 · Amendment (Task 13): the 150-call budget is NOT exactly equal across the arms
+
+Measured while writing the arm configs. The toolset-side referee gives a CLI arm **exactly 150
+executed skills**: its counter advances only when a call reaches the engine, refused calls do not
+increment it, and concurrent calls are serialized (`NetHackToolset._with_state`) so a batched
+assistant turn cannot overrun the cap.
+
+The control arm has no such counter. Its nearest equivalent is the v0 `max_turns = 150`, which
+caps **LM turns**, and a turn can pass without executing a skill:
+
+* `nethack.py:676-680` — a turn with no tool call returns a "you must call a tool" nudge and
+  burns the turn. Measured: the engine is not stepped, `terminated` stays `False`, and
+  `is_completed` (`nethack.py:1284-1297`) returns `False`.
+* `nethack.py:690` — only the **first** tool call of a turn is applied. Measured with three
+  `search` calls in one turn: in-game time advanced by 1 and the observation carried
+  `[multi-tool warning: only the first of 3 tool calls was applied.]`. The
+  `_dropped_extra_tool_calls` counter is consumed and zeroed when that warning renders
+  (`nethack.py:1263-1270`), so it cannot be read back afterwards — the warning line in the
+  rendered observation is the durable artifact.
+
+So the control arm executes **at most 150** skills and typically fewer. The asymmetry runs in the
+CLI arm's favour on the experiment's controlled variable, and it widens exactly where CLI agents
+differ most: a batched assistant turn has *every* tool call dispatched over MCP, where the control
+arm would have executed only the first.
+
+This is **not** corrected by config. Raising the control arm's `max_turns` to compensate would
+change arm-0 semantics that Task 12 preserved deliberately, and the size of the gap is a
+per-rollout property no single value can fix.
+
+**Requirement on Task 11 (aggregation).** Normalize on the *measured* action count, never on the
+nominal 150:
+
+* control arm — the v0 rubric already emits **`total_tool_calls`** per rollout (plus a
+  `<skill>_calls` breakdown), carried into `Trace.metrics` by the legacy bridge;
+* CLI arms — **`skill_calls`**, written onto `Trace.metrics` by `NetHackTask.finalize`.
+
+These two are the same quantity and are the denominator for any per-action comparison. The
+aggregator must also report the realized counts per arm, so a reader can see the gap rather than
+assume parity; a paired per-seed comparison at unequal action counts must be labelled as such.
 
 ## 8 · Scoring
 

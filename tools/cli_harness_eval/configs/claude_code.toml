@@ -13,8 +13,11 @@
 # environments/nethack -- the tool server is launched as `python -m nethack_v1`
 # with the parent's environment inherited (`v1/mcp/launch.py:208`).
 #
-# PINNED IDENTICALLY TO control.toml: model, character, seeds, task_spec, skill
-# set, and the per-rollout skill-call budget.
+# PINNED IDENTICALLY TO control.toml: model, character, seeds, task_spec and
+# skill set. The action budget is nominally 150 on both arms but is NOT exactly
+# equivalent — this arm gets exactly 150 executed skills, the control arm at
+# most 150 (see control.toml's `max_turns` note). Task 11 normalizes on the
+# measured counts: `skill_calls` here, `total_tool_calls` there.
 
 model = "z-ai/glm-5.2"
 num_tasks = 16
@@ -36,9 +39,15 @@ map_detail = "full"
 self_dispatch = true
 obs_mode = "push"
 # The cross-arm referee, enforced toolset-side so it binds a CLI agent whose
-# internal loop we do not control. Matches control.toml's `max_turns = 150`.
+# internal loop we do not control. Exactly 150 executed skills: the counter
+# advances only when a call reaches the engine, and concurrent calls are
+# serialized (`NetHackToolset._with_state`) so a batched turn cannot overrun it.
 max_skill_calls = 150
 max_turns = 200
+# Per-turn NDJSON, one file per rollout — the same channel the acceptance
+# artifact under `tools/cli_harness_eval/acceptance/` was cut from. Without this
+# the only record of what the agent saw is the trace's tool results.
+trace_dir = "outputs/cli_harness_eval/claude_code/turns"
 # Seed AGENTS.md / CLAUDE.md, wiki/ and memory/ into the agent's workdir --
 # the filesystem counterpart of the affordances the control arm gets through
 # its system prompt, wiki tools and Journal.

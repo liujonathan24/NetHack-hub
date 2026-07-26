@@ -27,24 +27,26 @@ WHAT IS REAL HERE, AND WHAT IS NOT
   is a property of the agent's loop, not of the game, and the experiment
   normalizes on executed skill calls instead. The `null` harness, which would
   have made the two loops shape-comparable, cannot run on this machine
-  (`prepare_uv_script` writes to a hard-coded `/tmp/vf-scripts` owned by another
-  user); that is recorded in `tools/cli_harness_eval/configs/README.md`.
+  (`Runtime.prepare_uv_script`, `v1/runtimes/base.py:172`, writes to a
+  hard-coded `/tmp/vf-scripts` owned by another user on this shared node); that
+  is caveat 6 in `tools/cli_harness_eval/configs/README.md`.
+
+The booted-server rig lives in `_mcp_server_harness.py`, shared with
+`test_call_budget.py`'s concurrency check.
 """
 
 import asyncio
 import json
-import os
 import pathlib
-import subprocess
 import sys
-import tempfile
-import uuid
 
 import pytest
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-import nethack_v1 as m  # noqa: E402
+import nethack_v1 as m  # noqa: E402,F401
+from _mcp_server_harness import booted_toolset, build_task_and_trace  # noqa: E402
 
 # Deterministic, engine-stepping, and inside the netplay skill set.
 SEQUENCE = [
@@ -56,7 +58,6 @@ SEED = 0
 CHARACTER = "Val-hum-neu-fem"
 ENV_ARGS = {"skill_set": "netplay"}
 REWARD_NAMES = ("scout_reward", "descent_reward", "success_reward", "ascension_reward")
-SECRET = "cross-route-secret"
 
 
 # --------------------------------------------------------------------------- #
@@ -150,158 +151,22 @@ def _control_trace():
 # --------------------------------------------------------------------------- #
 # Native route: a real MCP tool server over a real /state + /task channel      #
 # --------------------------------------------------------------------------- #
-class _MiniInterception:
-    """The two channels a launched tool server needs, backed by a real Trace.
-
-    Mirrors `InterceptionServer.handle_state_get/put` and `handle_task_get`
-    (`v1/interception/server.py:745-795`) exactly: bearer auth, the state as the
-    typed model's JSON, and the task as `{"cls": "<module>:<qualname>", "task":
-    <json>}`. The backing store IS `trace.state`, so what the tools push is what
-    `NetHackTask.score` later reads — no shim in between.
-    """
-
-    def __init__(self, trace, task_data):
-        self.trace = trace
-        self.task_data = task_data
-        self.puts = 0
-
-    def app(self):
-        from aiohttp import web
-        from pydantic import TypeAdapter
-
-        adapter = TypeAdapter(m.NetHackState)
-
-        def _auth(request):
-            assert request.headers.get("Authorization") == f"Bearer {SECRET}"
-
-        async def state_get(request):
-            _auth(request)
-            return web.Response(
-                body=adapter.dump_json(self.trace.state),
-                content_type="application/json",
-                charset="utf-8",
-            )
-
-        async def state_put(request):
-            _auth(request)
-            self.puts += 1
-            self.trace.state = m.NetHackState.model_validate_json(await request.read())
-            return web.json_response({"ok": True})
-
-        async def task_get(request):
-            _auth(request)
-            data = self.task_data
-            return web.json_response(
-                {
-                    "cls": f"{type(data).__module__}:{type(data).__qualname__}",
-                    "task": data.model_dump_json(),
-                }
-            )
-
-        app = web.Application()
-        app.router.add_get("/state", state_get)
-        app.router.add_put("/state", state_put)
-        app.router.add_get("/task", task_get)
-        return app
-
-
 async def _drive_native(trace, task):
     """Boot the tool server, issue SEQUENCE over MCP, return the advertised names."""
-    from aiohttp import web
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
-
-    mini = _MiniInterception(trace, task.data)
-    runner = web.AppRunner(mini.app())
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-    state_url = f"http://127.0.0.1:{runner.addresses[0][1]}/state"
-
-    toolset = task.tool_servers()[0]
-    port_file = pathlib.Path(tempfile.gettempdir()) / f"vf-port-{uuid.uuid4().hex}"
-    env = {
-        **os.environ,
-        # Exactly what `serve_in_runtime` sets (`v1/mcp/launch.py:186-195`).
-        "VF_CONFIG": toolset.config.model_dump_json(),
-        "VF_STATE_URL": state_url,
-        "VF_STATE_SECRET": SECRET,
-        "MCP_PORT_FILE": str(port_file),
-    }
-    log = tempfile.NamedTemporaryFile(suffix=".log", delete=False)
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "nethack_v1"], env=env, stdout=log, stderr=log
-    )
-    try:
-        port = None
-        for _ in range(300):
-            if port_file.exists() and port_file.read_text().strip().isdigit():
-                port = int(port_file.read_text().strip())
-                break
-            assert proc.poll() is None, _fail(log, proc, "server exited before binding")
-            await asyncio.sleep(1)
-        assert port, _fail(log, proc, "server never reported a port")
-        url = f"http://127.0.0.1:{port}/mcp"
-        # The port file is written before setup (`v1/mcp/server.py:243-246`), so
-        # wait for the socket to listen — verifiers' own `_PROBE` does the same.
-        import urllib.error
-        import urllib.request
-
-        for _ in range(300):
-            try:
-                urllib.request.urlopen(url, timeout=2)
-                break
-            except urllib.error.HTTPError:
-                break
-            except Exception:
-                assert proc.poll() is None, _fail(log, proc, "server exited in setup")
-                await asyncio.sleep(1)
-        else:
-            raise AssertionError(_fail(log, proc, "server never listened"))
-
-        async with streamablehttp_client(url) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                advertised = sorted(t.name for t in (await session.list_tools()).tools)
-                for name, args in SEQUENCE:
-                    result = await session.call_tool(name, args)
-                    assert not result.isError, f"{name} errored: {result.content}"
-                return advertised
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=15)
-        except Exception:
-            proc.kill()
-        log.close()
-        await runner.cleanup()
-
-
-def _fail(log, proc, why):
-    log.flush()
-    tail = pathlib.Path(log.name).read_bytes()[-3000:].decode(errors="replace")
-    return f"{why} (rc={proc.returncode})\n--- tool server log ---\n{tail}"
+    async with booted_toolset(task, trace) as (session, _mini):
+        advertised = sorted(t.name for t in (await session.list_tools()).tools)
+        for name, args in SEQUENCE:
+            result = await session.call_tool(name, args)
+            assert not result.isError, f"{name} errored: {result.content}"
+        return advertised
 
 
 def _native_trace():
-    from verifiers.v1.state import state_cls
-    from verifiers.v1.trace import Trace, TraceTask
-
-    cfg = m.NetHackTasksetConfig(
-        task_spec="full_nle",
-        n_examples=1,
+    task, trace = build_task_and_trace(
         explicit_seeds=[SEED],
         character=CHARACTER,
-        max_turns=len(SEQUENCE) + 1,
         env_args=dict(ENV_ARGS),
-        # Nothing runs the agent here, so there is no workspace to seed.
-        seed_workspace=False,
-    )
-    task = m.load_taskset(cfg).select(1)[0]
-    # Built the way `Rollout.run` builds it (`v1/rollout.py:106-110`).
-    trace = Trace(
-        task=TraceTask(type=type(task).__name__, data=task.data),
-        state=state_cls(type(task))(),
+        max_turns=len(SEQUENCE) + 1,
     )
     advertised = asyncio.run(_drive_native(trace, task))
     asyncio.run(task.finalize(trace, None))
@@ -463,9 +328,17 @@ def test_the_referee_bookkeeping_reaches_the_trace(routes):
     invisible in a run's output."""
     _control, _control_calls, native, _task, _advertised = routes
     assert native.metrics["skill_calls"] == float(len(SEQUENCE))
-    # The netplay gate, measured rather than asserted by construction.
-    assert native.metrics["moves_executed"] == 0.0
     assert native.metrics["budget_exhausted"] == 0.0
+    # `moves_executed` is a gate-leak CANARY, not evidence: under
+    # skill_set="netplay" the v0 env publishes no `move` adapter, so the
+    # increment site is unreachable and this assertion cannot fail while the
+    # config is right. It is here so the metric is present on the trace (and
+    # would go nonzero if someone republished `move`). The gate is actually
+    # evidenced by `test_the_forced_sequence_actually_ran_on_both_routes`
+    # ("move" absent from the advertised wire) and by
+    # `tools/encoding_eval/_verify_gate.py` (a withheld `move` is rejected
+    # without stepping the engine), both run by this suite.
+    assert native.metrics["moves_executed"] == 0.0
 
 
 def test_num_turns_is_not_a_cross_route_comparable(routes):

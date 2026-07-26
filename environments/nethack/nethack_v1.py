@@ -65,7 +65,9 @@ v0 -> v1 (0.2.x) mapping
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import inspect
 import random
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Optional
@@ -111,10 +113,18 @@ class NetHackState(vf.State):
     # Cross-arm referee (see NetHackToolsetConfig.max_skill_calls).
     skill_calls: int = 0
     budget_exhausted: bool = False
-    # The netplay gate, *measured* rather than asserted by construction: the
-    # count of raw `move` calls that actually reached the engine. `move` is not
-    # published under skill_set="netplay", so this must stay 0 on every rollout
-    # of the experiment; a nonzero value means the gate leaked.
+    # A CANARY for one specific gate-leak mode, NOT independent evidence that
+    # the gate holds. `tool_functions` only wraps adapters the v0 env published,
+    # and under skill_set="netplay" no `move` adapter exists — so the increment
+    # site is unreachable while the config is right, and this stays 0 by
+    # construction. What it catches is someone changing `skill_set` (or the v0
+    # adapter list) so a `move` adapter IS published: the counter then goes
+    # nonzero and every rollout of the run carries the evidence.
+    #
+    # The gate itself is evidenced elsewhere: `move` absent from the advertised
+    # MCP tool list (asserted on the wire in the cross-route tests), and
+    # `tools/encoding_eval/_verify_gate.py`, which asserts a withheld `move` is
+    # rejected WITHOUT stepping the engine.
     moves_executed: int = 0
     # Engine-side termination (death / ascension / step cap).
     terminated: bool = False
@@ -305,6 +315,9 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         # the live engine. Both stay inside this process; neither is serialized.
         self.v0env = None
         self.v0_state = None
+        # Serializes the WHOLE pull-state / execute / push-state window; see
+        # `_with_state` below for why the window and not just the engine step.
+        self._call_lock = asyncio.Lock()
 
     # -- lifecycle ---------------------------------------------------------- #
     async def setup_task(self, task) -> None:
@@ -386,7 +399,10 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
                 )
             state.skill_calls += 1
             if name == "move":
-                # Only reachable if the gate leaked (see NetHackState.moves_executed).
+                # Unreachable while `skill_set="netplay"` withholds the `move`
+                # adapter — that is the point. See NetHackState.moves_executed:
+                # this is a canary for a config change that republishes `move`,
+                # not proof that the gate currently holds.
                 state.moves_executed += 1
             content = await self.v0env._apply_tool_call(self.v0_state, name, kwargs)
             self._publish(state)
@@ -402,6 +418,46 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         # `self.state` (`server.py:132-135`), so adding one would leak a
         # framework argument into the model-visible tool schema.
         return _run
+
+    def _with_state(self, fn: Callable) -> Callable:
+        """Serialize every tool call on this rollout's server.
+
+        Two independent reasons, both fatal if left unhandled, and both invisible
+        in a rollout that happens to run serially:
+
+        1. **The referee's count would be wrong.** ``ServerBase._with_state``
+           (`v1/mcp/server.py:190-216`) is documented last-write-wins: it GETs
+           the state, runs the tool, then PUTs the whole state back. Two
+           concurrent calls both read ``skill_calls = N`` and both write
+           ``N + 1``, so a client that batches tool calls (Claude Code emits
+           several ``tool_use`` blocks in one assistant turn) can execute more
+           skills than ``max_skill_calls`` allows. The budget is the cross-arm
+           referee — an overrun is a silent invalidation of the comparison.
+        2. **The engine is a C extension.** Two ``_apply_tool_call`` bodies
+           re-entering one ``NetHackCoreEnv`` concurrently is memory corruption,
+           not merely a bad count.
+
+        Locking inside the tool body would fix neither: the state GET happens in
+        the base wrapper *before* the body runs and the PUT *after* it, so the
+        read-modify-write race lives outside it. The lock therefore has to wrap
+        the base wrapper — the whole GET/execute/PUT window.
+
+        The lock is per toolset instance, and ``Task.tools`` (not
+        ``Taskset.tools``) means one instance per rollout, so this serializes a
+        single rollout's calls and never couples two rollouts.
+        """
+        inner = super()._with_state(fn)
+
+        @functools.wraps(inner)
+        async def serialized(*args, **kwargs):
+            async with self._call_lock:
+                return await inner(*args, **kwargs)
+
+        # Re-assert the advertised signature. The base sets it to the tool's own
+        # parameters so FastMCP publishes those (`server.py:215`); keep that
+        # exact contract rather than relying on `functools.wraps` copying it.
+        serialized.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        return serialized
 
     def _publish(self, state: NetHackState) -> None:
         """Mirror the reward/stop-relevant v0 scalars onto the typed state."""
@@ -524,8 +580,8 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
         cross-arm referee's own reading, and the quantity an arm comparison is
         normalized on — would be invisible in the run output, observable only
         indirectly through `stop_condition`. `move` is never published, so
-        ``moves_executed`` is the netplay gate measured on live data (0 unless
-        a raw `move` reached the engine), not asserted by construction.
+        ``moves_executed`` rides along as a gate-leak canary — see
+        :class:`NetHackState` for what it does and does not evidence.
         """
         state = trace.state
         trace.metrics.update(

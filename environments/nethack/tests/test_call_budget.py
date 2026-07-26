@@ -107,3 +107,90 @@ def test_negative_budget_disables_the_cap():
     assert state.skill_calls == 5
     assert state.budget_exhausted is False
     assert state.terminated is False
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency: the referee under the condition it actually exists for          #
+# --------------------------------------------------------------------------- #
+# Everything above drives the tool callables directly and serially, which is
+# how the budget was originally specified. That is not how a CLI agent calls
+# them. Claude Code emits several `tool_use` blocks in one assistant turn, and
+# `ServerBase._with_state` (`v1/mcp/server.py:190-216`) is documented
+# last-write-wins: it GETs the rollout state, runs the tool, then PUTs the whole
+# state back. Two concurrent calls that both read `skill_calls = N` and both
+# write `N + 1` would let an arm execute more skills than `max_skill_calls`
+# allows — a silent invalidation of the cross-arm comparison — and would also
+# re-enter one C-extension engine concurrently.
+#
+# These tests need the real seam (the HTTP `/state` channel), because offline
+# `_pull_state` hands out a fresh state per call (`server.py:145-148`) and the
+# race cannot appear. So they boot `python -m nethack_v1` for real; see
+# `_mcp_server_harness.py`.
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from _mcp_server_harness import booted_toolset, build_task_and_trace  # noqa: E402
+
+
+def _fire_concurrently(n_calls, max_skill_calls):
+    """Issue `n_calls` overlapping MCP tool calls; return (trace, results)."""
+    task, trace = build_task_and_trace(max_skill_calls=max_skill_calls)
+
+    async def main():
+        async with booted_toolset(task, trace) as (session, mini):
+            results = await asyncio.gather(
+                *(session.call_tool("search", {"times": 1}) for _ in range(n_calls))
+            )
+            texts = [
+                "".join(getattr(b, "text", "") for b in (r.content or []))
+                for r in results
+            ]
+            return texts, mini.gets, mini.puts
+
+    texts, gets, puts = asyncio.run(main())
+    return trace, texts, gets, puts
+
+
+def test_concurrent_calls_do_not_overrun_the_cap():
+    """N overlapping calls against a cap of K execute EXACTLY K skills.
+
+    This is the regression that matters: without serialization the pushed
+    counter lands somewhere below K while more than K calls have already
+    stepped the engine.
+    """
+    n_calls, cap = 8, 3
+    trace, texts, _gets, _puts = _fire_concurrently(n_calls, cap)
+
+    executed = [t for t in texts if "budget exhausted" not in t.lower()]
+    refused = [t for t in texts if "budget exhausted" in t.lower()]
+
+    assert trace.state.skill_calls == cap, (
+        f"referee counted {trace.state.skill_calls}, expected exactly {cap} "
+        f"({len(executed)} executed / {len(refused)} refused of {n_calls})"
+    )
+    assert len(executed) == cap, f"{len(executed)} calls stepped the engine, cap was {cap}"
+    assert len(refused) == n_calls - cap
+    assert trace.state.budget_exhausted is True
+    # Every executed call returned a real observation, not a truncated/garbled
+    # one from two engine steps interleaving.
+    for text in executed:
+        assert "=== STATUS ===" in text
+
+
+def test_concurrent_calls_are_counted_exactly_when_under_the_cap():
+    """Below the cap, N overlapping calls must count as exactly N.
+
+    The complement of the test above: it proves the count is not merely
+    clamped by the cap but is actually exact, i.e. no increment is lost to a
+    last-write-wins overwrite.
+    """
+    n_calls = 6
+    trace, texts, gets, puts = _fire_concurrently(n_calls, max_skill_calls=100)
+
+    assert trace.state.skill_calls == n_calls, (
+        f"lost increments: counted {trace.state.skill_calls} of {n_calls}"
+    )
+    assert trace.state.budget_exhausted is False
+    assert all("=== STATUS ===" in t for t in texts)
+    # Each call did its own state round-trip, so the channel — not a local
+    # variable — carried the count.
+    assert gets == n_calls and puts == n_calls
