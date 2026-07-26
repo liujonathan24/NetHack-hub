@@ -1,15 +1,19 @@
-"""Tests for the Verifiers v1 taskset port of NetHack (``nethack_v1``).
+"""Tests for the Verifiers v1 (0.2.x) taskset port of NetHack (``nethack_v1``).
 
 Covers:
-  * ``load_v1_environment`` builds a ``vf.Env`` for BOTH curriculum tasks
-    (``full_nle`` and ``six_floor_primitives``).
-  * The v1 rewards / toolset / custom harness are wired.
-  * A minimal, keyless (mock-model) v1 rollout runs end-to-end: setup creates the
-    engine, the custom harness drives model turns, ``env_response`` steps the
-    engine, the completion is populated, rewards are scored, and the final state
-    is JSON-serializable.
-  * The v0 path (``load_environment`` / ``NetHackVerifiersEnv``) still imports and
-    builds — no regression.
+  * ``load_taskset`` / ``load_harness`` / ``load_v1_environment`` build for BOTH
+    curriculum tasks (``full_nle`` and ``six_floor_primitives``).
+  * The v1 rewards / per-rollout toolset / default harness are wired.
+  * **The control arm (arm 0)** runs end-to-end through 0.2.x's v0 legacy
+    bridge with a keyless mock model: setup creates the engine, the v0 loop
+    steps it, rewards are scored, and the result maps to a serializable v1
+    ``Trace``. This is the 0.2.x replacement for the old in-process
+    ``env.rollout(...)`` test — ``Environment`` has no ``rollout()`` in 0.2.x
+    (rollouts launch an external harness program), and the control arm no
+    longer runs through the v1 taskset at all (see the ``nethack_v1`` module
+    docstring).
+  * The v0 path (``load_environment`` / ``NetHackVerifiersEnv``) still imports
+    and builds — no regression.
 
 Run with the engine on the path, e.g.:
     NLE_LIB_PATH=/.../libnethack.so \
@@ -18,27 +22,54 @@ Run with the engine on the path, e.g.:
 """
 
 import asyncio
-import json
 import pathlib
 import sys
-
-import pytest
 
 sys.path.insert(
     0, str(pathlib.Path(__file__).resolve().parents[2] / "environments" / "nethack")
 )
 
 import nethack_v1 as m  # noqa: E402
+from verifiers.clients import Client  # noqa: E402
 from verifiers.types import Response, ResponseMessage, ToolCall  # noqa: E402
+from verifiers.v1.legacy import rollout_output_to_trace  # noqa: E402
 
 
-class _MockClient:
-    """Keyless mock model: always emits a single valid skill tool call."""
+class _MockClient(Client):
+    """Keyless mock model: always emits a single valid skill tool call.
+
+    Subclasses the v0 ``Client`` ABC because ``run_rollout`` resolves its client
+    through ``resolve_client`` (`verifiers/clients/__init__.py:15`), which
+    rejects duck-typed objects. Only ``get_response`` is exercised.
+    """
 
     def __init__(self, tool_name: str = "search", arguments: str = "{}"):
+        self._config = None
+        self._client = None
         self.tool_name = tool_name
         self.arguments = arguments
         self.calls = 0
+
+    def setup_client(self, config):
+        return None
+
+    async def close(self):
+        return None
+
+    async def to_native_tool(self, tool):
+        return tool
+
+    async def to_native_prompt(self, messages):
+        return messages, {}
+
+    async def get_native_response(self, prompt, model, sampling_args, tools=None, **kw):
+        return None
+
+    async def raise_from_native_response(self, response):
+        return None
+
+    async def from_native_response(self, response):
+        return response
 
     async def get_response(self, prompt, model, sampling_args, tools=None, **kwargs):
         self.calls += 1
@@ -62,51 +93,107 @@ def test_v1_env_builds_for_both_tasks():
     for task_spec in ("full_nle", "six_floor_primitives"):
         cfg = m.NetHackTasksetConfig(task_spec=task_spec, n_examples=2, max_turns=3)
         env = m.load_v1_environment(cfg)
-        # Taskset wiring.
-        assert len(env.taskset.get_dataset()) == 2
-        assert [r.__name__ for r in env.taskset.rewards] == [
-            "scout_reward",
-            "descent_reward",
-            "success_reward",
-            "ascension_reward",
-        ]
-        assert env.taskset.system_prompt  # non-empty spec system prompt
-        assert len(env.taskset.toolsets) == 1
-        # Custom harness.
+        # Taskset wiring. `select()` materializes the rows (0.2.x replaced
+        # `Taskset.get_dataset()`; `taskset.py:79-103`).
+        tasks = env.taskset.select()
+        assert len(tasks) == 2
+        # Rewards are @reward methods on the Task in 0.2.x, discovered by name
+        # and scored concurrently (`task.py:301-308`), so what must hold is the
+        # exact set of names AND their v0 weights — the declaration order the
+        # 0.1.14 `Taskset(rewards=[...])` list carried is not a guarantee the
+        # new API has (discovery sorts by priority then name).
+        from verifiers.v1.decorators import discover_decorated
+
+        discovered = discover_decorated(tasks[0], "reward")
+        assert {fn.__name__: getattr(fn, "_vf_weight") for fn in discovered} == {
+            "scout_reward": 1.0,
+            "descent_reward": 10.0,
+            "success_reward": 100.0,
+            "ascension_reward": 1000.0,
+        }
+        # The spec system prompt rides on the row in 0.2.x (`task.py:153`).
+        assert tasks[0].data.system_prompt
+        # Exactly one tool server, declared PER ROLLOUT (Task.tools, not
+        # Taskset.tools) so each rollout gets its own engine.
+        assert type(tasks[0]).tools == (m.NetHackToolset,)
+        assert type(env.taskset).tools == ()
+        # Default harness.
         assert isinstance(env.harness, m.NetHackHarness)
-        # Rows carry a seed and per-task max_turns.
-        task0 = list(env.taskset)[0]
-        assert isinstance(task0.get("seed"), int)
-        assert task0.get("max_turns") == 3
+        assert env.harness.SUPPORTS_MCP is True
+        # Rows carry a seed and a tier; max_turns is framework-level now.
+        assert isinstance(tasks[0].data.seed, int)
+        assert tasks[0].data.tier
+        assert env.config.max_turns == 3
 
 
-def test_v1_mock_rollout_full_nle():
-    cfg = m.NetHackTasksetConfig(task_spec="full_nle", n_examples=1, max_turns=2)
-    env = m.load_v1_environment(cfg)
-    task = list(env.taskset)[0]
+def test_rewards_read_the_typed_state_and_keep_their_v0_meaning():
+    # The four rewards delegate to the v0 implementations verbatim; only their
+    # input moved (typed `trace.state` scalars instead of the v0 state dict).
+    task = m.load_taskset({"task_spec": "full_nle", "n_examples": 1}).select(1)[0]
 
-    async def _run():
-        return await env.rollout(
-            task, client=_MockClient("search"), model="mock-model"
+    class _Trace:
+        def __init__(self, state):
+            self.state = state
+
+    trace = _Trace(
+        m.NetHackState(
+            scout_reward_total=0.25,
+            descent_count=3.0,
+            succeeded=True,
+            ascended=False,
         )
+    )
+    assert asyncio.run(task.scout_reward(trace)) == 0.25
+    assert asyncio.run(task.descent_reward(trace)) == 3.0
+    assert asyncio.run(task.success_reward(trace)) == 1.0
+    assert asyncio.run(task.ascension_reward(trace)) == 0.0
 
-    state = asyncio.run(_run())
+
+def test_control_arm_runs_through_the_v0_legacy_bridge():
+    """Arm 0 end-to-end on 0.2.x, with NO v1 port in its path.
+
+    ``EnvConfig.id`` + no ``taskset.id`` selects the bridge (`v1/env.py:128`),
+    which runs the v0 rollout verbatim (`v1/legacy.py:517`) and maps it to a v1
+    ``Trace``. This test drives exactly those two calls, so a change that broke
+    the control arm's v0 loop, its engine lifecycle, or its reward wiring fails
+    here.
+    """
+    from nethack import load_environment
+
+    env = load_environment(
+        n_examples=1,
+        max_turns=2,
+        explicit_seeds=[0],
+        skill_set="netplay",
+        character="Val-hum-neu-fem",
+    )
+    row = dict(env.get_eval_dataset()[0])
+    client = _MockClient("search")
+    out = asyncio.run(
+        env.run_rollout(
+            input=row,
+            client=client,
+            model="mock-model",
+            sampling_args={},
+            state_columns=["trajectory"],
+        )
+    )
+    trace = rollout_output_to_trace(out, 0)
 
     # The mock made exactly max_turns model requests.
-    assert state.get("num_model_requests") == 2
-    # A completion (the game conversation) was produced.
-    completion = state.get("completion")
-    assert isinstance(completion, list) and len(completion) >= 1
-    roles = {msg.get("role") for msg in completion if isinstance(msg, dict)}
-    assert "assistant" in roles  # the model turns
+    assert client.calls == 2
+    assert trace.num_turns == 2
     # Rewards were scored and recorded.
-    assert isinstance(state.get("reward"), (int, float))
-    metrics = state.get("metrics") or {}
-    for name in ("scout_reward", "descent_reward", "success_reward", "ascension_reward"):
-        assert name in metrics
-    # Engine was freed and the state is JSON-serializable (no engine/numpy/sets).
-    assert "env" not in state
-    json.dumps(state)
+    assert isinstance(trace.reward, (int, float))
+    for name in (
+        "scout_reward",
+        "descent_reward",
+        "success_reward",
+        "ascension_reward",
+    ):
+        assert name in (trace.metrics or {})
+    # The engine is gone and the trace is serializable (no engine/numpy/sets).
+    assert trace.model_dump_json()
 
 
 def test_v0_path_still_builds():
@@ -117,11 +204,26 @@ def test_v0_path_still_builds():
     assert isinstance(env, NetHackVerifiersEnv)
 
 
+def test_dataset_rows_do_not_shadow_the_reserved_task_field():
+    # `flatten_task_input` (verifiers/types.py:811) REPLACES the whole rollout
+    # input with `input["task"]` when present, so a row carrying a bare
+    # `{"tier": ..., "seed": ...}` under `task` silently loses its prompt and
+    # `init_state` raises KeyError('prompt'). The seed rides in `info` instead.
+    from nethack import load_environment
+    from verifiers.types import flatten_task_input
+
+    env = load_environment(n_examples=1, explicit_seeds=[123])
+    row = dict(env.get_eval_dataset()[0])
+    assert "task" not in row
+    assert row["info"]["seed"] == 123
+    assert "prompt" in flatten_task_input(row)
+
+
 if __name__ == "__main__":
     test_v1_env_builds_for_both_tasks()
     print("build-both: OK")
-    test_v1_mock_rollout_full_nle()
-    print("mock-rollout: OK")
+    test_control_arm_runs_through_the_v0_legacy_bridge()
+    print("legacy-bridge rollout: OK")
     test_v0_path_still_builds()
     print("v0-path: OK")
     print("ALL PASS")

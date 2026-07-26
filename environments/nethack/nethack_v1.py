@@ -2,59 +2,77 @@
 nethack_v1
 ==========
 
-Verifiers **v1 taskset** port of the NetHack environment.
+Verifiers **v1 (0.2.x) taskset** port of the NetHack environment.
 
-The v0 environment (``nethack.py``, class ``NetHackVerifiersEnv`` — a
-``vf.StatefulToolEnv``) is a stateful, multi-turn, tool-driven env in which each
-rollout owns a long-lived NLE engine (``NetHackCoreEnv`` / the six-floor
-``CurriculumPrimitivesEnv``). This module re-wraps that env onto the Verifiers v1
-Taskset / Toolset / Harness API **without rewriting any game logic** — it reuses
-the existing ``setup_state`` / ``env_response`` skill dispatch, the per-turn
-history compaction, the prompt spec / encoders, the curriculum, and the reward
-functions verbatim.
+Arm split (decided in Task 12; see `.superpowers/sdd/.../task-12-report.md`)
+--------------------------------------------------------------------------
+The experiment runs two kinds of arm over one environment package, and 0.2.x
+gives each its own first-class path:
 
-v0 -> v1 mapping
-----------------
-* **Toolset** (``_build_toolset``) owns the per-rollout engine lifecycle and the
-  action surface:
-    - ``setups=[_nethack_setup]``  -> calls the v0 ``setup_state`` (creates the
-      long-lived ``NetHackCoreEnv``/``CurriculumPrimitivesEnv`` in ``state["env"]``,
-      seeds it, drains the intro banner, builds the journal, etc.).
-    - ``cleanups=[_nethack_cleanup]`` -> closes the engine and drops every
-      non-JSON-serializable game-internal from ``state`` so the v1 runtime's
-      end-of-rollout ``assert_serializable`` passes.
-    - ``tools=v0env.tools`` -> the exact skill/code-mode adapters (same
-      ``__name__`` / signature / docstring), so the v1 tool schemas sent to the
-      model are identical to v0's. Dispatch itself is done by the v0
-      ``env_response`` (each skill has a bespoke signature over the engine handle
-      + structured observation), exactly as in v0.
-* **Taskset** (``load_taskset``) yields the curriculum rows
-  (``full_nle`` / ``six_floor_primitives`` x seeds), carries the spec
-  ``system_prompt``, registers the BALROG-progression / descent / scout / success
-  / ascension rewards, and attaches the Toolset.
-* **Harness** (``NetHackHarness``) is a custom multi-turn harness. The v1 base
-  ``Harness`` cannot express NetHack's loop because (a) the environment
-  observation for turn *N* is produced by ``env_response`` from the model's turn
-  *N-1* tool call rather than being the tool's return value, and (b) each prompt
-  is rebuilt through the v0 per-turn history compaction (elide-all-but-last-K,
-  belief-state reset, CH refiner injection, assistant-content sanitisation).
-  ``NetHackHarness.base_program`` reproduces the v0 ``rollout`` loop faithfully by
-  calling the v0 ``env_response`` + the v0 compaction helpers, while driving model
-  requests through the v1 runtime.
+* **Control arm (arm 0)** — the purpose-built harness loop in ``nethack.py``
+  (``NetHackVerifiersEnv``, a v0 ``vf.StatefulToolEnv``). It runs through
+  0.2.x's **legacy (v0) bridge** (`verifiers/v1/legacy.py`), i.e.::
 
-The v0 ``load_environment`` / ``NetHackVerifiersEnv`` path is untouched and keeps
-working; this is a dual-path add.
+      vf-eval --id nethack --args '{"task_spec": "full_nle", ...}'
+
+  ``EnvConfig.id`` + no ``taskset.id`` selects the bridge
+  (`verifiers/v1/env.py:128`), which loads the v0 env, runs the v0 rollout
+  verbatim (`legacy.py:517`, ``env.run_rollout``) and maps the result into a v1
+  ``Trace``. **No game logic, dispatch order, prompt compaction, or reward code
+  changes for the control arm** — that is the whole point: its semantics were
+  validated by a prior experiment and must not drift.
+
+* **CLI-agent arms** — Claude Code (`verifiers.v1.harnesses.claude_code`,
+  ``SUPPORTS_MCP = True``) and the external Prime Agent plugin. These drive the
+  game **over MCP**, so they need a native v1 taskset whose tools execute and
+  return the observation from the call itself. That is what this module builds::
+
+      vf-eval --taskset.id nethack_v1 --harness.id claude_code ...
+
+  A single ``EnvConfig`` is one or the other (`env.py:128`), so the two arms are
+  two configs over one package — they cannot, and need not, be one taskset.
+
+v0 -> v1 (0.2.x) mapping
+------------------------
+* **Toolset** (:class:`NetHackToolset`) is a *server* (`v1/mcp/server.py`). It
+  owns the per-rollout engine: ``setup_task`` calls the v0 ``setup_state``
+  (creating the long-lived ``NetHackCoreEnv``/``CurriculumPrimitivesEnv``), and
+  a callback on ``ServerBase._exit_stack`` closes it when the server exits.
+  ``_register`` publishes exactly the v0 adapter set — which is where the
+  **netplay gate** lives (``move`` is withheld, so it is never advertised) —
+  and every published tool routes through the v0 ``_apply_tool_call``, the one
+  execution path.
+* **State** (:class:`NetHackState`) is a typed ``vf.State`` synchronized over
+  the interception ``/state`` channel (`v1/mcp/server.py:190-216`). The v0
+  free-form state dict never leaves the tool-server process; only the scalars
+  the rewards and stop conditions read cross the wire.
+* **Task** (:class:`NetHackTask`) carries the rewards (``@vf.reward`` methods
+  delegating to the v0 implementations verbatim) and the stop conditions
+  (``@vf.stop``), and declares ``tools = (NetHackToolset,)`` so the server is
+  built **per rollout**.
+* **Taskset** (:class:`NetHackTaskset`) yields the curriculum rows
+  (``full_nle`` / ``six_floor_primitives`` x seeds) as :class:`NetHackTaskData`.
+* **Harness** (:class:`NetHackHarness`) is the taskset's *default* harness: the
+  built-in MCP chat loop (``NullHarness``). It exists so that a bare
+  ``--taskset.id nethack_v1`` defaults to a tool-only agent rather than
+  ``bash`` (`v1/loaders.py:109-117`), which would hand the agent shell access to
+  the host and confound the comparison. The CLI arms override it with
+  ``--harness.id claude_code`` / the Prime Agent plugin. NOTE: this is NOT the
+  0.1.14 ``NetHackHarness`` (which reproduced the v0 loop in-process);
+  0.2.x harnesses launch an external program (`v1/harness.py:136-153`) and the
+  v0 loop now lives on the legacy bridge instead.
 """
 
 from __future__ import annotations
 
-import json as _json
+import functools
 import random
-from typing import Any, Optional
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Optional
 
 import verifiers.v1 as vf
-from verifiers.utils.message_utils import normalize_messages
-from verifiers.utils.response_utils import parse_response_message
+from verifiers.v1.harnesses.null import NullHarness
+from verifiers.v1.loaders import load_harness as _vf_load_harness
 
 # Reuse the entire v0 env: construction, game logic, encoders, curriculum.
 from nethack import (
@@ -63,29 +81,56 @@ from nethack import (
     load_environment as _load_v0_environment,
 )
 
-# Reuse the v0 reward implementations and the pure per-turn compaction helpers
-# verbatim (do NOT reimplement).
+# Reuse the v0 reward implementations verbatim (do NOT reimplement).
 from nethack_harness.helpers import (
     scout_reward as _v0_scout_reward,
     descent_reward as _v0_descent_reward,
     success_reward as _v0_success_reward,
     ascension_reward as _v0_ascension_reward,
-    _compact_chat_history,
-    _drop_before_last_belief,
-    _sanitize_assistant_content,
 )
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from mcp.server.fastmcp import FastMCP
+
 
 # --------------------------------------------------------------------------- #
-# Config                                                                       #
+# State: the typed, wire-synchronized per-rollout state                        #
 # --------------------------------------------------------------------------- #
-class NetHackTasksetConfig(vf.TasksetConfig):
-    """Env-specific knobs for the v1 taskset.
+class NetHackState(vf.State):
+    """The scalars that must cross the tool-server boundary.
 
-    Subclasses ``vf.TasksetConfig`` (which is ``extra="forbid"``) so these fields
-    are declared and discoverable. The base Taskset only reads the framework
-    fields; the extra fields below are consumed by ``load_taskset`` /
-    ``load_harness`` before delegating to the base classes.
+    In 0.1.14 the whole v0 state dict *was* the rollout state, and cleanup had
+    to strip every non-serializable game internal before the runtime's
+    ``assert_serializable``. In 0.2.x the state is a declared pydantic model
+    (`v1/state.py:14`) synchronized over an HTTP channel, so the engine handle,
+    numpy observations, the Journal and the GameSpec simply never enter it —
+    they stay on the toolset instance, inside the tool-server process. Only
+    these fields are published, and they are serializable by construction.
+    """
+
+    # Cross-arm referee (see NetHackToolsetConfig.max_skill_calls).
+    skill_calls: int = 0
+    budget_exhausted: bool = False
+    # Engine-side termination (death / ascension / step cap).
+    terminated: bool = False
+    # Reward-relevant scalars, mirrored out of the v0 state after each call.
+    scout_reward_total: float = 0.0
+    descent_count: float = 0.0
+    max_dlvl_reached: int = 1
+    succeeded: bool = False
+    ascended: bool = False
+    died: bool = False
+
+
+# --------------------------------------------------------------------------- #
+# Configs                                                                      #
+# --------------------------------------------------------------------------- #
+class NetHackToolsetConfig(vf.ToolsetConfig):
+    """Everything the tool server needs to rebuild the v0 env in its own process.
+
+    A 0.2.x toolset is launched as ``python -m <module>`` with this config
+    serialized into ``VF_CONFIG`` (`v1/mcp/launch.py:188`, `:208`), so it cannot
+    close over a pre-built v0 env object — every knob has to be carried here.
     """
 
     # Which curriculum task to run (key in nethack.GAME_SPECS).
@@ -95,18 +140,17 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     map_detail: str = "full"
     # "skill" (one tool per skill) or "code" (single sandboxed `code` tool).
     interface: str = "skill"
-    # Dataset shape.
-    n_examples: int = 8
-    seed: int = 0
-    explicit_seeds: Optional[list] = None
-    # Per-rollout LM-turn cap.
+    # Pin the character for standard tiers, e.g. "Val-hum-neu-fem".
+    character: Optional[str] = None
+    # Per-rollout LM-turn cap handed to the v0 env (the framework's own cap is
+    # EnvConfig.max_turns; see load_v1_environment).
     max_turns: int = 200
     # Optional per-turn NDJSON trace dir (one file per rollout).
     trace_dir: Optional[str] = None
-    # When True, each tool executes the skill and RETURNS the rendered
-    # observation, so MCP-driven CLI agents get self-contained calls. False =
-    # the v0/harness-driven loop where env_response applies the previous call.
-    self_dispatch: bool = False
+    # Every tool executes the skill and RETURNS the rendered observation, so
+    # MCP-driven CLI agents get self-contained calls. False is refused: the
+    # harness-driven (env_response) arm is the legacy bridge, not this taskset.
+    self_dispatch: bool = True
     # "push" = every tool result carries the observation; "on_demand" = terse
     # feedback only, map gated behind an explicit look() call.
     obs_mode: str = "push"
@@ -115,224 +159,259 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     # control. One call == one v0 LM turn. <= 0 disables the cap.
     max_skill_calls: int = 150
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
-    # overrides such as tune/modify/level_blob, etc.). Kept opaque so the v1 layer
-    # never has to track the full v0 kwarg surface.
+    # overrides such as tune/modify/level_blob/skill_set, etc.). Kept opaque so
+    # the v1 layer never has to track the full v0 kwarg surface.
     env_args: dict = {}
+
+
+class NetHackTaskConfig(vf.TaskConfig):
+    """Task-facing knobs. Holds the toolset config explicitly (see
+    :meth:`NetHackTask.server_config`) rather than relying on 0.2.x's
+    type-matching resolution (`v1/task.py:190-216`), which raises on ambiguity."""
+
+    toolset: NetHackToolsetConfig = NetHackToolsetConfig()
+
+
+class NetHackTasksetConfig(vf.TasksetConfig):
+    """Env-specific knobs for the v1 taskset.
+
+    The flat fields below are the knob surface Task 9/10 TOML configs bind to
+    (``--taskset.task_spec``, ``--taskset.max_skill_calls``, ...); ``load()``
+    projects them onto the per-task :class:`NetHackToolsetConfig`.
+    """
+
+    id: vf.ID = "nethack_v1"
+
+    # --- toolset knobs (projected onto NetHackToolsetConfig by load()) -------
+    task_spec: str = "full_nle"
+    variant: str = "B1"
+    map_detail: str = "full"
+    interface: str = "skill"
+    character: Optional[str] = None
+    max_turns: int = 200
+    trace_dir: Optional[str] = None
+    self_dispatch: bool = True
+    obs_mode: str = "push"
+    max_skill_calls: int = 150
+    env_args: dict = {}
+    # Where the tool server runs (colocated = share the harness's runtime).
+    colocated: bool = False
+
+    # --- dataset shape (load-time only) --------------------------------------
+    n_examples: int = 8
+    seed: int = 0
+    explicit_seeds: Optional[list] = None
+
+    # --- which harness `load_harness` / `load_v1_environment` build -----------
+    harness_id: str = "nethack_v1"
+
+    def toolset_config(self) -> NetHackToolsetConfig:
+        return NetHackToolsetConfig(
+            colocated=self.colocated,
+            task_spec=self.task_spec,
+            variant=self.variant,
+            map_detail=self.map_detail,
+            interface=self.interface,
+            character=self.character,
+            max_turns=self.max_turns,
+            trace_dir=self.trace_dir,
+            self_dispatch=self.self_dispatch,
+            obs_mode=self.obs_mode,
+            max_skill_calls=self.max_skill_calls,
+            env_args=dict(self.env_args or {}),
+        )
 
 
 def _resolve_config(config: object | None) -> NetHackTasksetConfig:
     if isinstance(config, NetHackTasksetConfig):
         return config
-    return NetHackTasksetConfig.from_config(config)
+    if config is None:
+        return NetHackTasksetConfig()
+    if isinstance(config, dict):
+        return NetHackTasksetConfig.model_validate(config)
+    return NetHackTasksetConfig.model_validate(config.model_dump())
 
 
 # --------------------------------------------------------------------------- #
 # v0 env construction (config-only; the engine itself is created per-rollout)  #
 # --------------------------------------------------------------------------- #
-def _build_v0_env(cfg: NetHackTasksetConfig, *, n_examples: int):
+def _build_v0_env(cfg: NetHackToolsetConfig | NetHackTasksetConfig, *, n_examples: int = 1):
     """Construct a fully-configured v0 ``NetHackVerifiersEnv``.
 
-    We only use it for its game logic (``setup_state`` / ``env_response``), its
-    resolved prompt ``spec``, its tool callables, and its compaction knobs. The
-    per-rollout engine lives in ``state``, so a single config instance is shared
-    across all rollouts (and two instances with identical config are
+    We only use it for its game logic (``setup_state`` / ``_apply_tool_call``),
+    its resolved prompt ``spec``, and its tool callables. The per-rollout engine
+    lives in the v0 state dict, so a single config instance is shared across all
+    rollouts of one server (and two instances with identical config are
     interchangeable — nothing rollout-specific lives on the instance).
     """
     return _load_v0_environment(
         n_examples=n_examples,
-        seed=cfg.seed,
+        seed=0,
         max_turns=cfg.max_turns,
         interface=cfg.interface,
         task_spec=cfg.task_spec,
         variant=cfg.variant,
         map_detail=cfg.map_detail,
+        character=cfg.character,
         trace_dir=cfg.trace_dir,
-        explicit_seeds=cfg.explicit_seeds,
         **dict(cfg.env_args or {}),
     )
 
 
-# --------------------------------------------------------------------------- #
-# Source rows                                                                  #
-# --------------------------------------------------------------------------- #
-def _make_source(cfg: NetHackTasksetConfig):
-    spec = GAME_SPECS.get(cfg.task_spec, FULL_GAME_SPEC)
-    begin = f"Task: {spec.description}\nSuccess: {spec.success_criterion}\n\nBegin."
-
-    def source():
-        rng = random.Random(cfg.seed)
-        if cfg.explicit_seeds is not None:
-            seeds = [int(s) for s in cfg.explicit_seeds]
-        else:
-            seeds = [rng.randint(0, 2**31 - 1) for _ in range(cfg.n_examples)]
-        for i, seed_val in enumerate(seeds):
-            yield {
-                # No system message here — that lives on Taskset.system_prompt.
-                "prompt": [{"role": "user", "content": begin}],
-                # Top-level seed so the v0 setup_state's state["task"].get("seed")
-                # resolves; also mirrored into info for the fallback path.
-                "seed": int(seed_val),
-                "task": {"tier": spec.name, "seed": int(seed_val)},
-                "info": {
-                    "tier": spec.name,
-                    "seed": int(seed_val),
-                    "spec_description": spec.description,
-                },
-                "example_id": i,
-                "max_turns": cfg.max_turns,
-            }
-
-    return source
-
-
-# --------------------------------------------------------------------------- #
-# Rewards (thin v1 (task, state) wrappers over the v0 (state) implementations) #
-# --------------------------------------------------------------------------- #
-@vf.reward(weight=1.0)
-async def scout_reward(task, state) -> float:
-    return await _v0_scout_reward(state)
-
-
-@vf.reward(weight=10.0)
-async def descent_reward(task, state) -> float:
-    return await _v0_descent_reward(state)
-
-
-@vf.reward(weight=100.0)
-async def success_reward(task, state) -> float:
-    return await _v0_success_reward(state)
-
-
-@vf.reward(weight=1000.0)
-async def ascension_reward(task, state) -> float:
-    return await _v0_ascension_reward(state)
-
-
-REWARDS = [scout_reward, descent_reward, success_reward, ascension_reward]
+def _spec_for(task_spec: str):
+    return GAME_SPECS.get(task_spec, FULL_GAME_SPEC)
 
 
 # --------------------------------------------------------------------------- #
 # Toolset: owns the per-rollout engine lifecycle + the action surface          #
 # --------------------------------------------------------------------------- #
-# Keys the v0 setup_state / env_response stash in state that are NOT
-# JSON-serializable (engine handle, numpy obs, Journal, sets, GameSpec, ...).
-# Rewards read only serializable scalars (scout_reward_total, descent_count,
-# ascended, succeeded, ...) which are computed during env_response, so these can
-# all be dropped at cleanup before the runtime asserts serializability.
-_FRAMEWORK_KEYS = frozenset(
-    {
-        "runtime",
-        "trajectory",
-        "completion",
-        "prompt",
-        "system_prompt",
-        "metrics",
-        "reward",
-        "advantage",
-        "timing",
-        "artifacts",
-        "info",
-        "task",
-        "example_id",
-        "num_model_requests",
-        "done",
-        "trajectory_id",
-    }
-)
+class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
+    """The MCP tool server the CLI-agent arms drive the game through.
 
+    Lifecycle (0.2.x, `v1/mcp/server.py:254-283`): the server process boots,
+    ``setup()`` runs, ``setup_task(task)`` runs with the row fetched over the
+    ``/task`` channel, then ``_register(mcp)`` publishes the tools and uvicorn
+    serves. Teardown is the process exiting; the engine is closed by a callback
+    on ``ServerBase._exit_stack``, which wraps the whole serve.
+    """
 
-def _build_toolset(v0env, *, self_dispatch: bool = False,
-                    obs_mode: str = "push", budget: int = 150) -> vf.Toolset:
-    async def _nethack_setup(task, state) -> None:
-        # Create the long-lived engine + game state for this rollout (v0 logic).
-        await v0env.setup_state(state)
+    # Advertised MCP server name — Claude Code sees these as `mcp__nethack__<tool>`.
+    TOOL_PREFIX = "nethack"
 
-    async def _nethack_cleanup(task, state) -> None:
-        # Free the engine.
-        env = state.get("env")
-        if env is not None:
-            try:
-                env.close()
-            except Exception:
-                pass
-        # Drop every non-serializable game-internal so the runtime's end-of-
-        # rollout assert_serializable passes. Framework-managed keys are left
-        # alone; INTERNAL_KEYS cannot be deleted (and are already serializable).
-        for key in list(state.keys()):
-            if key in _FRAMEWORK_KEYS or key in vf.State.INTERNAL_KEYS:
-                continue
-            try:
-                _json.dumps(state[key])
-            except (TypeError, ValueError):
+    def __init__(self, config: NetHackToolsetConfig) -> None:
+        super().__init__(config)
+        if not config.self_dispatch:
+            raise ValueError(
+                "self_dispatch=False (the harness-driven env_response loop) has no v1 "
+                "path in verifiers 0.2.x: a v1 toolset is an MCP server and the only "
+                "way a tool call reaches the engine is the tool call itself. Run the "
+                "harness-driven control arm through the v0 legacy bridge instead "
+                "(`vf-eval --id nethack --args '{...}'`), which executes the v0 rollout "
+                "verbatim."
+            )
+        # The v0 env (game logic + tool adapters) and the v0 state dict holding
+        # the live engine. Both stay inside this process; neither is serialized.
+        self.v0env = None
+        self.v0_state = None
+
+    # -- lifecycle ---------------------------------------------------------- #
+    async def setup_task(self, task) -> None:
+        """Create the long-lived engine + game state for this rollout (v0 logic)."""
+        import verifiers as _vf0
+
+        self.v0env = _build_v0_env(self.config)
+        seed = int(getattr(task, "seed", 0))
+        tier = getattr(task, "tier", None) or _spec_for(self.config.task_spec).name
+        self.v0_state = _vf0.State(
+            {
+                "task": {"tier": tier, "seed": seed},
+                "info": {"tier": tier, "seed": seed},
+            }
+        )
+        await self.v0env.setup_state(self.v0_state)
+        # Teardown: the exit stack is entered by `_serve` around the whole
+        # server lifetime (`v1/mcp/server.py:259`), so this runs when the tool
+        # server process shuts down at end of rollout.
+        self._exit_stack.push_async_callback(self.close)
+
+    async def close(self) -> None:
+        """Release the engine and drop every non-serializable game internal."""
+        state = self.v0_state
+        if state is not None:
+            env = state.get("env")
+            if env is not None:
                 try:
-                    state.pop(key, None)
+                    env.close()
                 except Exception:
                     pass
+        self.v0_state = None
+        self.v0env = None
 
-    tools = list(v0env.tools)
-    if self_dispatch:
-        tools = [_self_dispatching(v0env, t, obs_mode, budget) for t in tools]
+    # -- the action surface ------------------------------------------------- #
+    def tool_functions(self) -> dict[str, Callable]:
+        """The executing tools, keyed by the name the model sees.
 
-    return vf.Toolset(
-        tools=tools,
-        setups=[_nethack_setup],
-        cleanups=[_nethack_cleanup],
-        scope="rollout",
-    )
+        The **netplay gate** is here: the names come from the v0 env's resolved
+        adapter list, which already reflects ``skill_set`` — under
+        ``skill_set="netplay"`` there is no ``move`` adapter, so ``move`` is
+        never published. ``_apply_tool_call`` re-checks the same set
+        (`nethack.py:754`) and rejects anything outside it *without stepping the
+        engine*, so an agent that guesses a name gets a refusal, not a move.
+        """
+        if self.v0env is None:
+            raise RuntimeError("setup_task() must run before tool_functions()")
+        return {
+            adapter.__name__: self._executing(adapter) for adapter in self.v0env.tools
+        }
 
+    def _executing(self, adapter: Callable) -> Callable:
+        """Bind a schema-only v0 adapter to the single execution path.
 
-def _self_dispatching(v0env, tool, obs_mode: str, budget: int):
-    """Wrap a schema-only v0 tool adapter into one that actually executes.
+        The v0 adapters carry the JSON schema (name/signature/docstring) but do
+        not touch the engine — in v0, dispatch lives in ``env_response``. CLI
+        harnesses call tools over MCP and must get the result back from the call
+        itself, so the adapter's identity is bound to ``_apply_tool_call``.
 
-    The v0 adapters carry the JSON schema (name/signature/docstring) but do not
-    touch the engine — dispatch lives in env_response. CLI harnesses call tools
-    over MCP and must get the result back from the call itself, so we bind the
-    adapter's identity to `_apply_tool_call`.
+        The call budget is checked here, **before** any engine step: it is the
+        cross-arm referee, because ``max_turns`` only binds harnesses we control
+        while every arm passes through this toolset. A refused call does not
+        increment ``skill_calls`` and never reaches the engine.
+        ``max_skill_calls <= 0`` disables the cap.
+        """
+        name = adapter.__name__
+        budget = self.config.max_skill_calls
+        obs_mode = self.config.obs_mode
 
-    `budget` is the hard cap on executed skill calls for the rollout (one call
-    == one v0 LM turn) — this is the cross-arm referee: `max_turns` only binds
-    harnesses we control, but every arm (including external CLI agents) passes
-    through this toolset, so the cap has to live here. `budget <= 0` disables
-    it. Refused calls do not increment `state["skill_calls"]` and do not reach
-    the engine.
-    """
-    import functools
-    import inspect
+        @functools.wraps(adapter)
+        async def _run(**kwargs):
+            state = self.state
+            if budget > 0 and state.skill_calls >= budget:
+                state.budget_exhausted = True
+                state.terminated = True
+                return (
+                    f"[Call budget exhausted: {budget} skill calls used. "
+                    "The episode is over.]"
+                )
+            state.skill_calls += 1
+            content = await self.v0env._apply_tool_call(self.v0_state, name, kwargs)
+            self._publish(state)
+            if obs_mode == "on_demand" and name != "look":
+                return _terse(content)
+            return content
 
-    @functools.wraps(tool)
-    async def _run(state, **kwargs):
-        used = int(state.get("skill_calls", 0))
-        if budget > 0 and used >= budget:
-            state["terminated"] = True
-            state["stop_reason"] = "call_budget_exhausted"
-            return f"[Call budget exhausted: {budget} skill calls used. The episode is over.]"
-        state["skill_calls"] = used + 1
+        # `functools.wraps` sets `__wrapped__`, so `inspect.signature(_run)`
+        # resolves to the adapter's own parameters — which is exactly what
+        # `ServerBase._with_state` re-advertises to FastMCP
+        # (`v1/mcp/server.py:215`). No `state` parameter is (or may be) present:
+        # state arrives via the `_call_state` contextvar and is read as
+        # `self.state` (`server.py:132-135`), so adding one would leak a
+        # framework argument into the model-visible tool schema.
+        return _run
 
-        content = await v0env._apply_tool_call(state, tool.__name__, kwargs)
-        if obs_mode == "on_demand" and tool.__name__ != "look":
-            return _terse(content)
-        return content
+    def _publish(self, state: NetHackState) -> None:
+        """Mirror the reward/stop-relevant v0 scalars onto the typed state."""
+        v0 = self.v0_state or {}
+        state.scout_reward_total = float(v0.get("scout_reward_total", 0.0) or 0.0)
+        state.descent_count = float(v0.get("descent_count", 0.0) or 0.0)
+        state.max_dlvl_reached = int(v0.get("max_dlvl_reached", 1) or 1)
+        state.succeeded = bool(v0.get("succeeded"))
+        state.ascended = bool(v0.get("ascended"))
+        state.died = bool(v0.get("died"))
+        state.terminated = bool(v0.get("terminated")) or state.terminated
 
-    # `functools.wraps` sets `_run.__wrapped__ = tool`, and `inspect.signature`
-    # follows `__wrapped__` by default — so without this, introspecting `_run`
-    # returns `tool`'s original schema-only signature (no `state` param) rather
-    # than `_run`'s actual `(state, **kwargs)`. That matters because the v1
-    # Runtime's tool-calling path (used when an external CLI harness drives
-    # these tools over MCP, e.g. Codex/Prime Agent) decides whether to inject
-    # `state` by checking `"state" in inspect.signature(tool).parameters` — so
-    # left alone, MCP-driven calls would never receive `state` and would crash.
-    # An explicit `__signature__` attribute takes priority over `__wrapped__`
-    # resolution, so set one that prepends `state` to `tool`'s own parameters.
-    # The runtime's schema-builder separately strips `state`/`task`/etc. by
-    # name before exposing the tool to the model, so this doesn't leak into
-    # the JSON schema an agent sees — only fixes the call-time introspection.
-    _original_sig = inspect.signature(tool)
-    _state_param = inspect.Parameter("state", inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    _run.__signature__ = _original_sig.replace(
-        parameters=[_state_param, *_original_sig.parameters.values()]
-    )
+    def _register(self, mcp: FastMCP) -> None:
+        """Publish the gated tool set over MCP.
 
-    return _run
+        Overrides the base ``@tool``-decorator scan (`v1/mcp/toolset.py:28-34`)
+        because NetHack's action surface is built at runtime from the v0 skill
+        registry and the configured ``skill_set``, not declared statically.
+        """
+        for name, fn in self.tool_functions().items():
+            mcp.add_tool(
+                self._with_state(fn),
+                name=name,
+                description=(fn.__doc__ or "").strip() or None,
+            )
 
 
 def _terse(content) -> str:
@@ -357,139 +436,180 @@ def _terse(content) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Custom multi-turn harness                                                    #
+# Task: the row, the rewards, the stop conditions                              #
 # --------------------------------------------------------------------------- #
-class NetHackHarness(vf.Harness):
-    """Reproduces the v0 ``MultiTurnEnv`` loop faithfully on the v1 runtime.
+class NetHackTaskData(vf.TaskData):
+    """One curriculum row. ``seed`` and ``tier`` reach the tool server over the
+    ``/task`` channel (`v1/mcp/server.py:171-188`), which is how the engine gets
+    seeded per rollout."""
 
-    Per turn:
-      1. (turns > 1) call the v0 ``env_response`` on the running conversation —
-         this applies the previous tool call to the engine and returns the new
-         observation user-message (also mutating reward-relevant state).
-      2. build the model prompt through the v0 per-turn compaction pipeline
-         (``_compact_chat_history`` -> optional belief-state reset -> spec
-         history transforms -> assistant-content sanitisation) — identical to the
-         v0 ``get_prompt_messages``.
-      3. submit the model request through the v1 runtime and append the assistant
-         message to the conversation.
-    Termination mirrors v0 ``is_completed`` (engine ``terminated`` or the
-    per-rollout ``max_turns`` cap), without touching the framework-managed
-    ``is_truncated`` key directly.
-    """
+    seed: int = 0
+    tier: str = "full_nle"
 
-    def __init__(self, v0env=None, *, max_turns: int = 200, config=None, **kwargs):
-        # v0env defaults to None so the framework's teardown-handler discovery
-        # (which reflects over ``harness.__class__`` and finds the inherited
-        # ``teardown`` method) can construct a throwaway instance harmlessly; a
-        # real harness always receives a configured v0env from ``load_harness``.
-        self.v0env = v0env
-        super().__init__(config=config, max_turns=max_turns, **kwargs)
+
+class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
+    """Per-rollout behavior: one tool server per rollout, the four rewards, and
+    the stop conditions."""
+
+    # Per-rollout (NOT Taskset.tools, which would share one engine across a
+    # worker's rollouts) — this is the per-rollout engine lifecycle guarantee.
+    tools = (NetHackToolset,)
+
+    def server_config(self, server_cls: type):
+        # Explicit pairing instead of 0.2.x's type-matching resolution, which
+        # raises when several config fields match (`v1/task.py:190-216`).
+        return self.config.toolset
+
+    # -- stop conditions ---------------------------------------------------- #
+    @vf.stop
+    async def call_budget_exhausted(self, trace) -> bool:
+        """Terminal reason ``"call_budget_exhausted"``: `v1/session.py:115`
+        records the firing method's ``__name__`` as the trace's stop condition."""
+        return bool(trace.state.budget_exhausted)
 
     @vf.stop
-    async def game_over(self, task, state) -> bool:
-        return bool(state.get("terminated"))
+    async def game_over(self, trace) -> bool:
+        return bool(trace.state.terminated)
 
-    def _build_prompt(self, convo, state):
-        v0env = self.v0env
-        msgs = _compact_chat_history(
-            list(convo),
-            keep_full=v0env.history_keep_full,
-            drop_after=v0env.history_drop_after,
+    # -- rewards (v0 implementations, verbatim) ----------------------------- #
+    @vf.reward(weight=1.0)
+    async def scout_reward(self, trace) -> float:
+        return await _v0_scout_reward(
+            {"scout_reward_total": trace.state.scout_reward_total}
         )
-        if getattr(v0env, "summarize_and_reset", False):
-            msgs = _drop_before_last_belief(msgs, state)
-        for transform in v0env.spec.history_transforms:
-            msgs = transform(v0env, msgs, state)
-        msgs = _sanitize_assistant_content(msgs)
-        return normalize_messages(msgs, field_name="nethack_prompt")
 
-    async def base_program(self, task, state):
-        # Runs the toolset setup -> v0 setup_state creates state["env"] etc.
-        await self.runtime.setup_rollout(task, state)
+    @vf.reward(weight=10.0)
+    async def descent_reward(self, trace) -> float:
+        return await _v0_descent_reward({"descent_count": trace.state.descent_count})
 
-        v0env = self.v0env
-        system = normalize_messages(
-            state.get("system_prompt", []), field_name="state.system_prompt"
-        )
-        prompt = normalize_messages(
-            state.get("prompt", []), field_name="state.prompt"
-        )
-        convo = [*system, *prompt]
+    @vf.reward(weight=100.0)
+    async def success_reward(self, trace) -> float:
+        return await _v0_success_reward({"succeeded": trace.state.succeeded})
 
-        max_turns = state.get_max_turns(self.config.max_turns)
-        turn = 0
-        first = True
-        while max_turns <= 0 or turn < max_turns:
-            if bool(state.get("terminated")):
-                state._set_stop_condition("terminated")
-                break
-            if not first:
-                env_resp = await v0env.env_response(convo, state)
-                convo.extend(
-                    normalize_messages(env_resp, field_name="env_response")
-                )
-                if bool(state.get("terminated")):
-                    # v0 shows the terminal observation and lets the model take
-                    # one final (ignored) action; we mirror that by continuing to
-                    # the model request below, then stopping at the loop top.
-                    pass
-            first = False
+    @vf.reward(weight=1000.0)
+    async def ascension_reward(self, trace) -> float:
+        return await _v0_ascension_reward({"ascended": trace.state.ascended})
 
-            model_prompt = self._build_prompt(convo, state)
-            response = await self.runtime.submit_model_request(
-                model_prompt,
-                task,
-                state,
-                tool_defs=self.runtime.tool_defs(state),
+
+# The four rewards, in scoring order, with their v0 weights. Kept for
+# introspection (`[f.__name__ for f in REWARDS]`) now that 0.2.x attaches
+# rewards as Task methods rather than a `Taskset(rewards=[...])` list.
+REWARDS = (
+    NetHackTask.scout_reward,
+    NetHackTask.descent_reward,
+    NetHackTask.success_reward,
+    NetHackTask.ascension_reward,
+)
+
+
+# --------------------------------------------------------------------------- #
+# Taskset                                                                      #
+# --------------------------------------------------------------------------- #
+class NetHackTaskset(vf.Taskset[NetHackTask, NetHackTasksetConfig]):
+    def load(self) -> Iterable[NetHackTask]:
+        cfg = self.config
+        spec = _spec_for(cfg.task_spec)
+        # The system prompt is resolved by the v0 env's prompt recipe; build one
+        # config-only env (no engine — that happens per rollout in the toolset).
+        v0env = _build_v0_env(cfg.toolset_config())
+        system_prompt = v0env.spec.system_prompt
+        begin = f"Task: {spec.description}\nSuccess: {spec.success_criterion}\n\nBegin."
+
+        task_config = NetHackTaskConfig(toolset=cfg.toolset_config())
+        rng = random.Random(cfg.seed)
+        if cfg.explicit_seeds is not None:
+            seeds = [int(s) for s in cfg.explicit_seeds]
+        else:
+            seeds = [rng.randint(0, 2**31 - 1) for _ in range(cfg.n_examples)]
+        for i, seed_val in enumerate(seeds):
+            yield NetHackTask(
+                NetHackTaskData(
+                    idx=i,
+                    name=f"{spec.name}:{seed_val}",
+                    description=spec.description,
+                    prompt=begin,
+                    system_prompt=system_prompt,
+                    seed=int(seed_val),
+                    tier=spec.name,
+                ),
+                task_config,
             )
-            turn += 1
-            convo.extend(await parse_response_message(response))
 
-            if max_turns > 0 and turn >= max_turns:
-                state._set_truncated(True)
-                state._set_stop_condition("max_turns_reached", overwrite=True)
-                break
-        return state
+
+# --------------------------------------------------------------------------- #
+# Harness: the taskset's default (an MCP chat loop, not a shell agent)         #
+# --------------------------------------------------------------------------- #
+class NetHackHarness(NullHarness):
+    """Default harness for ``--taskset.id nethack_v1``.
+
+    ``default_harness_id`` (`v1/loaders.py:109-117`) makes a taskset that
+    exports a ``Harness`` subclass its own default; without one the default is
+    ``bash``, which would give the agent shell access to the host running the
+    engine — a real experiment-validity hazard, not just a wrong default. This
+    is the built-in ``null`` program: model + MCP tools, nothing else, which is
+    exactly the reference arm for the MCP toolset.
+
+    This is NOT the 0.1.14 ``NetHackHarness``. That class reproduced the v0
+    ``MultiTurnEnv`` loop in-process (``base_program`` + ``env_response`` +
+    per-turn compaction); 0.2.x harnesses launch an external program
+    (`v1/harness.py:136-153`), so the v0 loop now runs through the legacy
+    bridge instead (see the module docstring).
+    """
 
 
 # --------------------------------------------------------------------------- #
 # Golden v1 entrypoints                                                        #
 # --------------------------------------------------------------------------- #
-def load_taskset(config: NetHackTasksetConfig | dict | None = None) -> vf.Taskset:
-    cfg = _resolve_config(config)
-    v0env = _build_v0_env(cfg, n_examples=1)
-    spec = GAME_SPECS.get(cfg.task_spec, FULL_GAME_SPEC)
-    return vf.Taskset(
-        source=_make_source(cfg),
-        system_prompt=v0env.spec.system_prompt,
-        rewards=REWARDS,
-        toolsets=[_build_toolset(v0env, self_dispatch=cfg.self_dispatch,
-                                 obs_mode=cfg.obs_mode,
-                                 budget=cfg.max_skill_calls)],
-        taskset_id=f"nethack:{spec.name}",
-    )
+def load_taskset(config: NetHackTasksetConfig | dict | None = None) -> NetHackTaskset:
+    return NetHackTaskset(_resolve_config(config))
 
 
 def load_harness(config: NetHackTasksetConfig | dict | None = None) -> vf.Harness:
     cfg = _resolve_config(config)
-    v0env = _build_v0_env(cfg, n_examples=1)
-    return NetHackHarness(v0env, max_turns=cfg.max_turns)
+    harness_config = vf.harness_config_type(cfg.harness_id).model_validate(
+        {"id": cfg.harness_id}
+    )
+    return _vf_load_harness(harness_config)
 
 
-def load_v1_environment(config: NetHackTasksetConfig | dict | None = None) -> vf.Env:
+def load_v1_environment(
+    config: NetHackTasksetConfig | dict | None = None,
+) -> vf.Environment:
     cfg = _resolve_config(config)
-    return vf.Env(taskset=load_taskset(cfg), harness=load_harness(cfg))
+    return vf.Environment(
+        vf.EnvConfig(
+            taskset=cfg,
+            harness=vf.harness_config_type(cfg.harness_id).model_validate(
+                {"id": cfg.harness_id}
+            ),
+            # `max_turns` is framework-level in 0.2.x (`v1/env.py:97-100`): the
+            # interception server refuses turns past it, so it binds every
+            # harness rather than only the one we wrote.
+            max_turns=cfg.max_turns,
+        )
+    )
 
 
+# `__all__` is the 0.2.x plugin contract (`v1/loaders.py:58-82`): it must export
+# exactly one Taskset subclass and exactly one Harness subclass.
 __all__ = [
     "NetHackTasksetConfig",
+    "NetHackTaskConfig",
+    "NetHackToolsetConfig",
+    "NetHackState",
+    "NetHackTaskData",
+    "NetHackToolset",
+    "NetHackTask",
+    "NetHackTaskset",
     "NetHackHarness",
     "load_taskset",
     "load_harness",
     "load_v1_environment",
-    "scout_reward",
-    "descent_reward",
-    "success_reward",
-    "ascension_reward",
     "REWARDS",
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover - tool-server entrypoint
+    # `serve_in_runtime` launches a toolset as `python -m <module>`
+    # (`v1/mcp/launch.py:208`), reading its config from VF_CONFIG.
+    NetHackToolset.run()
