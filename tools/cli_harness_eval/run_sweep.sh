@@ -73,13 +73,19 @@ MANIFEST="${RUN_ROOT}/manifest.txt"
 # Measured on the committed acceptance artifacts: median ~10s/call (claude_code)
 # and ~6s/call (prime_agent), with a heavy tail -- the slowest single call
 # observed was 267s. Medians, not means, because means are outlier-dominated.
-EST_MIN=$(python3 -c "print(round(${MAX_CALLS}*10*${N}/60))" 2>/dev/null || echo '?')
+# The eval CLI's --max-concurrent defaults to 128, so all N seeds of an arm are
+# in flight at once; arms are fanned out concurrently here too. Wall-clock is
+# therefore about ONE rollout, not N of them.
+EST_MIN=$(python3 -c "print(round(${MAX_CALLS}*10/60))" 2>/dev/null || echo '?')
 cat <<EST
 
-  Rough wall-clock, per CLI arm, if every rollout runs to the cap:
-    ${N} seeds x ${MAX_CALLS} calls x ~10s median  ~=  ${EST_MIN} min
-  Arms run concurrently, so the sweep is about as long as its slowest arm.
-  Rollouts that die now terminate early (Task 14), so this is an upper bound.
+  Rough wall-clock ~= ONE rollout, since seeds run concurrently (--max-concurrent
+  defaults to 128) and the arms are fanned out here:
+    ${MAX_CALLS} calls x ~10s median  ~=  ${EST_MIN} min
+  Rollouts that die terminate early (Task 14), so this is an upper bound.
+  Concurrency caveat: the prime_agent arm shares a Prime Agent daemon; even
+  SEQUENTIAL rollouts on that arm are unproven (Task 10 concern 3). If it
+  misbehaves at N>1, run it with MAX_CONCURRENT=1 via the eval CLI.
 
 EST
 
