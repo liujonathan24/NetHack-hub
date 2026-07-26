@@ -247,3 +247,33 @@ and fails loudly instead. What must exist on the host:
   would rebuild the venv (a `uv` install) on every seed.
 * Note this venv build happens even under `--offline` / `PI_OFFLINE=1`, which only disable
   *startup* network operations (update and package-update checks).
+
+### 6.3 Acceptance: a Prime Agent agent actually played
+
+One rollout, seed 0, `max_skill_calls = 12`, `z-ai/glm-5.2`, subprocess runtime:
+`skill_calls = 12` (the cap), `budget_exhausted = 1`, `stop_condition = "call_budget_exhausted"`,
+`moves_executed = 0`, `errors: []`, `max_dlvl_reached = 2` — the agent descended a floor. It took
+**18 model turns for 12 executed skills** (arm 1 runs ~1 skill per turn), spending the difference
+on discovery: reading `SKILL.md` and calling `await nethack.list_tools()`.
+
+**The run is committed** under [`../acceptance/`](../acceptance/README.md).
+
+Three operational facts the run established, all of which bite a 16-seed launch:
+
+1. **`trace_dir` must be ABSOLUTE.** A relative value is resolved in the *tool server's* runtime
+   workdir (`/tmp/vf-<id>`), which is deleted at teardown — the per-turn NDJSON vanishes without
+   an error. Measured: the same rollout produced no file with a relative `trace_dir` and 12 lines
+   with an absolute one. **All three arm configs currently carry relative values.** Task 11 should
+   either absolutize them or pass `--taskset.trace-dir "$PWD/..."` on the command line.
+2. **PYTHONPATH must not reach the agent.** `environments/nethack/nethack.py` shadows the skill
+   package (the kernel import name is the `mcpServers` key, fixed to `nethack` by `TOOL_PREFIX`).
+   The harness now launches through `sh -c 'unset PYTHONPATH; exec "$@"'`. Before that fix the
+   agent could not reach the game at all and — with a real host shell in the kernel — spent 131
+   model turns reading this repository's own source instead, executing 2 skills. That is caveat
+   §5.1 made concrete: **the subprocess runtime lets a CLI agent read the code that scores it.**
+3. **Do not delete the per-rollout config dir.** Prime Agent's supervisor is shared
+   (`<tmpdir()>/prime-agent-<uid>/daemon.sock`) and keeps live state under each rollout's config
+   directory; removing it kills the supervisor and the *next* rollout dies with
+   `DaemonSocketClosedError`. The harness therefore leaves `install_dir/agent-<trace-id>/` behind
+   (small, no secrets). Clear it between runs, and check `prime-agent doctor` if a run starts
+   failing at launch.

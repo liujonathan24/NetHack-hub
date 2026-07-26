@@ -193,6 +193,24 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         if prompt is None:
             raise ValueError("Prime Agent requires a task prompt (it has no user simulator)")
 
+        # Prime Agent is daemon-backed even under `--print`: the CLI attaches to a
+        # supervisor whose socket lives at `<tmpdir()>/prime-agent-<uid>/daemon.sock`
+        # (`defaultDaemonSocketDir`), which is per-USER, not per-rollout. That is
+        # by design — one supervisor, one worker per session — so rollouts SHARE it
+        # and this harness does not try to isolate them.
+        #
+        # Two things were tried and rejected, both measured:
+        #   * a per-rollout TMPDIR (which `tmpdir()` honours) moves the socket dir
+        #     into the config directory, and Prime Agent then never comes up:
+        #     "Timed out waiting for daemon to start on <path>". Reproduced outside
+        #     the harness, so it is the CLI's behaviour, not ours.
+        #   * `prime-agent shutdown --force` in teardown would reap this rollout's
+        #     daemon, but the socket is shared, so it would also kill every
+        #     concurrent rollout — and the operator's own session.
+        # The residual risk is a *stale* supervisor poisoning a later rollout
+        # (`DaemonSocketClosedError`, seen after killing an earlier run by hand).
+        # The remedy is operational, not configurable: `prime-agent doctor --fix`
+        # (or `shutdown`) between runs. Recorded in configs/README.md §6.3.
         agent_dir = f"{self.config.install_dir}/agent-{trace.id}"
         mcp_token = secrets.token_hex(16)
 
@@ -256,6 +274,22 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         )
 
         argv = [
+            # PYTHONPATH MUST NOT REACH THE AGENT'S KERNEL. The tool server needs
+            # it (verifiers launches `python -m nethack_v1` with the parent
+            # environment, so the repo root and `environments/nethack` have to be
+            # importable there) and the subprocess runtime passes the host
+            # environment straight through — but `environments/nethack/nethack.py`
+            # then SHADOWS the skill package, because the kernel import name is
+            # the `mcpServers` key and that key is fixed to `nethack` by the
+            # toolset's TOOL_PREFIX. This is the name-collision caveat in
+            # `mcp-integrations.md`, and it fails silently: Prime Agent reports
+            # `<unavailable Python skill 'nethack': No module named 'verifiers'>`
+            # and the agent, unable to reach the game, starts reading the
+            # experiment's own source tree instead. Measured, in the first smoke.
+            "sh",
+            "-c",
+            'unset PYTHONPATH; exec "$@"',
+            "vf-prime-agent",
             self.config.binary,
             "--print",
             "--no-session",
@@ -273,10 +307,12 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # `@word` is never re-read as a flag or a file attachment.
         argv += ["--", prompt]
 
-        try:
-            return await runtime.run_program(argv, env)
-        finally:
-            try:
-                await runtime.run(["rm", "-rf", agent_dir], {})
-            except Exception:  # pragma: no cover - teardown is best-effort
-                logger.warning("failed to clean up the Prime Agent config dir", exc_info=True)
+        # NOTE the absent teardown. `rm -rf agent_dir` is the obvious cleanup and
+        # it BREAKS THE NEXT ROLLOUT: the supervisor at the shared socket keeps
+        # live state under this directory (`daemon-workers/`, `session-leases/`),
+        # so deleting it kills the supervisor, and the following rollout attaches
+        # to a dead socket and dies with `DaemonSocketClosedError`. Measured twice.
+        # The directory is small and carries no secret (models.json holds an env
+        # var NAME, auth.json is empty, settings.json holds localhost URLs), so it
+        # is left in `install_dir` for the operator to clear between runs.
+        return await runtime.run_program(argv, env)

@@ -153,6 +153,7 @@ class _RecordingRuntime:
     def __init__(self):
         self.files: dict[str, bytes] = {}
         self.programs: list[tuple[list[str], dict[str, str]]] = []
+        self.commands: list[tuple[list[str], dict[str, str]]] = []
 
     async def write(self, path, data):
         self.files[path] = data
@@ -160,6 +161,7 @@ class _RecordingRuntime:
     async def run(self, argv, env):
         from verifiers.v1.runtimes import ProgramResult
 
+        self.commands.append((argv, env))
         return ProgramResult(exit_code=0, stdout="", stderr="")
 
     async def run_program(self, argv, env):
@@ -258,3 +260,41 @@ def test_the_prompt_is_passed_after_an_option_terminator():
     assert argv[-2:] == ["--", "Play NetHack."]
     assert argv[argv.index("--append-system-prompt") + 1] == "You are a Valkyrie."
     assert "--no-session" in argv and "--print" in argv
+
+
+def test_pythonpath_is_unset_before_the_agent_starts():
+    """REGRESSION, measured in the first smoke rollout.
+
+    The tool server needs `environments/nethack` on PYTHONPATH; the agent must
+    not have it. The kernel import name for an MCP integration is the
+    `mcpServers` key, which the toolset's `TOOL_PREFIX` fixes to `nethack` — and
+    `environments/nethack/nethack.py` is a module of that exact name. With
+    PYTHONPATH inherited, `import nethack` in the kernel resolved to the v0
+    environment module, Prime Agent reported `<unavailable Python skill
+    'nethack': No module named 'verifiers'>`, and the agent spent 131 model turns
+    reading the experiment's own source tree instead of playing (2 skill calls).
+    """
+    runtime = _launch()
+    argv, _ = runtime.programs[0]
+    assert argv[:3] == ["sh", "-c", 'unset PYTHONPATH; exec "$@"']
+    # $0 is a label, not a program; the real argv starts after it.
+    assert argv[4] == "prime-agent"
+
+
+def test_the_daemon_socket_is_left_shared_on_purpose():
+    """Prime Agent is daemon-backed even under `--print`, and its supervisor socket
+    dir is per-USER (`<tmpdir()>/prime-agent-<uid>`). Two isolation attempts were
+    measured and rejected: a per-rollout TMPDIR stops the daemon coming up at all
+    ("Timed out waiting for daemon to start", reproduced outside the harness), and
+    a `shutdown --force` in teardown would kill every concurrent rollout because
+    the socket is shared. This test pins the decision so neither is reintroduced
+    without re-measuring.
+    """
+    runtime = _launch()
+    _, env = runtime.programs[0]
+    assert "TMPDIR" not in env
+    assert not [argv for argv, _ in runtime.commands if "shutdown" in argv]
+    # And the config dir must survive: the shared supervisor keeps live state
+    # under it, so deleting it kills the daemon and the NEXT rollout fails with
+    # `DaemonSocketClosedError`. Measured twice; see the comment in `launch`.
+    assert not [argv for argv, _ in runtime.commands if argv[:2] == ["rm", "-rf"]]
