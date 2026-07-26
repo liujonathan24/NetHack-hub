@@ -185,7 +185,15 @@ class SkillRegistry:
             return SkillResult(actions=[], feedback=f"Skill {name} call failed: {e}. Schema: {self._schemas.get(name, {})}", interrupted=True)
         if ignored:
             extra = f"[ignored unknown args: {sorted(ignored)}]"
-            result = SkillResult(actions=result.actions, feedback=f"{extra} {result.feedback or ''}".strip(), journal_op=result.journal_op, interrupted=result.interrupted)
+            # Rebuild via dataclasses.replace so ONLY the feedback changes.
+            # Listing fields by hand here used to silently drop the closed-loop
+            # bookkeeping (pre_executed / pre_reward / final_obs /
+            # pre_terminated / pre_truncated), which made the harness replay
+            # `actions` on top of steps a closed-loop skill had already taken.
+            import dataclasses
+            result = dataclasses.replace(
+                result, feedback=f"{extra} {result.feedback or ''}".strip()
+            )
         return result
 
     def all_schemas(self) -> dict[str, dict]:
