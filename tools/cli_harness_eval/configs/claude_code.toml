@@ -1,0 +1,73 @@
+# Arm 1: Claude Code driving the same game over MCP.
+#
+#   eval @ tools/cli_harness_eval/configs/claude_code.toml
+#
+# The native 0.2.1 taskset (`nethack_v1`) serves the gated NetHack skill set as
+# an MCP tool server; `claude_code` (SUPPORTS_MCP = True) is handed its URL via
+# `--mcp-config --strict-mcp-config`, so the agent sees the tools as
+# `mcp__nethack__<skill>` and nothing else. Proven booting end-to-end in
+# Task 13; see configs/README.md for the runtime determination and the exact
+# advertised tool names.
+#
+# Requires on PYTHONPATH: the engine repo (NetHackHarness), the repo root, and
+# environments/nethack -- the tool server is launched as `python -m nethack_v1`
+# with the parent's environment inherited (`v1/mcp/launch.py:208`).
+#
+# PINNED IDENTICALLY TO control.toml: model, character, seeds, task_spec, skill
+# set, and the per-rollout skill-call budget.
+
+model = "z-ai/glm-5.2"
+num_tasks = 16
+num_rollouts = 1
+rich = false
+push = false
+
+[taskset]
+id = "nethack_v1"
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+n_examples = 16
+interface = "skill"
+variant = "B1"
+map_detail = "full"
+# Self-dispatch is the only v1 mode: a 0.2.x toolset is an MCP server, so the
+# tool call itself both executes the skill and returns the observation.
+self_dispatch = true
+obs_mode = "push"
+# The cross-arm referee, enforced toolset-side so it binds a CLI agent whose
+# internal loop we do not control. Matches control.toml's `max_turns = 150`.
+max_skill_calls = 150
+max_turns = 200
+# Seed AGENTS.md / CLAUDE.md, wiki/ and memory/ into the agent's workdir --
+# the filesystem counterpart of the affordances the control arm gets through
+# its system prompt, wiki tools and Journal.
+seed_workspace = true
+# The tool server gets its own runtime, isolating the (C-extension) game
+# process from whatever the agent's shell does to its own workdir.
+colocated = false
+
+[taskset.env_args]
+skill_set = "netplay"           # the netplay gate: `move` is never published
+
+[harness]
+id = "claude_code"
+# `disabled_tools` is deliberately EMPTY. Under `--bare` (which this pinned
+# harness always passes) Claude Code advertises only Bash / Edit / Read plus
+# the MCP resource helpers -- no WebFetch, no WebSearch. Those three are the
+# capability-match for the control arm's wiki tools and Journal: the workspace
+# primer tells the agent to grep `wiki/` and keep notes in `memory/`. Removing
+# them would make the CLI arm strictly weaker than the control, which is the
+# opposite of what this comparison is for. See configs/README.md §5 for the
+# host-access caveat that comes with the subprocess runtime.
+
+[harness.runtime]
+# Verified in Task 13 step 1: `NEEDS_CONTAINER` is a *Task*-level flag in the
+# pinned 0.2.1 (`v1/task.py:227`), `NetHackTask` does not set it, and no
+# Harness-level check exists yet -- so a third-party CLI harness runs on the
+# subprocess runtime here. This machine has no Docker/Podman (apptainer only).
+type = "subprocess"
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0

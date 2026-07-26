@@ -111,6 +111,11 @@ class NetHackState(vf.State):
     # Cross-arm referee (see NetHackToolsetConfig.max_skill_calls).
     skill_calls: int = 0
     budget_exhausted: bool = False
+    # The netplay gate, *measured* rather than asserted by construction: the
+    # count of raw `move` calls that actually reached the engine. `move` is not
+    # published under skill_set="netplay", so this must stay 0 on every rollout
+    # of the experiment; a nonzero value means the gate leaked.
+    moves_executed: int = 0
     # Engine-side termination (death / ascension / step cap).
     terminated: bool = False
     # Reward-relevant scalars, mirrored out of the v0 state after each call.
@@ -170,6 +175,11 @@ class NetHackTaskConfig(vf.TaskConfig):
     type-matching resolution (`v1/task.py:190-216`), which raises on ambiguity."""
 
     toolset: NetHackToolsetConfig = NetHackToolsetConfig()
+    # Seed the CLI-agent workspace (AGENTS.md/CLAUDE.md, wiki/, memory/) into the
+    # harness runtime before the agent starts. This is the filesystem counterpart
+    # of the affordances the control arm gets through prompt and tools, so the
+    # arms are capability-matched (tools/cli_harness_eval/workspace.py).
+    seed_workspace: bool = True
 
 
 class NetHackTasksetConfig(vf.TasksetConfig):
@@ -196,6 +206,8 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     env_args: dict = {}
     # Where the tool server runs (colocated = share the harness's runtime).
     colocated: bool = False
+    # Seed the CLI-agent workspace into the harness runtime (see NetHackTaskConfig).
+    seed_workspace: bool = True
 
     # --- dataset shape (load-time only) --------------------------------------
     n_examples: int = 8
@@ -373,6 +385,9 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
                     "The episode is over.]"
                 )
             state.skill_calls += 1
+            if name == "move":
+                # Only reachable if the gate leaked (see NetHackState.moves_executed).
+                state.moves_executed += 1
             content = await self.v0env._apply_tool_call(self.v0_state, name, kwargs)
             self._publish(state)
             if obs_mode == "on_demand" and name != "look":
@@ -460,6 +475,72 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
         # raises when several config fields match (`v1/task.py:190-216`).
         return self.config.toolset
 
+    # -- per-rollout runtime setup ------------------------------------------ #
+    async def setup(self, trace, runtime) -> None:
+        """Seed the CLI-agent workspace into the harness runtime's workdir.
+
+        `Rollout.run` calls this after `runtime.start()` and before
+        `Harness.setup` / the tool servers (`v1/rollout.py:143-158`), so the
+        files are in place by the time the agent's first turn runs. Uploading
+        through ``runtime.write`` (rather than writing to a host path) keeps
+        this correct for docker/prime runtimes too, where the workdir is not
+        on the host filesystem.
+
+        A CLI arm without its workspace is not capability-matched to the
+        control arm, so a failure here is fatal rather than a warning.
+        """
+        if not self.config.seed_workspace:
+            return
+        import tempfile
+        from pathlib import Path
+
+        from tools.cli_harness_eval.workspace import build_workspace
+
+        spec = _spec_for(self.data.tier)
+        objective = (
+            f"{spec.description}\n\nSuccess: {spec.success_criterion}\n\n"
+            "Drive the game only through the `nethack` MCP tools."
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_workspace(Path(tmp) / "workspace", objective=objective)
+            for path in sorted(root.rglob("*")):
+                if path.is_file():
+                    await runtime.write(
+                        str(path.relative_to(root)), path.read_bytes()
+                    )
+        # `runtime.write` does not carry file modes, and the wiki being
+        # read-only is load-bearing: an arm must not be able to corrupt its own
+        # reference corpus mid-run and diverge from the other arms
+        # (`tests/test_cli_workspace.py::test_wiki_pages_are_read_only`).
+        await runtime.run(
+            ["sh", "-c", "chmod 0444 wiki/*.md && chmod 0555 wiki"], {}
+        )
+
+    async def finalize(self, trace, runtime) -> None:
+        """Publish the referee's bookkeeping onto the trace as unweighted metrics.
+
+        `Trace.state` is `exclude=True` (`v1/trace.py:374`), so nothing on it
+        reaches `traces.jsonl`. Without this the executed-call count — the
+        cross-arm referee's own reading, and the quantity an arm comparison is
+        normalized on — would be invisible in the run output, observable only
+        indirectly through `stop_condition`. `move` is never published, so
+        ``moves_executed`` is the netplay gate measured on live data (0 unless
+        a raw `move` reached the engine), not asserted by construction.
+        """
+        state = trace.state
+        trace.metrics.update(
+            {
+                "skill_calls": float(state.skill_calls),
+                "budget_exhausted": float(state.budget_exhausted),
+                "max_dlvl_reached": float(state.max_dlvl_reached),
+                "descent_count": float(state.descent_count),
+                "scout_reward_total": float(state.scout_reward_total),
+                "died": float(state.died),
+                "terminated": float(state.terminated),
+                "moves_executed": float(state.moves_executed),
+            }
+        )
+
     # -- stop conditions ---------------------------------------------------- #
     @vf.stop
     async def call_budget_exhausted(self, trace) -> bool:
@@ -515,7 +596,9 @@ class NetHackTaskset(vf.Taskset[NetHackTask, NetHackTasksetConfig]):
         system_prompt = v0env.spec.system_prompt
         begin = f"Task: {spec.description}\nSuccess: {spec.success_criterion}\n\nBegin."
 
-        task_config = NetHackTaskConfig(toolset=cfg.toolset_config())
+        task_config = NetHackTaskConfig(
+            toolset=cfg.toolset_config(), seed_workspace=cfg.seed_workspace
+        )
         rng = random.Random(cfg.seed)
         if cfg.explicit_seeds is not None:
             seeds = [int(s) for s in cfg.explicit_seeds]

@@ -1,0 +1,41 @@
+# Arm 0 (control): our purpose-built harness, run through verifiers 0.2.1's
+# v0 LEGACY BRIDGE. `id` + no `taskset.id` selects the bridge
+# (`verifiers/v1/env.py:128`), which calls the v0 `env.run_rollout` verbatim
+# (`v1/legacy.py:517`) and maps the result into a v1 `Trace`. Nothing in this
+# arm's path is ported, so its dispatch order, prompt compaction and rubric are
+# the exact code experiment 1 validated.
+#
+#   eval @ tools/cli_harness_eval/configs/control.toml
+#
+# Requires on PYTHONPATH: the engine repo (NetHackHarness), the repo root, and
+# environments/nethack. See configs/README.md.
+#
+# PINNED IDENTICALLY TO claude_code.toml: model, character, seeds, task_spec,
+# skill set, and the per-rollout skill-call budget. Those five are the
+# experiment's controlled variables; only the scaffold differs.
+
+id = "nethack"                  # v0 env id -> the legacy bridge
+model = "z-ai/glm-5.2"
+num_tasks = 16
+num_rollouts = 1
+rich = false
+push = false
+
+[args]                          # kwargs forwarded to `load_environment`
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+n_examples = 16
+skill_set = "netplay"           # the netplay gate: no raw `move` adapter is built
+interface = "skill"
+variant = "B1"
+map_detail = "full"
+# The control arm's counterpart to the CLI arms' `max_skill_calls`: in the v0
+# loop one LM turn dispatches at most one skill call, so a 150-turn cap is a
+# 150-skill-call budget. Both arms therefore get the same number of game
+# actions, which is what the comparison is normalized on.
+max_turns = 150
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
