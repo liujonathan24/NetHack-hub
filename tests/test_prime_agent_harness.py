@@ -131,7 +131,13 @@ def test_the_three_arms_pin_the_same_experiment():
     # to the control arm's system prompt / wiki tools / Journal.
     assert cc["seed_workspace"] is True and pa["seed_workspace"] is True
     # Distinct per-turn NDJSON directories, or one arm overwrites the other.
-    assert cc["trace_dir"] != pa["trace_dir"] != control["args"]["trace_dir"]
+    # A `a != b != c` chain here would only check (a != b) and (b != c) and
+    # never compare a against c, so it would pass even if cc and control
+    # shared a directory -- check pairwise via set cardinality instead. (Full
+    # coverage, including the absolute-path requirement for all three arms,
+    # lives in tests/test_arm_configs.py.)
+    trace_dirs = {cc["trace_dir"], pa["trace_dir"], control["args"]["trace_dir"]}
+    assert len(trace_dirs) == 3, trace_dirs
 
 
 def test_the_prime_agent_arms_trace_dir_is_absolute():
@@ -141,8 +147,9 @@ def test_the_prime_agent_arms_trace_dir_is_absolute():
     NDJSON with no error: two otherwise identical rollouts produced no file
     (relative) and 12 lines (absolute).
 
-    Only this arm's config is asserted. `control.toml` and `claude_code.toml` are
-    still relative on purpose — Task 11 owns the launch and those two arms.
+    Only this arm's config is asserted here. `control.toml` and
+    `claude_code.toml` got the same absolute-path fix in Task 14 (commit
+    659601e); `tests/test_arm_configs.py` covers all three arms.
     """
     trace_dir = _load("prime_agent.toml")["taskset"]["trace_dir"]
     assert pathlib.PurePosixPath(trace_dir).is_absolute(), trace_dir

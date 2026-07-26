@@ -78,7 +78,7 @@ That is the single largest upgrade risk in this experiment.
   form into a system prompt.
 * **A withheld name is rejected at the MCP layer**, not at the engine: calling `move`
   against a booted server returns `isError=True, "Unknown tool: move"`. The v0
-  `_apply_tool_call` re-check (`nethack.py:754`) is the second layer, and it refuses
+  `_apply_tool_call` re-check (`nethack.py:779`) is the second layer, and it refuses
   without stepping the engine.
 * **State** rides the interception `/state` channel (`server.py:190-216`): pull before each
   call, publish on a `contextvars.ContextVar`, push back if changed. `Trace.state` is
