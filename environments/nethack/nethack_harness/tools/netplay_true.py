@@ -120,6 +120,21 @@ class NetPlayEngineEnv:
         return self
 
     def _current_core_obs(self):
+        # Prefer the env's own unfiltered observation. NetHackCoreEnv.last_observation
+        # is a *view* filtered to observation_keys, and "misc" -- the (in_yn_function,
+        # in_getlin, xwaitforspace) popup flags our waiting_for_* properties below read
+        # -- is NOT in the default key set (nethack_core/env.py:123-129). Rebuilding a
+        # CoreObservation from that filtered view (the old code path) silently stamped
+        # misc=None into every fresh reset() (called on every get_agent(), see
+        # get_agent() below), which made waiting_for_yn/line/space read False even
+        # with a prompt open -- so `fail_on_popup`'s entry-time guard never fired, and
+        # a skill's first keystroke landed in the open prompt instead. The engine
+        # always computes `misc` regardless of observation_keys
+        # (nethack_core/_engine.py:1046); only the harness-level filtering drops it,
+        # so the unfiltered attribute carries it through unconditionally.
+        raw = getattr(self._env, "_last_observation", None)
+        if raw is not None:
+            return raw
         keys = self._env.observation_keys
         last = self._env.last_observation
         if last is None:
@@ -235,6 +250,23 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     wrapped.truncated = False
     wrapped.steps = 0
 
+    # pre_executed skills report action_indices=[] to env_response (nethack.py),
+    # so its normal step loop -- the thing that populates state["scout_tiles_seen"]
+    # / state["_visited_tiles"] -- never runs for them. Record every observation
+    # this skill's own internal loop produces so env_response can back-fill that
+    # bookkeeping from `pre_visible_obs` instead. Scoped to this call only (the
+    # instance patch is removed in `finally`); `wrapped.step` is `NetPlayEngineEnv.
+    # step`, which `agent.step()` (agent_base.py:173) calls for every real engine
+    # step a skill takes.
+    step_observations: list = []
+    original_step = wrapped.step
+
+    def _tracking_step(action):
+        result = original_step(action)
+        step_observations.append(wrapped.last_raw)
+        return result
+
+    wrapped.step = _tracking_step
     thoughts: list[str] = []
     try:
         strategy = agent._execute_skill(skill, kwargs)
@@ -247,6 +279,8 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                 break
     except Exception as e:  # a skill raising must not kill the rollout
         thoughts.append(f"Skill raised {type(e).__name__}: {e}")
+    finally:
+        wrapped.step = original_step
 
     feedback = " ".join(t for t in thoughts if t).strip() or "No effect."
     return SkillResult(
@@ -257,6 +291,7 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
         final_obs=wrapped.last_raw,
         pre_terminated=wrapped.terminated,
         pre_truncated=wrapped.truncated,
+        pre_visible_obs=step_observations,
     )
 
 
@@ -270,6 +305,17 @@ def _schema_for(skill: Skill) -> dict:
             "type": _TYPE_NAMES.get(p.type.name, "string"),
             "description": f"{p.name}" + (" (optional)" if p.optional else ""),
         }
+        if p.optional:
+            # `_make_skill_adapter` (helpers.py) treats a missing "default" as
+            # `inspect.Parameter.empty` -- i.e. required. Upstream's own optional
+            # params (SkillParameter(..., optional=True)) all default to None in
+            # the skill function itself (create_position_command's x/y,
+            # create_inventory_command's item_letter, rest's count), and
+            # `_make_adapter` below already drops a None arg before calling the
+            # skill, so publishing "default": None here reproduces upstream's
+            # real, callable-with-no-args surface (e.g. `down()` = "descend
+            # where I stand") instead of silently making it required.
+            entry["default"] = None
         params[p.name] = entry
     return {"description": skill.description, "parameters": params}
 

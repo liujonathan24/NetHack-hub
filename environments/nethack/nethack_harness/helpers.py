@@ -908,6 +908,17 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # All 31 skills of upstream's exposed repository (netplay/__init__.py
         # lines 9-18) are registered under an `np_` prefix so they cannot
         # collide with our same-named skills.
+        #
+        # No `move` tool is published here either, so the literal gate holds --
+        # but this set is NOT gate-equivalent to `netplay`. `np_press_key` /
+        # `np_type_text` ARE published (faithful to upstream), and both pass a
+        # raw keystroke straight to the engine; NetHack reads vi-style letters
+        # (h/j/k/l/y/u/b/n) as compass steps, so `np_type_text(text="hhhh")` is
+        # an unrestricted 4-step walk -- a strict superset of a `move` tool.
+        # This is correct fidelity to upstream, not a bug to "fix" by
+        # withholding those two tools. See vendor/PROVENANCE.md ("The move
+        # gate does not carry over to netplay_true") and
+        # test_raw_keystroke_surface_present_in_netplay_true_absent_in_netplay.
         from nethack_harness.tools import netplay_true as _npt
         keep = set(_npt.NETPLAY_TRUE_TOOL_NAMES)
         out = []

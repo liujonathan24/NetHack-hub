@@ -96,6 +96,15 @@ class SkillResult:
     final_obs: Any = None
     pre_terminated: bool = False
     pre_truncated: bool = False
+    # Optional: the sequence of intermediate observations a closed-loop skill's
+    # own internal step loop produced (one per real engine step), oldest first.
+    # env_response's pre_executed branch (nethack.py) uses this -- when present
+    # -- to back-fill scout_tiles_seen / _visited_tiles, which its own step loop
+    # would otherwise populate but never runs when pre_executed=True and
+    # actions=[]. None (the default) means "no such bookkeeping"; env_response
+    # then does nothing extra, so any existing pre_executed skill that does not
+    # set this (e.g. explore_and_descend) is unaffected byte-for-byte.
+    pre_visible_obs: Optional[list] = None
 
 
 class SkillRegistry:

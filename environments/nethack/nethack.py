@@ -914,24 +914,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             terminated = bool(result.pre_terminated)
             truncated = bool(result.pre_truncated)
             action_indices = []
+            # `action_indices == []` means the loop below never runs, so
+            # scout_tiles_seen / _visited_tiles would otherwise never see this
+            # call at all (scout_reward is structurally zero for every
+            # pre_executed skill). `pre_visible_obs` is opt-in (defaults to
+            # None): only netplay_true's `run_netplay_skill` sets it, so the
+            # hand-written `netplay` set's own pre_executed skill
+            # (explore_and_descend) does not go through this branch and its
+            # behaviour is unchanged.
+            for step_obs in (getattr(result, "pre_visible_obs", None) or []):
+                _record_scout_and_visited(state, step_obs)
         for step_i, action in enumerate(action_indices):
             last_obs, r, terminated, truncated, info = env.step(action)
             total_reward += r
-            # Scout reward: count newly-revealed dungeon tiles.
-            for (x, y), ch in _iterate_visible_tiles(last_obs):
-                if ch not in (b" ", b"\x00"):
-                    state["scout_tiles_seen"].add((state["max_dlvl_reached"], x, y))
-            # Sub-experiment 1b: record the hero's current tile into the per-level
-            # visited set (drives visited_grid). Keyed by the hero's ACTUAL depth
-            # (blstats[12]) so descent turns file under the level the template
-            # will read (max_dlvl_reached lags until later in env_response).
-            try:
-                _vb = last_obs.blstats
-                state["_visited_tiles"].setdefault(int(_vb[12]), set()).add(
-                    (int(_vb[0]), int(_vb[1]))
-                )
-            except (AttributeError, IndexError, TypeError, KeyError):
-                pass
+            _record_scout_and_visited(state, last_obs)
             if terminated or truncated:
                 break
             # Status-aware halt: check after each step (cheap — just blstats).
@@ -1444,6 +1440,31 @@ def _iterate_visible_tiles(obs):
     for y in range(chars.shape[0]):
         for x in range(chars.shape[1]):
             yield (x, y), bytes([int(chars[y, x])])
+
+
+def _record_scout_and_visited(state: dict, obs) -> None:
+    """Fold one observation's visible tiles + hero position into `state`.
+
+    Factored out of the env_response step loop so the SAME bookkeeping can be
+    replayed over a closed-loop skill's `pre_visible_obs` (see
+    SkillResult.pre_visible_obs / run_netplay_skill), which never goes through
+    that loop because `pre_executed=True` skills report `action_indices=[]`.
+    """
+    # Scout reward: count newly-revealed dungeon tiles.
+    for (x, y), ch in _iterate_visible_tiles(obs):
+        if ch not in (b" ", b"\x00"):
+            state["scout_tiles_seen"].add((state["max_dlvl_reached"], x, y))
+    # Sub-experiment 1b: record the hero's current tile into the per-level
+    # visited set (drives visited_grid). Keyed by the hero's ACTUAL depth
+    # (blstats[12]) so descent turns file under the level the template
+    # will read (max_dlvl_reached lags until later in env_response).
+    try:
+        _vb = obs.blstats
+        state["_visited_tiles"].setdefault(int(_vb[12]), set()).add(
+            (int(_vb[0]), int(_vb[1]))
+        )
+    except (AttributeError, IndexError, TypeError, KeyError):
+        pass
 
 
 # ----- Wave-2 Track B: visited-frontier memory + deadlock-breaker -----

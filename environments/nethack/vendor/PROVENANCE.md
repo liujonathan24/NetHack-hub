@@ -208,3 +208,103 @@ Left as-is for fidelity; none affect the skills we exercise.
    `melee_attack` passes `avoid_monsters=True` expecting monster-avoiding paths
    and does not get them.
 5. `skills.py:604` — bare `except:` in `zap`.
+
+## The `move` gate does not carry over to `netplay_true`
+
+Neither `netplay` nor `netplay_true` publishes a `move` tool, so the literal
+gate (`test_toolset_self_dispatch.py::test_self_dispatch_tools_are_wrapped`,
+`"move" not in names`) holds for both. But that test is **not** evidence the
+two sets are gate-equivalent, and reading it in isolation would reasonably
+suggest they are.
+
+`netplay_true` publishes `np_press_key` and `np_type_text` — faithful to
+upstream's own exposed action surface (`netplay/__init__.py:9-18`). Both pass
+a raw keystroke straight to the engine (`RawKeyPress.parse(key)` →
+`NetPlayEngineEnv.step`, `nethack_harness/tools/netplay_true.py`), and NetHack
+reads vi-style movement keys (`h`/`j`/`k`/`l`/`y`/`u`/`b`/`n`) as compass
+steps. So `np_type_text(text="hhhh")` is a four-step westward walk — a
+**strict superset** of an unrestricted `move(direction=...)` tool, reachable
+through two tools that read as harmless text/key primitives rather than a
+movement primitive.
+
+This is correct fidelity to upstream, not a bug, and must not be "fixed" by
+withholding `press_key`/`type_text` — that would make `netplay_true` no
+longer reproduce NetPlay's actual published action surface, which is the
+entire point of this port. It is recorded here, in the `netplay_true`
+registration comment (`nethack_harness/helpers.py`, the `skill_set ==
+"netplay_true"` branch), and pinned by
+`test_raw_keystroke_surface_present_in_netplay_true_absent_in_netplay`
+(`environments/nethack/tests/test_netplay_true_skills.py`), which asserts the
+raw-keystroke tools are present in `netplay_true` and absent from `netplay`.
+
+## Adapter-layer fixes (post-vendoring review)
+
+None of the following touch a vendored file; all four live in the seam
+(`nethack_harness/tools/netplay_true.py`, `nethack_harness/tools/skills.py`,
+`nethack_harness/helpers.py`, `nethack.py`).
+
+1. **Popup guard was inert.** `NetPlayEngineEnv._current_core_obs` rebuilt its
+   observation from `NetHackCoreEnv.last_observation`, filtered to
+   `observation_keys` — which omits `misc` by default
+   (`nethack_core/env.py:123-129`). That stamped `misc=None` into `last_raw` on
+   every `get_agent()` refresh (called on every skill call), so
+   `waiting_for_yn`/`waiting_for_line`/`waiting_for_space` read `False` even
+   with a real prompt open, and `fail_on_popup`'s entry-time guard never fired
+   — a skill's first keystroke could land in an open `[yn]` prompt (`y`/`n`
+   are also compass keys). Fixed by reading the env's unfiltered
+   `_last_observation` directly, which the engine always populates regardless
+   of `observation_keys` (`nethack_core/_engine.py:1046`). Test:
+   `test_popup_guard_fires_with_zero_engine_steps`.
+
+2. **18 of 31 skills published upstream-optional params as required.**
+   `_schema_for` described optionality in prose ("(optional)") but never
+   emitted a `"default"` key, and `_make_skill_adapter`
+   (`nethack_harness/helpers.py`) treats a missing `"default"` as
+   `inspect.Parameter.empty` — i.e. required. Affected: `pickup`/`up`/`down`/
+   `loot`/`offer` (`x`, `y`), all twelve `create_inventory_command` skills
+   (`item_letter`), and `rest` (`count`). Upstream's own no-arg forms —
+   `down()` = descend where you stand, `eat()` = open the food menu — were
+   unreachable through the published tool surface. Fixed by emitting
+   `"default": None` whenever `SkillParameter.optional` is `True`, deriving
+   optionality from upstream's own skill signatures rather than a hand-list.
+   Test: `test_optional_skill_params_are_callable_without_them`.
+
+3. **`scout_reward` was structurally zero for `netplay_true`.** Every `np_`
+   skill returns `pre_executed=True` with `actions=[]`, so `nethack.py`'s step
+   loop (which populates `state["scout_tiles_seen"]` /
+   `state["_visited_tiles"]`) never ran for them. Fixed by adding an optional
+   `SkillResult.pre_visible_obs` field (default `None`): `run_netplay_skill`
+   now records every intermediate observation its internal step loop produces,
+   and `nethack.py`'s `pre_executed` branch replays the SAME bookkeeping
+   helper (`_record_scout_and_visited`, factored out of the step loop) over
+   `pre_visible_obs` when present. The field defaults to `None` and the
+   hand-written `netplay` set's own closed-loop skill (`explore_and_descend`)
+   does not set it, so `netplay`'s behaviour is byte-for-byte unchanged — this
+   was independently verified: `explore_and_descend` has had the identical
+   "zero scout tiles from a closed-loop call" limitation all along, and it is
+   untouched by this fix (item 4 below covers a separate, already-landed
+   behaviour change to the control arm and why THAT one was left in place
+   rather than reverted). Tests:
+   `test_scout_tiles_accumulate_for_closed_loop_netplay_true_skills`,
+   `test_scout_reward_nonzero_for_netplay_true_end_to_end`,
+   `test_scout_reward_unchanged_for_netplay_explore_and_descend`.
+
+4. **`SkillRegistry.call`'s `dataclasses.replace` fix (arm-0 quantification).**
+   `SkillRegistry.call` rebuilds the returned `SkillResult` via
+   `dataclasses.replace` when it strips unrecognized kwargs
+   (`nethack_harness/tools/skills.py:186-197`), instead of hand-listing four
+   fields (the old code silently dropped `pre_executed`/`pre_reward`/
+   `final_obs`/`pre_terminated`/`pre_truncated`, which would make the harness
+   replay a closed-loop skill's `actions` on top of the steps it already took).
+   This changes the control arm's (`netplay`, whose dominant tool
+   `explore_and_descend` is itself closed-loop) behaviour on any call where the
+   model passes a stray argument. Quantified against the two committed
+   acceptance traces (`tools/cli_harness_eval/acceptance/`, 21 executed skill
+   calls in `task13_claude_code_seed0` + 12 in `task10_prime_agent_seed0` = 33
+   total, all under `skill_set="netplay"`): **zero** occurrences of
+   `"ignored unknown args"` in either `.traces.jsonl` or `.turns.ndjson`. Every
+   recorded `explore_and_descend` call passed exactly `max_floors`/
+   `max_game_steps` (both accepted parameters) or no arguments at all — never
+   an argument outside the skill's signature. The bugfix therefore did not
+   change either committed acceptance rollout's actual trajectory; it is a
+   real fix for a path that exists but was not exercised in the data we have.
