@@ -188,17 +188,17 @@ def _structured_map_template(fmt):
     def _render(structured, journal, state, *, compact, journal_max_chars):
         from nethack_core.map_model import build_map_model
         from nethack_harness.prompt.map_encoders import (
-            json_encode, toon_encode, build_cell_layers,
+            json_encode, toon_encode, build_cell_masks,
         )
 
         detail = state.get("map_detail", "full")
         model = build_map_model(state["raw_obs"])
         if fmt == "json":
+            import numpy as np
+            raw = state["raw_obs"]
             cell_schema = state.get("cell_schema") or set()
-            cell_layers = None
+            cell_masks = None
             if cell_schema:
-                import numpy as np
-                raw = state["raw_obs"]
                 bl = np.asarray(raw.blstats)
                 player = (int(bl[0]), int(bl[1]))
                 # Key visited tiles by the hero's ACTUAL depth (blstats[12]) so
@@ -207,10 +207,14 @@ def _structured_map_template(fmt):
                 dlvl_key = int(bl[12])
                 visited_all = state.get("_visited_tiles") or {}
                 visited_xy = visited_all.get(dlvl_key, set())
-                cell_layers = build_cell_layers(
+                cell_masks = build_cell_masks(
                     raw.chars, player, visited_xy, cell_schema,
                 )
-            map_text = json_encode(model, detail=detail, cell_layers=cell_layers)
+            # Pass `chars` so the body carries readable per-tile records rather
+            # than the raw-glyph-id RLE the model cannot interpret.
+            map_text = json_encode(
+                model, detail=detail, chars=raw.chars, cell_masks=cell_masks,
+            )
         else:
             map_text = toon_encode(model, detail=detail)
         status = format_observation_as_chat(
