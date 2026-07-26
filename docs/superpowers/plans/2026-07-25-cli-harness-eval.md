@@ -1347,3 +1347,95 @@ git commit -m "feat(cli-eval): arm launcher, turns_used aggregation, GLM team bi
    or repo invalidates that rollout. The workspace is the only legitimate filesystem.
 5. Report paired per-seed deltas and an exact sign test across the 16 seeds. Marginal SEs at n=16
    are wide; never quote them alone.
+
+---
+
+### Task 12: Port `nethack_v1.py` to the verifiers 0.2.x v1 API
+
+**Runs BEFORE Task 9.** Added 2026-07-25 after Task 8 discovered a plan defect: Task 8 Step 1
+assumed "upgrade until `codex` appears" was a version bump. It is an API port. Decision recorded:
+port to 0.2.x rather than pin to 0.1.14.
+
+**Why this is not optional.** No verifiers release has both a built-in Codex harness and a working
+`nethack_v1.py`. Verified: `0.2.0` is the *only* release between `0.1.14` and `0.2.1`, and it has
+the same break. 0.2.x is where the built-in `codex`, `claude_code`, `bash`, and `null` harnesses
+live, and where PR #1985's external-harness loader applies.
+
+**Files:**
+- Modify: `environments/nethack/nethack_v1.py`
+- Modify: `environments/nethack/tests/test_v1_taskset.py`, `test_toolset_self_dispatch.py`,
+  `test_call_budget.py` (construction sites only — assertions must keep their meaning)
+- Modify: `environments/nethack/pyproject.toml` (verifiers floor)
+
+**Interfaces:**
+- Consumes: `_apply_tool_call` (Task 4), `_self_dispatching` / `_terse` (Task 5), the call budget
+  (Task 6). Their *logic* is independent of the constructor shape and must survive unchanged.
+- Produces: `load_taskset`, `load_harness`, `load_v1_environment` with unchanged names and
+  meanings, built on the 0.2.x API.
+
+**What changed in 0.2.x (verified against the installed package, not guessed):**
+
+| 0.1.14 | 0.2.x |
+|---|---|
+| `vf.Toolset(tools=…, setups=…, cleanups=…, scope=…)` | `Toolset(config)`; subclasses `ServerBase`; config fields `colocated`, `runtime`, `url` |
+| `vf.Env(taskset=…, harness=…)` | `Environment(config)`; `EnvConfig(taskset, harness, timeout, retries, max_turns, max_input_tokens)` |
+| `vf.Taskset(source=…, rewards=…, toolsets=…)` | `Taskset(config)` |
+| `vf.Harness(...)` | `Harness(config)` |
+| `verifiers.v1.packages.harnesses` | `verifiers.v1.harnesses` |
+
+**Toolsets are now servers.** `Toolset(ServerBase)` with `colocated`/`runtime`/`url` is how 0.2.x
+exposes tools over the wire — which is the mechanism Tasks 9/10 need for MCP. Read the installed
+source and follow its intended pattern; do not fight it back into the 0.1.14 shape.
+
+- [ ] **Step 1: Read the 0.2.x source and write down the target shape**
+
+```bash
+V=.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1
+sed -n 1,80p $V/toolset.py; sed -n 1,60p $V/taskset.py; sed -n 1,60p $V/env.py
+sed -n 1,60p $V/harnesses/codex/harness.py
+```
+
+Record in the report: how a Toolset declares its tools, how setup/cleanup hooks attach, how a
+Taskset declares rewards and attaches toolsets, and how `Environment` is constructed. Cite
+file:line. This step is the task — the edits follow from it.
+
+- [ ] **Step 2: Run the v1 suite to capture the exact failures**
+
+Run: `PYTHONPATH="$ENG:.:environments/nethack" .venv-cli-eval/bin/python -m pytest environments/nethack/tests/ tests/ -q`
+Expected: 10 failures, all in the v1 path. That list is your worklist.
+
+- [ ] **Step 3: Port `_build_toolset`**
+
+Preserve exactly: per-rollout engine lifecycle (setup calls the v0 `setup_state`), the cleanup that
+drops non-serializable state, `self_dispatch`, `obs_mode`, the call budget, and the explicit
+`__signature__` that exposes `state` for runtime injection.
+
+- [ ] **Step 4: Port `load_taskset` / `load_harness` / `load_v1_environment`**
+
+Keep the names and the `NetHackTasksetConfig` fields (`self_dispatch`, `obs_mode`,
+`max_skill_calls`, `explicit_seeds`, `task_spec`, …). Callers in Task 9's TOML depend on them.
+
+- [ ] **Step 5: Port `NetHackHarness`**
+
+`base_program` reproduces the v0 rollout loop. If 0.2.x changed the harness authoring contract
+(e.g. `launch(ctx, trace, runtime, endpoint, secret, mcp_urls)`), adapt to it and say so in the
+report — that signature is what Task 10's external plugin must also implement.
+
+- [ ] **Step 6: Update the test construction sites**
+
+Only the construction changes. Every assertion must keep its meaning — especially
+`test_call_budget.py`'s refusal semantics and `test_toolset_self_dispatch.py`'s signature test.
+Weakening an assertion to make it pass is a defect, not a port.
+
+- [ ] **Step 7: Green the suite**
+
+Run: `PYTHONPATH="$ENG:.:environments/nethack" .venv-cli-eval/bin/python -m pytest environments/nethack/tests/ tests/ -q`
+Expected: 0 failures. Baseline on 0.1.14 was 166 passing; report the new count and account for any
+difference.
+
+- [ ] **Step 8: Update the verifiers floor and commit**
+
+```bash
+git add environments/nethack/nethack_v1.py environments/nethack/tests/ environments/nethack/pyproject.toml
+git commit -m "port(nethack_v1): move the v1 taskset to the verifiers 0.2.x API"
+```
