@@ -819,6 +819,9 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
     # tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
     _HARNESS_OWNED = {"inventory_item", "menu_option"}
 
+    # Namespace prefix of the vendored NetPlay skills (see tools/netplay_true.py).
+    _NETPLAY_TRUE_PREFIX = "np_"
+
     # skill_set: 'full' (default), 'move' (only move + survival), 'dir8'
     # (8 single-direction tools + survival, no `move` aggregator), or a
     # comma-separated whitelist e.g. 'move,descend,search'. The ladder
@@ -888,6 +891,31 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
+    elif skill_set == "netplay_true":
+        # NetPlay's ACTUAL published action surface, vendored from
+        # github.com/CommanderCero/NetPlay @ 6acb90d and bound to our engine
+        # (see environments/nethack/vendor/PROVENANCE.md and
+        # nethack_harness/tools/netplay_true.py).
+        #
+        # Deliberately a SEPARATE set from `netplay` above. That set is our own
+        # hand-written approximation: 18 tools, of which `attack` is a
+        # directional bump rather than NetPlay's pursue-until-dead
+        # `melee_attack(x,y)`, and `explore_and_descend` caps its search where
+        # NetPlay's `explore_level` runs until exploration is provably
+        # exhausted. Three experiment arms are already proven against it, so it
+        # stays untouched; use `netplay_true` to A/B the action surface itself.
+        #
+        # All 31 skills of upstream's exposed repository (netplay/__init__.py
+        # lines 9-18) are registered under an `np_` prefix so they cannot
+        # collide with our same-named skills.
+        from nethack_harness.tools import netplay_true as _npt
+        keep = set(_npt.NETPLAY_TRUE_TOOL_NAMES)
+        out = []
+        for name, schema in skill_registry.all_schemas().items():
+            if name not in keep: continue
+            params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        return out
     elif "," in skill_set:
         keep = {s.strip() for s in skill_set.split(",")}
         out = []
@@ -901,6 +929,13 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
     out = []
     for name, schema in skill_registry.all_schemas().items():
         if name in _HARNESS_OWNED:
+            continue
+        # The vendored NetPlay skills register themselves globally the moment
+        # nethack_harness.tools.netplay_true is imported (by the
+        # `netplay_true` branch above, or by a test). They are an alternative
+        # ACTION SURFACE, not extra tools, so they must never leak into 'full'
+        # -- that would silently add 31 tools to every existing arm.
+        if name.startswith(_NETPLAY_TRUE_PREFIX):
             continue
         params = schema.get("parameters", {}) or {}
         out.append(_make_skill_adapter(name, schema.get("description", ""), params))
