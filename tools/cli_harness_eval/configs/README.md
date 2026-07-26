@@ -1,9 +1,11 @@
 # Arm configs: the runtime determination and the MCP-exposure account
 
-Two configs, one environment package. `control.toml` runs arm 0 through verifiers 0.2.1's
+Three configs, one environment package. `control.toml` runs arm 0 through verifiers 0.2.1's
 **v0 legacy bridge** (no port in its path); `claude_code.toml` runs arm 1 as a real CLI
-coding agent driving the same game over **MCP**. Everything below was established by
-execution against the pinned `verifiers==0.2.1` in `.venv-cli-eval`, not by reading docs.
+coding agent driving the same game over **MCP**; `prime_agent.toml` runs arm 2 as a second CLI
+agent over the same MCP server but with a **structurally different tool surface** (§6).
+Everything below was established by execution against the pinned `verifiers==0.2.1` in
+`.venv-cli-eval`, not by reading docs.
 
 Run either with the v1 CLI (`eval`, not the v0 `vf-eval`):
 
@@ -162,9 +164,86 @@ cap over the `/state` channel (`stop_condition = "call_budget_exhausted"`),
 
    This is also why `test_cross_route_trace_equivalence.py` cannot make the two routes' agent
    loops shape-comparable: the `null` harness that would have done it cannot start.
+
+   The Prime Agent arm inherits the same hazard: its skill package lives at
+   `/tmp/vf-prime-agent` — but unlike the two above, that path **is** overridable
+   (`harness.install_dir` in `prime_agent.toml`). Its own daemon sockets go under
+   `/tmp/prime-agent-<uid>/`, which is per-user by construction.
 7. **The v0 `vf-eval` endpoint registry (`configs/endpoints.toml`) is on neither arm's path**
    (§3). Editing it will have no effect on these runs.
 8. **The action budget is not exactly equal across the arms** — the CLI arm gets exactly 150
    executed skills, the control arm at most 150 (a v0 turn can pass without executing a
    skill, and extra parallel tool calls in one turn are dropped). See the `max_turns` note in
    `control.toml`; Task 11 must normalize on the measured counts.
+
+---
+
+## 6. Arm 2 (`prime_agent.toml`): the same server, a different *kind* of tool surface
+
+This is the finding the third arm exists to produce, and it must be stated before any table is
+read: **arm 1 and arm 2 do not see the toolset the same way.**
+
+| | arm 1 — `claude_code` | arm 2 — `nethack-prime-agent` |
+|---|---|---|
+| what the model is offered | 18 agent tools, `mcp__nethack__<skill>` | **one** agent tool, `ipython` |
+| how a skill is invoked | a native tool call | Python inside that tool: `await nethack.explore_and_descend()` |
+| tool schemas in the prompt | yes, all 18 with JSON Schema | no — the model must run `await nethack.list_tools()` / `help(...)` to discover them |
+| who parses the arguments | the MCP client | the model, as Python source |
+| observation | the tool result | whatever the model chooses to `print()` |
+
+Prime Agent does this on purpose ("Consistent with Prime Agent's single-tool design, MCP
+integrations are **not** exposed as new agent tools" — `prime-agent/docs/mcp-integrations.md`),
+and only remote `"http"` MCP servers are wired to its kernel at all, which is exactly what
+verifiers serves. So the difference is a property of the scaffold under test. Three
+consequences for reading results:
+
+* **A discovery cost is charged to arm 2 and not to arm 1.** Arm 1's agent starts knowing all
+  18 tool names and their schemas; arm 2's has to spend calls finding them out. Some of arm
+  2's budget therefore buys information that arm 1 gets free.
+* **Arm 2 can compose.** Loops, `asyncio.gather`, and post-processing of an observation are
+  available to it inside a single tool call. The toolset-side referee still counts every
+  executed skill, and `NetHackToolset._with_state` serializes them, so a `gather` cannot
+  overrun the budget — but it *can* spend it faster than one call per model turn.
+* **`num_turns` is even less comparable here** than §6.3 of the Task 13 report already said
+  for arm 1: one Prime Agent turn can execute several skills.
+
+### 6.1 Model routing: a custom `models.json` provider, not an env var
+
+Prime Agent has no `<VENDOR>_BASE_URL` escape hatch. The route to verifiers' interception is
+the one verifiers' own bundled `pi` harness uses (`v1/harnesses/pi/harness.py:186-199`): a
+custom provider written into the per-rollout `models.json`
+
+```jsonc
+{"providers": {"intercept": {
+  "baseUrl": "<the endpoint verifiers hands the harness>",   // ends in /v1
+  "api": "openai-completions",                                // -> POST <baseUrl>/chat/completions
+  "apiKey": "PRIME_AGENT_INTERCEPT_KEY",                      // an env-var NAME; the secret never hits disk
+  "models": [{"id": "z-ai/glm-5.2", ...}]}}}
+```
+
+selected with `--provider intercept --model z-ai/glm-5.2`. Interception's chat dialect
+registers exactly `/v1/chat/completions` (`v1/dialects/chat.py:316`), so the shapes match.
+`--provider` + `--model` pins the provider deterministically (`resolveCliModel`: an explicit
+`--provider` filters the candidate set before pattern matching), and `defaultProvider` /
+`defaultModel` in `settings.json` pin the fallback path too — a built-in provider must never
+win, or the arm would silently run a different model.
+
+The whole config directory is redirected per rollout with `PRIME_AGENT_CODING_AGENT_DIR`, so
+nothing reads or writes the operator's `~/.prime/agent` settings, models or credentials.
+
+### 6.2 What Prime Agent needs on the host (and does *not* install)
+
+Unlike `claude_code`, this harness **does not install the CLI**. Prime Agent is an npm global
+(`npm install -g prime-agent`), not a downloadable release tarball, so the harness verifies it
+and fails loudly instead. What must exist on the host:
+
+* `prime-agent` on PATH (or `harness.binary` = an absolute path), plus `node` and `uv` —
+  `harness.path_prepend` puts them there for the runtime;
+* a writable `~/.prime/agent/kernel-venv`. **The harness writes into it**: Prime Agent installs
+  every Python skill `--editable` into that shared venv at kernel setup, so the first run
+  materializes `prime-agent-skill-nethack` and pulls the `mcp` SDK into it. That is a real
+  side effect on the operator's home directory, and it is why `harness.install_dir` is a
+  *fixed* path — Prime Agent keys the venv on the set of skill paths, so a per-rollout path
+  would rebuild the venv (a `uv` install) on every seed.
+* Note this venv build happens even under `--offline` / `PI_OFFLINE=1`, which only disable
+  *startup* network operations (update and package-update checks).
