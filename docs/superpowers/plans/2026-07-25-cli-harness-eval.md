@@ -1603,3 +1603,57 @@ git add environments/nethack/nethack.py environments/nethack/nethack_harness/hel
         tools/cli_harness_eval/configs/control.toml tools/cli_harness_eval/configs/claude_code.toml
 git commit -m "fix(nethack): terminate on death; timestamp traces; absolute trace_dir"
 ```
+
+---
+
+### Task 15: Launcher, aggregation, and the cross-arm results table
+
+**Splits from Task 11** (with Task 14). This is the last build task before the smoke runs.
+
+**Files:**
+- Create: `tools/cli_harness_eval/launch_cell.sh`
+- Modify: `tools/encoding_eval/aggregate_run.py` (or a thin `tools/cli_harness_eval/aggregate.py`)
+- Test: `tests/test_arm_configs.py`, `tests/test_cli_aggregate.py`
+
+- [ ] **Step 1: Arm-config parity test**
+
+Assert all three TOMLs pin identical `model` (`z-ai/glm-5.2`), `explicit_seeds` `[0..15]`,
+`character` `Val-hum-neu-fem`, `task_spec` `full_nle`, `skill_set` `netplay`, and that every
+`trace_dir` is absolute. **Note the configs use different key shapes** — control nests under
+`[args]`, the CLI arms under `[taskset]` — so read both.
+
+- [ ] **Step 2: The launcher**
+
+`launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]`, resolving `tools/cli_harness_eval/configs/<ARM>.toml`,
+refusing an unknown arm, and echoing the resolved settings before running. Mirrors
+`tools/encoding_eval/launch_cell.sh` so the fixed factors cannot drift between arms.
+
+- [ ] **Step 3: Aggregation — the columns that survive scrutiny**
+
+Per arm over its rollouts:
+- **Depth** — `max_dlvl_reached` (mean ± SE). The primary axis.
+- **BALROG %** — via `nethack_harness.prompt.balrog.balrog_progress`.
+- **Died** — **must NOT use `metrics.died`** on the CLI arms. Task 10's artifact showed a rollout
+  dead from turn 6 scored `died = 0`. Derive from `hitpoints == 0` in the trace, as
+  `aggregate_run.py:51` already does. Task 14 fixed live termination, but historical traces and any
+  path the fix misses still need the trace-derived value.
+- **Actions used** — normalize on **measured** counts, never nominal 150: `total_tool_calls` for the
+  control, `skill_calls` for the CLI arms. The arms are not budget-matched (control burns turns on
+  no-tool-call replies and drops extra parallel tool calls; the CLI arms get exactly 150 executed
+  skills). Report the measured number, and state the asymmetry in the table's notes.
+- **Cost per rollout** — the cross-arm efficiency column. Compute from token counts for the two
+  intercepted arms using one GLM 5.2 price table. The Prime Agent arm's model calls are **not**
+  intercepted, so its token split is unavailable — mark it so rather than estimating. Do not invert
+  cost into tokens: one equation, two unknowns, and prompt caching breaks it further.
+- **Seconds per call** — from the trace `t_wall` field, reported as first-half vs second-half means
+  so latency growth is visible. Measured on the acceptance artifacts: ~17s → ~37s over 12-20 calls.
+- **Post-death drain** — calls issued after `hitpoints` first hits 0. Wasted budget and spend; it
+  should be ~0 after Task 14 and is the regression signal if it is not.
+
+- [ ] **Step 4: Decide what `outputs/` is tracked**
+
+Four untracked `outputs/` trees exist from the proving runs. Acceptance artifacts under
+`tools/cli_harness_eval/acceptance/` are committed deliberately; bulk run output should be
+gitignored. Make it explicit either way.
+
+- [ ] **Step 5: Green the suite and commit**
