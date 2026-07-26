@@ -1439,3 +1439,98 @@ difference.
 git add environments/nethack/nethack_v1.py environments/nethack/tests/ environments/nethack/pyproject.toml
 git commit -m "port(nethack_v1): move the v1 taskset to the verifiers 0.2.x API"
 ```
+
+---
+
+### Task 13: Claude Code arm — boot the MCP path before anything else
+
+**Supersedes Task 9.** The Codex arm is dropped (`codex/harness.py:50` `SUPPORTS_MCP = False # TODO`,
+still false on `main` and in `0.2.2.dev31`); Claude Code replaces it.
+
+**Restructured boot-first.** Research found **no worked example anywhere** of a CLI-agent harness
+paired with a stateful custom toolset: verifiers' own e2e tests pair stateful `Toolset`s only with
+the in-house `null` harness, and the single test running `claude-code`/`codex` uses a tool-less
+shell task. `prime-environments` has zero hits. So the risk here is not config polish — it is
+whether the combination boots at all. Prove it plays before writing arm configs.
+
+**Files:**
+- Create: `tools/cli_harness_eval/configs/{control,claude_code}.toml`
+- Create: `tools/cli_harness_eval/configs/README.md` (the runtime + MCP-exposure account)
+- Create: `tests/test_tools_scripts.py` (pytest wrapper over the `tools/` verification scripts)
+- Create: `environments/nethack/tests/test_cross_route_trace_equivalence.py`
+
+**Interfaces:**
+- Consumes: `load_taskset` / `load_harness` / `load_v1_environment` and `NetHackTasksetConfig`
+  (Task 12); `build_workspace` (Task 7); the toolset referee (Task 6).
+- Produces: two loadable arm configs and a proven-booting MCP path for Task 10 to copy.
+
+- [ ] **Step 1: Determine the runtime — this gates everything**
+
+This cluster has **no Docker or Podman**; only `apptainer`/`singularity`. Upstream PR #2102
+(merged 2026-07-22) makes third-party harnesses refuse the bare subprocess runtime via
+`NEEDS_CONTAINER`; our pinned 0.2.1 carries that check only at *Task* level (`task.py:227`,
+`env.py:242`), so subprocess may still work here.
+
+Establish which of these is true, with evidence:
+(a) `claude_code` runs under the subprocess runtime on 0.2.1;
+(b) it requires a container → we must use a Prime remote sandbox (`PrimeConfig`), which costs
+    credits and needs the funded team id.
+
+```bash
+grep -rn "NEEDS_CONTAINER\|SubprocessConfig\|class .*Runtime" \
+  .venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/runtimes/*.py | head -20
+```
+
+Record the answer in `configs/README.md`. If (b), **stop and report** — that is a cost decision
+for the human partner, not one to make silently.
+
+- [ ] **Step 2: Boot the tool server standalone and list what it advertises**
+
+Before involving any CLI, prove the toolset serves. Start the NetHack toolset as an MCP server and
+enumerate its tools. Confirm the names match what Claude Code will see —
+`mcp__<TOOL_PREFIX>__<method_name>` — and that **`move` is absent** and
+`explore_and_descend` present. Record the exact `TOOL_PREFIX` and URL shape.
+
+- [ ] **Step 3: One real rollout, small budget**
+
+`n=1`, `explicit_seeds=[0]`, `max_skill_calls=20`, `character="Val-hum-neu-fem"`,
+`task_spec="full_nle"`, model `z-ai/glm-5.2`.
+
+**This is the acceptance gate for the whole experiment.** All of these must hold:
+- the workspace was seeded (`AGENTS.md`, `wiki/`, `memory/objective.md` present);
+- the agent issued at least one `mcp__…` tool call;
+- `skill_calls` **accumulated over the state channel** (not stuck at 0 or 1 — the toolset-side
+  referee is a novel pattern with no upstream validation, so prove it on real data);
+- a rendered observation came back as the tool result;
+- `move` executed = 0;
+- the trace file was written.
+
+If GLM 5.2 hangs rather than erroring, suspect billing — see Task 11 Step 1, and stop.
+
+- [ ] **Step 4: Cross-route trace equivalence (design doc §10, deferred here from Task 12)**
+
+One rollout per route (legacy-bridge control vs native toolset), same seed, same forced skill
+sequence. Assert equality of `reward`, the four reward metrics, `num_turns`, and `stop_condition`.
+The engine-state half already exists in `environments/nethack/tests/test_cross_route_equivalence.py`.
+
+- [ ] **Step 5: Put `tools/` under a test runner**
+
+Nothing re-runs the `tools/` verification scripts, which is exactly how a one-line dataset change
+silently disabled `_verify_gate.py` — the experiment's own acceptance check. Add
+`tests/test_tools_scripts.py` shelling out to `tools/encoding_eval/_verify_gate.py` and
+`tools/exp1d_obs/verify_1d.py`, asserting exit 0.
+
+- [ ] **Step 6: Write the two arm configs**
+
+`control.toml` (legacy bridge; `self_dispatch` unset) and `claude_code.toml`
+(native taskset, `self_dispatch=true`, `obs_mode="push"`, `max_skill_calls=150`,
+`explicit_seeds=[0..15]`, `character="Val-hum-neu-fem"`, model `z-ai/glm-5.2`). Both must pin the
+same seeds, model, and character — Task 11's `test_arm_configs.py` asserts exactly that.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add tools/cli_harness_eval/configs/ tests/test_tools_scripts.py \
+        environments/nethack/tests/test_cross_route_trace_equivalence.py
+git commit -m "feat(cli-eval): Claude Code arm — proven MCP boot, arm configs, tools/ under test"
+```
