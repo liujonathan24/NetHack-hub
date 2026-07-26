@@ -11,76 +11,165 @@ from typing import Optional
 
 from nethack_harness.memory.journal import Journal
 
-SYSTEM_PROMPT = """You are playing NetHack, a procedurally-generated dungeon-crawling roguelike.
+# --------------------------------------------------------------------------- #
+# System prompt                                                                #
+# --------------------------------------------------------------------------- #
+#
+# The prompt is ASSEMBLED from the resolved tool list, not hand-written as one
+# string. NetPlay builds its skill list from the live repository
+# (`skill_selection.py:133`) and BALROG builds its action list from the env
+# (`nle/__init__.py`), which is why neither can advertise a tool that does not
+# exist. Ours could, and did: under `skill_set="netplay"` — what every arm of
+# the CLI-harness comparison runs — no `move(direction=...)` adapter is built,
+# yet seven places told the agent to call it (exp1 measured 232 rejected `move`
+# attempts under the ASCII encoding). Each block below declares the tools it
+# names; blocks whose tools are not published are dropped.
 
-Each turn shows: map (ASCII, runs `.{20}` = 20 dots), stats, inventory
-(skipped on "unchanged"), messages, any menu. Act by calling one tool.
+_PROMPT_HEAD = """You are playing NetHack, a procedurally-generated dungeon-crawling roguelike.
+
+Each turn shows: map (ASCII), stats, inventory, messages, any menu. Act by
+calling one tool.
+
+=== COORDINATES ===
+One frame, everywhere. `=== MAP ===` row 0 is the TOP row of the dungeon;
+`Pos: (x,y)` indexes it directly (your `@` is on map row y, column x); every
+coordinate in VISIBLE FEATURES and every (x, y) argument a tool takes is in
+that same frame. Copy coordinates straight across — no offsets.
 
 === STRATEGY PRIMER ===
 GLYPH KEY:
 Terrain: `>` stairs DOWN, `<` stairs UP (NOT down), `_` altar, `{` fountain,
-`}` pool, `#` corridor, `.` floor, `|`/`-` walls, `+` door, `\\` throne,
-`$` gold, `%` food/corpse, `[`/`)`/`(`/`*`/`?` items. Creatures are LETTERS
-(a-z, A-Z): `d` canine, `f` feline/lichen, `r` rat, `x` grid bug, `B` bat,
-`k` kobold, `o` orc, `@` humans (and YOU). No "fireplace" glyph — adjacent
-`f` is a creature. `@` hides the tile under you — read UNDER PLAYER.
+`}` pool, `#` corridor, `.` floor, `|`/`-` walls, `+` closed door (or a
+spellbook lying on the floor), `\\` throne, `$` gold, `%` food/corpse,
+`[`/`)`/`(`/`*`/`?` items. Creatures are LETTERS (a-z, A-Z): `d` canine,
+`f` feline, `F` lichen/fungus, `r` rat, `x` grid bug, `B` bat, `k` kobold,
+`o` orc, `@` humans (and YOU). No "fireplace" glyph — adjacent `f` is a
+creature. `@` hides the tile under you — read UNDER PLAYER.
 
 VISIBLE FEATURES lists every stairs/altar/fountain/door on the visible map
-with (x,y). If `stairs DOWN` isn't listed, no `>` is visible — don't
-pattern-match the grid; explore or `search`. To descend: (1) find `>`,
-(2) walk ON it, (3) call `descend`. If descend fails, recheck UNDER PLAYER.
+with (x,y). VISIBLE MONSTERS names each one with its distance and bearing.
+If `stairs DOWN` isn't listed, no `>` is visible — don't pattern-match the
+grid; explore or `search`. To descend: (1) find `>`, (2) walk ON it,
+(3) call `descend`. If descend fails, recheck UNDER PLAYER."""
 
-DOORWAYS & WALL GAPS: a single non-wall tile inside a wall row is a
+_PROMPT_DOORWAYS_HEAD = """DOORWAYS & WALL GAPS: a single non-wall tile inside a wall row is a
 doorway you can walk through. Examples:
   `--.---` (horizontal wall with `.`) → walk through the `.`.
   `|.....|` with `-` in the middle → that `-` is broken wall; walk it.
-  `-----+-----` → `+` is a closed door; step adjacent + try `move` (or
-  `kick` if locked).
-  `-----|-----` (`|` inside a horizontal wall row) → OPEN DOOR; just walk.
-When stuck in a room, scan every wall row for a tile that doesn't match
-`-` or `|`. That's your exit. Use `move_to(x,y)` if you can see the gap.
+  `-----|-----` (`|` inside a horizontal wall row) → OPEN DOOR; just walk."""
 
-Pitfalls: `eat`/`quaff`/`read` need an `item` arg. At HP <30% retreat or
-`search` to rest. `engrave_elbereth` when cornered (Elbereth scares most
-monsters). Menus auto-dismiss; never call menu/inventory tools.
+_PROMPT_DOORWAYS_TAIL = """When stuck in a room, scan every wall row for a tile that doesn't match
+`-` or `|`. That's your exit. VISIBLE FEATURES already lists them for you as
+`door (open/gap)` and `door (closed)`."""
 
-=== STRATEGY: DESCEND ASAP ===
-**Default action every turn: `explore_and_descend`.** It auto-explores the
-whole level (opening doors, searching for hidden passages), walks to the down
-`>` and descends ONE floor, then hands control back to you. Just call it again
-to keep diving. If it returns WITHOUT descending (no `>` found yet), call it
-AGAIN — it resumes the complete search; do NOT hand-search tile-by-tile. It
-returns early if your HP drops or you're fainting — then heal/eat and call it
-again. This single tool does ~all the navigation.
-If HP critical: `engrave_elbereth` or `pray`. Hostile adjacent + healthy
-HP: `attack(direction=...)`. Hungry: `eat(item=...)`. Locked door: `kick`.
+_PROMPT_PITFALLS = """Pitfalls: `eat`/`quaff`/`read` need an `item` arg. Menus auto-dismiss; never
+call menu/inventory tools."""
 
-=== STAY ALIVE (death is what stops you, not the clock) ===
-Most runs end in DEATH, not time — usually one of:
-- **Starvation.** Don't let Hunger reach Weak/Fainting. `pickup` every food item
+_PROMPT_STAY_ALIVE_HEAD = """=== STAY ALIVE (death is what stops you, not the clock) ===
+Most runs end in DEATH, not time — usually one of:"""
+
+_PROMPT_STARVATION = """- **Starvation.** Don't let Hunger reach Weak/Fainting. `pickup` every food item
   and corpse you pass; `eat(item=...)` BEFORE you get Weak (fresh corpses of
-  non-poisonous monsters are food). Never keep exploring while Hungry.
-- **Melee swarm at low HP.** A fox/jackal/newt chips you to death. Don't melee at
-  low HP — `engrave_elbereth` (scares most monsters) then `search(times=20)` to
-  rest, or `pray` (once, when HP is critical), or flee toward stairs.
-- **Ranged / approaching threats.** Kill dangerous monsters from a distance with
+  non-poisonous monsters are food). Resting costs exactly as much clock as
+  walking, so never rest while Hungry or worse — eat instead."""
+
+_PROMPT_MELEE_SWARM = """- **Melee swarm at low HP.** A fox/jackal/newt chips you to death. Don't melee at
+  low HP — `engrave_elbereth` (scares most monsters), or `pray` (once, when HP
+  is critical), or flee toward stairs."""
+
+_PROMPT_RANGED = """- **Ranged / approaching threats.** Kill dangerous monsters from a distance with
   `throw(item=..., direction=...)` (daggers, darts, rocks, spears) instead of
-  letting them reach you. Hit it before it hits you.
+  letting them reach you. Hit it before it hits you."""
 
-=== SKILLS CHEAT SHEET ===
-- **PRIMARY — dive**: `explore_and_descend` — explore the level + descend a
-  floor, then returns to you. Call it every turn to go deeper.
-- Reach a specific visible tile: `move_to(x, y)`
-- Step: `move(direction=N|NE|E|...)`
-- Pickup: `pickup`; Descend: `descend` (must be on `>`)
-- Notes: `add_note` / `recall(query=...)` / `pin_objective`
-- Search/rest: `search(times=10)` for hidden doors, `search(times=20)` to heal
-- Wiki: `wiki_lookup(page="kobold")` / `wiki_search(query="cockatrice")`
-- Combat: `attack(direction=N|...)` melee; `throw(item=..., direction=...)` ranged
-  — never on `[PET — don't attack]`
-- Survive: `eat(item=...)` before Weak; `pray`/`engrave_elbereth` at low HP
+_PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL."""
 
-Your top-level goal is pre-pinned as `Objective:` in JOURNAL."""
+# (required tools, text). A block is emitted only when every tool it names is
+# in the published set, so the advertised surface can never exceed the real one.
+_PROMPT_BLOCKS: list[tuple[tuple[str, ...], str]] = [
+    ((), _PROMPT_HEAD),
+    ((), _PROMPT_DOORWAYS_HEAD),
+    (("kick",),
+     "  `-----+-----` → `+` is a closed door; walk into it to open it, or\n"
+     "  `kick` it if it says \"locked\"."),
+    ((), _PROMPT_DOORWAYS_TAIL),
+    (("move_to",), "Use `move_to(x,y)` to walk to any of them."),
+    (("explore_and_descend",),
+     "=== STRATEGY: DESCEND ASAP ===\n"
+     "**Your workhorse is `explore_and_descend`.** It auto-explores the level\n"
+     "(opening doors, searching for hidden passages), walks to the down `>` and\n"
+     "descends ONE floor, then hands control back to you. It returns early if\n"
+     "your HP drops or you get hungry — then heal/eat and call it again.\n"
+     "If it returns \"descended 0 floor(s)\" TWICE IN A ROW, stop calling it:\n"
+     "pick an unexplored frontier or a door from VISIBLE FEATURES and go there\n"
+     "yourself. Repeating a call that just failed is how rollouts starve."),
+    (("engrave_elbereth", "pray", "attack", "eat"),
+     "If HP critical: `engrave_elbereth` or `pray`. Hostile adjacent + healthy\n"
+     "HP: `attack(direction=...)`. Hungry: `eat(item=...)`."),
+    (("eat", "quaff", "read"), _PROMPT_PITFALLS),
+    ((), _PROMPT_STAY_ALIVE_HEAD),
+    (("pickup", "eat"), _PROMPT_STARVATION),
+    (("engrave_elbereth", "pray"), _PROMPT_MELEE_SWARM),
+    (("throw",), _PROMPT_RANGED),
+    ((), _PROMPT_TAIL),
+]
+
+# One line per skill for the cheat sheet, emitted in this order and filtered to
+# the published set. Adding a skill without a blurb is fine — it simply does not
+# appear; adding a blurb for a skill nobody publishes is a no-op.
+_SKILL_BLURBS: tuple[tuple[str, str], ...] = (
+    ("explore_and_descend",
+     "**PRIMARY — dive**: `explore_and_descend` — explore the level + descend a "
+     "floor, then returns to you."),
+    ("move_to", "Reach a specific visible tile: `move_to(x, y)`"),
+    ("move", "Step one tile: `move(direction=N|NE|E|...)`"),
+    ("north", "Step one tile: `north` / `northeast` / `east` / `southeast` / "
+              "`south` / `southwest` / `west` / `northwest`"),
+    ("autoexplore", "Explore one hop: `autoexplore`"),
+    ("find_and_descend", "Path to a visible `>` and descend: `find_and_descend`"),
+    ("descend", "Descend: `descend` (must be standing on `>`)"),
+    ("pickup", "Pickup: `pickup`"),
+    ("search", "Search for hidden doors: `search(times=10)`"),
+    ("kick", "Force a locked door: `kick(direction=...)`"),
+    ("attack", "Melee: `attack(direction=N|...)` — never on a `[PET`-tagged monster"),
+    ("throw", "Ranged: `throw(item=..., direction=...)`"),
+    ("eat", "Eat before Weak: `eat(item=...)`"),
+    ("quaff", "Drink: `quaff(item=...)`"),
+    ("read", "Read: `read(item=...)`"),
+    ("engrave_elbereth", "Scare monsters off: `engrave_elbereth`"),
+    ("pray", "Last resort (once per ~1000 turns): `pray`"),
+    ("add_note", "Notes: `add_note`"),
+    ("recall", "Recall a note: `recall(query=...)`"),
+    ("pin_objective", "Re-pin your goal: `pin_objective`"),
+    ("wiki_lookup", "Wiki: `wiki_lookup(page=\"kobold\")`"),
+    ("wiki_search", "Wiki search: `wiki_search(query=\"cockatrice\")`"),
+)
+
+
+def render_system_prompt(published_tools=None) -> str:
+    """Assemble the system prompt for a specific published tool set.
+
+    `published_tools=None` means "everything the registry knows", which is the
+    module-level :data:`SYSTEM_PROMPT` default. Callers that know their
+    `skill_set` (``load_environment``, the v1 taskset, the CLI workspace
+    builder) pass the resolved adapter names so the prompt cannot advertise a
+    tool the agent is unable to call.
+    """
+    if published_tools is None:
+        from nethack_harness.tools.skills import registry as _registry
+
+        available = set(_registry.all_schemas())
+    else:
+        available = set(published_tools)
+
+    parts = [text for required, text in _PROMPT_BLOCKS
+             if all(t in available for t in required)]
+    sheet = [f"- {blurb}" for name, blurb in _SKILL_BLURBS if name in available]
+    if sheet:
+        parts.insert(len(parts) - 1, "=== SKILLS CHEAT SHEET ===\n" + "\n".join(sheet))
+    return "\n\n".join(parts)
+
+
+SYSTEM_PROMPT = render_system_prompt()
 
 
 # ---------- observation formatting for chat ----------
@@ -98,6 +187,24 @@ Your top-level goal is pre-pinned as `Objective:` in JOURNAL."""
 #
 # Combined target: ~30-40% token reduction on map-heavy turns.
 # Toggle off by passing compact=False (e.g. for debugging / replay viewer).
+
+
+#: tty row 0 is NetHack's message line, not part of the dungeon. Dropping it
+#: makes displayed row index == map row index == the `y` every tool takes, which
+#: is what lets an agent locate itself by counting rows. BALROG strips the same
+#: row for the same reason (`balrog/environments/nle/base.py:184`:
+#: `ascii_map = "\n".join(ascii_map.split("\n")[1:])`).
+_TTY_MESSAGE_ROWS = 1
+
+
+def _map_rows_only(map_view: str) -> str:
+    """Drop the tty message row so row N of the rendered map is map row N."""
+    rows = map_view.split("\n")
+    # Only a full tty render (24 rows: message + 21 map + 2 status) carries the
+    # message row. Anything shorter is already map-only; leave it alone.
+    if len(rows) < 22:
+        return map_view
+    return "\n".join(rows[_TTY_MESSAGE_ROWS:])
 
 
 def _strip_blank_rows(map_view: str) -> str:
@@ -218,21 +325,18 @@ def _format_obs_balrog(structured, journal, state, journal_max_chars: int) -> st
     # without forcing the model to read ASCII.
     if state is not None and "raw_obs" in state:
         try:
-            from nethack_core.observations import (
-                extract_visible_features, extract_hostiles_in_sight,
+            from nethack_harness.prompt.features import (
+                monsters_in_sight, visible_feature_strings,
             )
-            features = extract_visible_features(state["raw_obs"].tty_chars)
+            features = visible_feature_strings(state["raw_obs"])
             if features:
                 lines.append("=== VISIBLE FEATURES ===")
                 for f in features:
                     lines.append(f"  - {f}")
                 lines.append("")
-            hostiles = extract_hostiles_in_sight(
-                state["raw_obs"].tty_chars,
-                getattr(state["raw_obs"], "glyphs", None),
-            )
+            hostiles = monsters_in_sight(state["raw_obs"])
             if hostiles:
-                lines.append("=== HOSTILES IN SIGHT ===")
+                lines.append("=== VISIBLE MONSTERS ===")
                 for h in hostiles:
                     lines.append(f"  - {h}")
                 lines.append("")
@@ -357,6 +461,44 @@ def _format_obs_summarize_reset(structured, journal, state, journal_max_chars: i
     )
 
 
+def _hero_depth(structured) -> int:
+    """Current dungeon level, or -1 when the status block has no depth."""
+    try:
+        return int((structured.status or {}).get("depth", -1))
+    except Exception:
+        return -1
+
+
+def _remember_stairs_down(state, structured, feats) -> None:
+    """Memoise every `>` we can see, KEYED BY DEPTH.
+
+    Once the player steps onto `>` the `@` overlay hides it, so without memory
+    the agent oscillates on and off the stairs. But (x,y) means a different tile
+    on every floor, and the memo is never cleared on descent — so an unkeyed set
+    asserts "you are standing on stairs DOWN" on Dlvl 2 at a coordinate that
+    held the stairs on Dlvl 1, and `descend` then fails.
+    """
+    from nethack_harness.prompt.features import stairs_down
+
+    depth = _hero_depth(structured)
+    for f in stairs_down(feats):
+        state["_seen_stairs_down"].add((depth, f.x, f.y))
+
+
+def _remembered_stairs_down(state, structured) -> set:
+    """Remembered `>` coordinates on the CURRENT floor, as {(x, y)}."""
+    depth = _hero_depth(structured)
+    out = set()
+    for entry in state.get("_seen_stairs_down") or ():
+        if len(entry) == 3:
+            d, x, y = entry
+            if d == depth:
+                out.add((x, y))
+        elif len(entry) == 2:   # legacy unkeyed entry; treat as current floor
+            out.add(tuple(entry))
+    return out
+
+
 def _descent_status_block(structured, state) -> list[str]:
     """Wave-2 descent-salience block. Diagnosis (see experiment_log.md Wave-2):
     in EVERY failing rollout the down-stairs `>` never appeared in VISIBLE
@@ -383,27 +525,24 @@ def _descent_status_block(structured, state) -> list[str]:
     out: list[str] = []
     stairs_xy = None
     try:
-        from nethack_core.observations import extract_visible_features
-        feats = extract_visible_features(state["raw_obs"].tty_chars)
-        for f in feats:
-            if f.startswith("stairs DOWN at "):
-                m = re.search(r"\((\d+),(\d+)\)", f)
-                if m:
-                    stairs_xy = (int(m.group(1)), int(m.group(2)))
-                break
+        from nethack_harness.prompt.features import stairs_down, visible_features
+        found = stairs_down(visible_features(state["raw_obs"]))
+        if found:
+            stairs_xy = (found[0].x, found[0].y)
     except Exception:
         pass
     # Memoized stairs (player may be standing on them, hiding the glyph).
-    if stairs_xy is None and state.get("_seen_stairs_down"):
+    remembered = _remembered_stairs_down(state, structured)
+    if stairs_xy is None and remembered:
         try:
             px = int(structured.status.get("x", -1))
             py = int(structured.status.get("y", -1))
-            if (px, py) in state["_seen_stairs_down"]:
+            if (px, py) in remembered:
                 stairs_xy = (px, py)
         except Exception:
             pass
         if stairs_xy is None:
-            stairs_xy = next(iter(state["_seen_stairs_down"]))
+            stairs_xy = next(iter(remembered))
     out.append("=== DESCENT STATUS ===")
     if stairs_xy is not None:
         out.append(
@@ -611,13 +750,14 @@ def _e1_spatial_belief_block(state, structured) -> list[str]:
                 out.append("Unexplored bearings: none (level fully revealed)")
     except Exception:
         pass
-    seen = state.get("_seen_stairs_down") or set()
+    # Only THIS floor's remembered stairs: (x,y) is a different tile per level.
+    seen = _remembered_stairs_down(state, structured)
     if seen:
         # Cap at 3 coords to keep the line short.
-        coords = ", ".join(f"({x},{y})" for (x, y) in list(seen)[:3])
+        coords = ", ".join(f"({x},{y})" for (x, y) in sorted(seen)[:3])
         out.append(f"Known stairs DOWN: {coords}")
     else:
-        out.append("Known stairs DOWN: none yet")
+        out.append("Known stairs DOWN: none on this floor yet")
     out.append("")
     return out
 
@@ -761,10 +901,11 @@ def format_observation_as_chat(
         lines.extend(_e1_spatial_belief_block(state, structured))
     if include_map:
         lines.append("=== MAP ===")
-        map_view = structured.map_view
+        map_view = _map_rows_only(structured.map_view)
         # Wave-3 Track C v2 (variant E2): paint '?' over truly-unseen tiles
         # adjacent to each frontier, directly on the map. Done BEFORE compaction
-        # so glyph-RLE still applies to floor/corridor runs.
+        # so glyph-RLE still applies to floor/corridor runs — and AFTER the
+        # message row is dropped, because frontier coordinates are map-frame.
         if state is not None and state.get("_e2_obs"):
             try:
                 from nethack_harness.navigation.pathfinding import find_frontiers
@@ -850,7 +991,7 @@ def format_observation_as_chat(
             try:
                 px = int(structured.status.get("x", -1))
                 py = int(structured.status.get("y", -1))
-                if (px, py) in state["_seen_stairs_down"]:
+                if (px, py) in _remembered_stairs_down(state, structured):
                     hint = (
                         f"You are standing on stairs DOWN at ({px},{py}) — call "
                         f"`descend` now. The `>` glyph is hidden under your `@`."
@@ -862,11 +1003,16 @@ def format_observation_as_chat(
             hp = structured.status.get("hitpoints", 0)
             hp_max = structured.status.get("max_hitpoints", 1) or 1
             if hp / hp_max < 0.3 and hp > 0:
+                # NB: no "`search(times=20)` to rest" here. Resting costs the
+                # same in-game clock as walking, and the artifact ends with two
+                # back-to-back `Searched x20.` at HP 13/32 while Hungry — the
+                # prompt's own starvation warning and its rest advice were in
+                # direct conflict.
                 hint = (
                     f"HP critical ({hp}/{hp_max}). Options in order: `engrave_elbereth` "
-                    f"(scares most monsters) → `search(times=20)` in a safe corner to rest "
-                    f"and regenerate HP → `pray` if not on cooldown. Avoid melee until "
-                    f"HP is back above 70%."
+                    f"(scares most monsters) → retreat toward known-safe ground → "
+                    f"`pray` if not on cooldown. Avoid melee until HP is back "
+                    f"above 70%. Do NOT rest with `search` while Hungry or worse."
                 )
             else:
                 h = structured.status.get("hunger_state")
@@ -885,7 +1031,10 @@ def format_observation_as_chat(
         else:
             for d, tile in adj.items():
                 if "stairs DOWN" in tile:
-                    hint = f"Stairs down ({d}). Call `move(direction=\"{d}\")` to step onto them, then `descend`."
+                    hint = (
+                        f"Stairs down are one step {d}. Step onto them, then "
+                        f"call `descend`."
+                    )
                     break
             if hint is None:
                 # Adjacent letter glyph == hostile (the obs renderer labels
@@ -908,28 +1057,23 @@ def format_observation_as_chat(
                     if hp / hp_max >= 0.5:
                         hint = f"Hostile adjacent ({mon_dir}). Call `attack(direction=\"{mon_dir}\")` — your HP is healthy."
                     else:
-                        hint = f"Hostile adjacent ({mon_dir}) and HP is low ({hp}/{hp_max}). Consider `engrave_elbereth` or retreat with `move`."
+                        hint = f"Hostile adjacent ({mon_dir}) and HP is low ({hp}/{hp_max}). Consider `engrave_elbereth` or retreat to safer ground."
                 # Stairs visible (but not adjacent): proactively suggest move_to.
                 # Trace 9071d001 had stairs visible for many turns without the
                 # agent navigating to them — it kept autoexploring.
                 if hint is None and state is not None and "raw_obs" in state:
                     try:
-                        from nethack_core.observations import extract_visible_features
-                        feats = extract_visible_features(state["raw_obs"].tty_chars)
-                        for f in feats:
-                            if f.startswith("stairs DOWN at "):
-                                # f looks like "stairs DOWN at (38,11)" — pull
-                                # the first coord pair.
-                                import re as _re
-                                m = _re.search(r"\((\d+),(\d+)\)", f)
-                                if m:
-                                    tx, ty = m.group(1), m.group(2)
-                                    hint = (
-                                        f"Stairs DOWN visible at ({tx},{ty}). "
-                                        f"Call `move_to(x={tx}, y={ty})` to walk "
-                                        "to them, then `descend`."
-                                    )
-                                break
+                        from nethack_harness.prompt.features import (
+                            stairs_down, visible_features,
+                        )
+                        found = stairs_down(visible_features(state["raw_obs"]))
+                        if found:
+                            f0 = found[0]
+                            hint = (
+                                f"Stairs DOWN visible at ({f0.x},{f0.y}). "
+                                f"Call `move_to(x={f0.x}, y={f0.y})` to walk "
+                                "to them, then `descend`."
+                            )
                     except Exception:
                         pass
         # Don't let secondary overrides clobber the standing-on-stairs hint.
@@ -943,8 +1087,8 @@ def format_observation_as_chat(
                 if "is in the way" in msg:
                     hint = (
                         "A pet/peaceful is blocking your move. Walk a perpendicular "
-                        "direction first to let it pass, or call `move(direction=\".\")` "
-                        "to wait one turn."
+                        "direction first to let it pass, or `search(times=1)` to "
+                        "wait one turn while it moves."
                     )
                     break
         # Locked-door detection: NLE prints "This door is locked." when the
@@ -970,42 +1114,58 @@ def format_observation_as_chat(
                             "`kick(direction=...)` (2-5 tries) to break it open."
                         )
                     break
-        # No-exit + visible-locked-door detection: when no stairs DOWN visible
-        # and the agent is stuck in a small starting room with only a `+` exit,
-        # surface the door coords and route to kick. This is the failure mode
-        # the no-compact trace exposed: the agent autoexplores forever inside
-        # the room because the BFS frontier resolves to `<` (stairs up).
+        # No stairs DOWN visible: route toward the nearest EXIT of the room.
+        #
+        # This block used to open with "only exit is a door at (x,y)" — a claim
+        # that was routinely false (artifact turn 13 asserted a single exit on a
+        # turn whose own feature list carried five) because the ranking used
+        # `re.search` over each feature *string*, and a string packs up to three
+        # coordinate pairs, so every door but the first was invisible to it. It
+        # also called open doorways "locked" candidates and invited the agent to
+        # kick tiles it could have walked through. Now it ranks over the
+        # structured feature list, states how many exits there are, and only
+        # mentions kicking for a genuinely closed door.
         if hint is None and not _on_stairs_override and state is not None and "raw_obs" in state:
             try:
-                from nethack_core.observations import extract_visible_features
-                feats = extract_visible_features(state["raw_obs"].tty_chars)
-                has_down = any(f.startswith("stairs DOWN") for f in feats)
-                doors = [f for f in feats if f.startswith("door ")]
-                if not has_down and doors and structured.status:
-                    # Only fire if no other route is obvious. Pick the closest
-                    # door by Chebyshev distance from the player.
-                    px = structured.status.get("x", 0)
-                    py = structured.status.get("y", 0)
-                    import re as _re
-                    best = None
-                    best_d = 1 << 30
-                    for f in doors:
-                        m = _re.search(r"\((\d+),(\d+)\)", f)
-                        if not m:
-                            continue
-                        dx, dy = int(m.group(1)), int(m.group(2))
-                        cheb = max(abs(dx - px), abs(dy - py))
-                        if cheb < best_d:
-                            best_d = cheb
-                            best = (dx, dy)
+                from nethack_harness.prompt.features import (
+                    DOOR_CLOSED, exits, nearest_exit, stairs_down, visible_features,
+                )
+                feats = visible_features(state["raw_obs"])
+                if not stairs_down(feats) and structured.status:
+                    all_exits = exits(feats)
+                    px = int(structured.status.get("x", 0))
+                    py = int(structured.status.get("y", 0))
+                    best = nearest_exit(feats, px, py)
                     if best is not None:
+                        n = len(all_exits)
+                        kind = ("a closed door" if best.label == DOOR_CLOSED
+                                else "an open doorway")
+                        extra = (" If it says \"locked\", `kick` toward it."
+                                 if best.label == DOOR_CLOSED else "")
+                        others = f" ({n} exits visible.)" if n > 1 else ""
                         hint = (
-                            f"No `>` visible; only exit is a door at {best}. "
-                            f"`move_to(x={best[0]}, y={best[1]})` to reach it; "
-                            f"if it says \"locked\", `kick` toward it."
+                            f"No `>` visible. Nearest way out is {kind} at "
+                            f"({best.x},{best.y}) — `move_to(x={best.x}, "
+                            f"y={best.y})`.{extra}{others}"
                         )
             except Exception:
                 pass
+        # A hint the agent has already followed twice without the game state
+        # changing is not advice, it is noise: artifact turns 13-20 carried one
+        # byte-identical hint eight turns running while the agent stayed stuck.
+        # Escalate instead of repeating.
+        if hint and state is not None:
+            prev = state.get("_last_hint")
+            repeats = int(state.get("_hint_repeats", 0)) + 1 if hint == prev else 1
+            state["_last_hint"] = hint
+            state["_hint_repeats"] = repeats
+            if repeats >= 3:
+                hint = (
+                    f"{hint} [This same suggestion has now been made {repeats} "
+                    "turns running and the situation has not changed — it is not "
+                    "working. Try a different frontier, a different exit, or "
+                    "`search` for a hidden passage.]"
+                )
         if hint:
             lines.append(f"=== HINT === {hint}")
             lines.append("")
@@ -1014,27 +1174,27 @@ def format_observation_as_chat(
     # the agent NEVER calling `descend` because the pre-parsed feature block
     # was gated to compact mode only. Non-compact agents have to scan the
     # ASCII grid themselves and routinely confuse `<` for `>` on dense maps.
-    from nethack_core.observations import extract_hostiles_in_sight, extract_visible_features
+    from nethack_harness.prompt.features import (
+        format_features, monsters_in_sight, stairs_down, visible_features,
+    )
     if state is not None and "raw_obs" in state:
         try:
-            features = extract_visible_features(state["raw_obs"].tty_chars)
+            feats = visible_features(state["raw_obs"])
             # Memoize stairs DOWN coords across turns so a subsequent step
             # ONTO the stairs (which hides `>` under `@`) still recognizes
-            # the descend opportunity.
+            # the descend opportunity. These are map-frame coords and are
+            # compared against map-frame `blstats` above — before the frame
+            # fix the memo was tty-frame, so the "you are standing on stairs"
+            # hint fired one tile NORTH of the stairs and `descend` then failed.
             if "_seen_stairs_down" in state:
-                import re as _rex
-                for f in features:
-                    if f.startswith("stairs DOWN at "):
-                        for mc in _rex.finditer(r"\((\d+),(\d+)\)", f):
-                            state["_seen_stairs_down"].add(
-                                (int(mc.group(1)), int(mc.group(2)))
-                            )
+                _remember_stairs_down(state, structured, feats)
+            features = format_features(feats)
             if features:
                 lines.append(f"=== VISIBLE FEATURES === {'; '.join(features)}")
                 lines.append("")
-            hostiles = extract_hostiles_in_sight(state["raw_obs"].tty_chars, getattr(state["raw_obs"], "glyphs", None))
+            hostiles = monsters_in_sight(state["raw_obs"])
             if hostiles:
-                lines.append(f"=== VISIBLE GLYPHS === {', '.join(hostiles)}")
+                lines.append(f"=== VISIBLE MONSTERS === {'; '.join(hostiles)}")
                 lines.append("")
         except Exception:
             pass

@@ -627,10 +627,15 @@ def menu_option(env: NetHackCoreEnv, obs: StructuredObservation, index: int) -> 
 #   "Hello Agent, welcome to NetHack!  You are a neutral male human Monk."
 #   "Hello Agent, the Stripling, welcome to NetHack!  You are a lawful female human Valkyrie."
 # The role-title prefix (Stripling, Candidate, ...) varies by role + XP rank.
+# NetHack omits the gender word for roles whose gender is fixed, so a Valkyrie
+# is welcomed as "You are a neutral human Valkyrie." — no `female`. Demanding
+# male|female|neuter here is why every pinned `Val-hum-neu-fem` rollout rendered
+# `Character: unknown (unknown, unknown)` for all 20 turns of the committed
+# artifact, and why the agent never learned it was playing a strong melee role.
 _WELCOME_RE = re.compile(
     r"You are (?:a |an )?"
     r"(?P<alignment>lawful|neutral|chaotic)\s+"
-    r"(?P<gender>male|female|neuter)\s+"
+    r"(?:(?P<gender>male|female|neuter)\s+)?"
     r"(?P<race>\w+)\s+"
     r"(?P<role>\w+)"
 )
@@ -657,8 +662,11 @@ def parse_character_from_welcome(message: str) -> dict[str, str]:
     out = m.groupdict()
     # Role from the welcome message is the role *singular* (e.g. "Monk", not
     # the title "Stripling"). Normalize to lowercase for consistency with the
-    # rest of the obs schema.
-    return {k: v.lower() for k, v in out.items()}
+    # rest of the obs schema. Gender is optional (see _WELCOME_RE).
+    return {
+        k: (v.lower() if v else _UNKNOWN_CHARACTER.get(k, "unknown"))
+        for k, v in out.items()
+    }
 
 
 # Rank titles (xp level 1 only) per role, used as a fallback when NLE's
@@ -778,10 +786,49 @@ def _cheb(ax: int, ay: int, bx: int, by: int) -> int:
     return max(abs(ax - bx), abs(ay - by))
 
 
+# Glyphs we have SEEN and know to be solid. A target on one of these is not
+# "not reachable yet" — it is not reachable, ever, and probing toward it just
+# bumps the wall. ' ' is deliberately absent: an unexplored tile is a legitimate
+# thing to walk toward.
+_SOLID_TARGET_CHARS = frozenset(ord(c) for c in ("|", "-"))
+#: Best-effort probes allowed at one hopeless target before we refuse.
+_MOVE_TO_MAX_ATTEMPTS = 2
+
+
+def _bump_move_to_attempts(env, target, start) -> tuple[int, tuple]:
+    """Count consecutive best-effort calls to `target`; return (count, prev pos).
+
+    Kept on the env (one game, one counter) rather than in a global, so
+    concurrent rollouts do not share it.
+    """
+    prev = getattr(env, "_move_to_attempt", None)
+    if prev is not None and prev[0] == target:
+        count, last_pos = prev[1] + 1, prev[2]
+    else:
+        count, last_pos = 1, None
+    try:
+        setattr(env, "_move_to_attempt", (target, count, start))
+    except Exception:
+        pass
+    return count, last_pos
+
+
+def _forget_move_to_attempts(env) -> None:
+    try:
+        setattr(env, "_move_to_attempt", None)
+    except Exception:
+        pass
+
+
 def _move_to_best_effort(env, chars, start, tx, ty) -> "SkillResult":
     """Best-effort single step toward (tx, ty) when no FULL path exists.
 
     Strategy (all one-step-at-a-time; never auto-explores or descends):
+      0. Refuse outright when the target is out of bounds, is a tile we have
+         seen to be solid, or has already absorbed `_MOVE_TO_MAX_ATTEMPTS`
+         no-progress probes. Best-effort probing is worth doing once — it
+         reveals map — but repeating it is the `It's a wall.` loop the smoke2
+         prime_agent rollout spent three consecutive turns in.
       1. Compute the A*-reachable set over explored/walkable tiles. Pick the
          reachable tile that MINIMIZES Chebyshev distance to the target; if
          it differs from the player's tile, path ONE step toward it. This
@@ -799,10 +846,34 @@ def _move_to_best_effort(env, chars, start, tx, ty) -> "SkillResult":
 
     # Out-of-bounds target: nothing geometric to chase toward; explain.
     if not (0 <= tx < w and 0 <= ty < h):
+        _forget_move_to_attempts(env)
         return SkillResult(
             [],
             f"No route to ({tx},{ty}): target is out of bounds "
             f"(map is 0..{w-1} x 0..{h-1}).",
+            interrupted=True,
+        )
+
+    if int(chars[ty, tx]) in _SOLID_TARGET_CHARS:
+        _forget_move_to_attempts(env)
+        return SkillResult(
+            [],
+            f"({tx},{ty}) is a wall (`{chr(int(chars[ty, tx]))}`) — not a tile "
+            f"you can stand on, so there is no route to it and never will be. "
+            f"Target a floor `.`, corridor `#`, doorway or `>`/`<`; VISIBLE "
+            f"FEATURES lists the ones in sight.",
+            interrupted=True,
+        )
+
+    attempts, last_pos = _bump_move_to_attempts(env, (tx, ty), start)
+    if attempts > _MOVE_TO_MAX_ATTEMPTS and last_pos == start:
+        _forget_move_to_attempts(env)
+        return SkillResult(
+            [],
+            f"Giving up on ({tx},{ty}): {attempts} attempts from "
+            f"({start[0]},{start[1]}) with no progress, so it is not reachable "
+            f"from here. Pick a different target — an unexplored frontier or a "
+            f"door from VISIBLE FEATURES — or `search` for a hidden passage.",
             interrupted=True,
         )
 
@@ -872,7 +943,7 @@ def _move_to_best_effort(env, chars, start, tx, ty) -> "SkillResult":
         (
             f"No route to ({tx},{ty}) yet — nearest reachable is ({rx},{ry}); "
             f"the way is likely behind unexplored/blocked terrain — `search` "
-            f"near walls or `move` to explore."
+            f"near walls to reveal a hidden passage."
         ),
         interrupted=True,
     )
@@ -930,6 +1001,8 @@ def move_to(env: NetHackCoreEnv, obs: StructuredObservation, x: int, y: int) -> 
         # opening a real path on a subsequent call. Still ONE step per call;
         # we never auto-explore, auto-search, or auto-descend here.
         return _move_to_best_effort(env, chars, start, tx, ty)
+    # A real path exists: this target is no longer a churn candidate.
+    _forget_move_to_attempts(env)
     if not path:
         return SkillResult([], f"Already at ({tx},{ty}).", interrupted=False)
     return SkillResult(
@@ -1139,21 +1212,14 @@ def autoexplore(env: NetHackCoreEnv, obs: StructuredObservation, max_steps: int 
             # haven't been through, prefer pathing to it over the tiny
             # frontier. Picks the closest such door by A* path length.
             from nethack_harness.navigation.pathfinding import a_star as _astar2
-            from nethack_core.observations import extract_visible_features
-            try:
-                keys = env.observation_keys
-                last_obs_buf = env.last_observation
-                tty = last_obs_buf[keys.index("tty_chars")] if "tty_chars" in keys else None
-            except Exception:
-                tty = None
-            if tty is not None:
-                feats = extract_visible_features(tty)
-                doors = []
-                import re as _r
-                for f in feats:
-                    if f.startswith("door (open/gap)") or f.startswith("door (closed)"):
-                        for mm in _r.finditer(r"\((\d+),(\d+)\)", f):
-                            doors.append((int(mm.group(1)), int(mm.group(2))))
+            from nethack_harness.prompt.features import (
+                exits as _exits, visible_features_from_chars as _feats_from_chars,
+            )
+            if chars is not None:
+                # Map-frame doors — the frame `a_star(chars, ...)` below works
+                # in. Reading them off `tty_chars` (as this used to) pathed to
+                # the tile one row BELOW every door.
+                doors = [(f.x, f.y) for f in _exits(_feats_from_chars(chars))]
                 best_door = None
                 best_door_path = None
                 for dxy in doors:
@@ -1224,22 +1290,15 @@ def find_and_descend(env: NetHackCoreEnv, obs: StructuredObservation, max_action
                 actions=actions,
                 feedback=f"`>` visible at {stair}; pathing {len(p)} steps and descending.",
             )
-    # 2) Pick a reachable door (open/gap or closed) and path there.
-    from nethack_core.observations import extract_visible_features
-    try:
-        keys = env.observation_keys
-        tty = env.last_observation[keys.index("tty_chars")] if "tty_chars" in keys else None
-    except Exception:
-        tty = None
+    # 2) Pick a reachable door (open/gap or closed) and path there. Door coords
+    # come from the same `chars` grid a_star pathfinds over — reading them off
+    # `tty_chars` (as this used to) targeted the tile one row below each door.
+    from nethack_harness.prompt.features import (
+        exits as _exits, visible_features_from_chars as _feats_from_chars,
+    )
     door_xy = None; door_path = None
-    if tty is not None:
-        import re as _r
-        feats = extract_visible_features(tty)
-        candidates = []
-        for f in feats:
-            if f.startswith("door (open/gap)") or f.startswith("door (closed)"):
-                for mm in _r.finditer(r"\((\d+),(\d+)\)", f):
-                    candidates.append((int(mm.group(1)), int(mm.group(2))))
+    if chars is not None:
+        candidates = [(f.x, f.y) for f in _exits(_feats_from_chars(chars))]
         best_len = 1 << 30
         for dxy in candidates:
             if dxy == start: continue
@@ -1306,9 +1365,39 @@ def find_and_descend(env: NetHackCoreEnv, obs: StructuredObservation, max_action
     # No useful action; just search in place.
     return SkillResult(
         actions=[s_idx] * 25,
-        feedback="No frontier/door/dead-end found; searching here 25× (consider `move` to a new corridor).",
+        feedback="No frontier/door/dead-end found; searching here 25× (then try a different corridor).",
     )
 
+
+# ---------------------------------------------------------------------------
+# explore_and_descend budgets
+# ---------------------------------------------------------------------------
+# The step budget used to be 400 IN-GAME turns per call, and the system prompt
+# named this skill as the default action every turn. The committed artifact
+# shows what that buys: three calls returning `descended 0 floor(s) over 400
+# game steps`, the clock at 1611 and Hunger already `Hungry` on Dlvl 3, then
+# `getting weak from hunger` and no food left. In NetHack the clock is the
+# hunger meter, so an unbounded skill spends the resource that kills you.
+#
+# 120 is chosen deliberately:
+#   * NetPlay caps EVERY skill at `max_skill_gamesteps = 100` in-game turns and
+#     additionally interrupts on level change / teleport / newly-seen glyph /
+#     low health (`agent.py:112-135`). Ours only interrupts on HP and hunger, so
+#     it must not be looser by much.
+#   * Runs that descended in our own traces did so in <65 in-game turns, so 120
+#     still lets a normal "explore this level and take the stairs" complete in a
+#     single call — tightening to NetPlay's 100 would start truncating them.
+#   * With a 150-call rollout budget, 120 game steps per call still allows
+#     ~18,000 in-game turns, far more than any rollout survives; the bound is
+#     about giving the agent a decision point, not about capping the episode.
+#
+# The wall-clock bound is separate insurance. Measured in-process, 400 steps of
+# this loop costs ~1.5 s, so 60 s is ~40x headroom: it can only fire if
+# something pathological happens (a pathfinding blowup on a huge revealed
+# level), never during normal play. It exists so that one skill call can never
+# eat a rollout's wall-clock, which is unbounded today.
+_EAD_DEFAULT_GAME_STEPS = 120
+_EAD_DEFAULT_SECONDS = 60.0
 
 _EAD_CMAP_LUT = None
 _EAD_CLOSED_CMAPS = None
@@ -1379,18 +1468,24 @@ def _glyph_clean_chars(glyphs):
     "parameters": {
         "max_floors": {"type": "integer", "default": 1,
                        "description": "descend at most this many floors before returning"},
-        "max_game_steps": {"type": "integer", "default": 400,
-                           "description": "hard step budget for this call"},
+        "max_game_steps": {"type": "integer", "default": _EAD_DEFAULT_GAME_STEPS,
+                           "description": "hard in-game step budget for this call"},
+        "max_seconds": {"type": "number", "default": _EAD_DEFAULT_SECONDS,
+                        "description": "hard wall-clock budget for this call"},
     },
 })
 def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
-                        max_floors: int = 1, max_game_steps: int = 400) -> SkillResult:
+                        max_floors: int = 1,
+                        max_game_steps: int = _EAD_DEFAULT_GAME_STEPS,
+                        max_seconds: float = _EAD_DEFAULT_SECONDS) -> SkillResult:
     """Explore the current level -> find `>` -> descend ONE floor, then RETURN
     control to the agent (the LLM decides what to do next: eat, fight, pray,
     descend again). Also returns early on danger (HP drop) or when out of hunger,
     so the agent gets a decision break instead of an autopilot run to death.
     Internally it re-observes every step (NetPlay's explore_level loop) and
     searches dead-ends / room perimeters for hidden passages."""
+    import time as _time
+
     import numpy as np
     from nethack_core import actions as _nh
     # Glyph predicates (glyph_is_monster/pet) -- pure-Python, nle-free.
@@ -1430,8 +1525,16 @@ def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
         bl = env.last_observation[_ks.index("blstats")]
         return (int(bl[23]), int(bl[24]))  # (DNUM, DLEVEL) — unique per floor
 
-    state = {"r": 0.0, "term": False, "trunc": False, "steps": 0, "obs": None}
+    state = {"r": 0.0, "term": False, "trunc": False, "steps": 0, "obs": None,
+             "timed_out": False}
     _ttci = env.observation_keys.index("tty_chars")
+    _deadline = (_time.monotonic() + float(max_seconds)) if max_seconds and max_seconds > 0 else None
+
+    def _out_of_time() -> bool:
+        if _deadline is not None and _time.monotonic() >= _deadline:
+            state["timed_out"] = True
+            return True
+        return False
 
     def _more_up() -> bool:
         try:
@@ -1453,7 +1556,9 @@ def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
             state["obs"] = o; state["r"] += float(r2); state["steps"] += 1
             state["term"] = state["term"] or bool(t2); state["trunc"] = state["trunc"] or bool(tr2)
             guard += 1
-        return bool(state["term"] or state["trunc"]) or state["steps"] >= max_game_steps
+        return (bool(state["term"] or state["trunc"])
+                or state["steps"] >= max_game_steps
+                or _out_of_time())
 
     def walk(path) -> bool:
         """Take ONE step along the path, then return so the caller re-observes and
@@ -1629,7 +1734,8 @@ def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
                 bestd = nd; best = (dx, dy)
         return best  # None if no tile increases distance (cornered)
 
-    while state["steps"] < max_game_steps and floors < max_floors and not state["term"] and not state["trunc"]:
+    while (state["steps"] < max_game_steps and floors < max_floors
+           and not state["term"] and not state["trunc"] and not _out_of_time()):
         chars, start = obs_map()
         # Hand control back to the agent on danger so the LLM can react (heal,
         # flee, eat, pray) instead of this skill autopiloting into death.
@@ -1765,17 +1871,26 @@ def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
         search_count[(floor_id(), tx, ty)] = search_count.get((floor_id(), tx, ty), 0) + 5
 
     if state["steps"] == 0:
+        if state["timed_out"]:
+            return SkillResult(
+                actions=[],
+                feedback=(f"explore_and_descend: hit its {max_seconds:g}s wall-clock "
+                          "time budget before taking a step."),
+            )
         return SkillResult(actions=[], feedback="Nothing to explore from here; already descended or blocked.")
     fb = (f"explore_and_descend: descended {floors} floor(s) over {state['steps']} game steps"
           + (f" — {halt}" if halt else "")
           + (" — stopped (died/level-end)" if state["term"] or state["trunc"] else ""))
-    if floors or halt or state["term"] or state["trunc"]:
+    if state["timed_out"]:
+        fb += (f"; hit its {max_seconds:g}s wall-clock time budget mid-search. "
+               "Call it again to resume, or do something else.")
+    elif floors or halt or state["term"] or state["trunc"]:
         fb += "."
     elif exhausted:
         # Genuinely searched every reachable tile and found no `>` — the staircase is
         # behind a still-hidden passage or needs going `<` up and around.
         fb += ("; searched every reachable tile, no down-staircase found yet. Try `search` "
-               "a few more times at a suspicious dead-end, or `move`/`kick` to open new ground, "
+               "a few more times at a suspicious dead-end, or `kick` a closed door to open new ground, "
                "then call `explore_and_descend` again.")
     else:
         # Hit the per-call step budget mid-explore/search — there is MORE to do and the
@@ -1784,8 +1899,10 @@ def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
         # the complete prioritized search from where it left off and descends when it finds `>`.
         fb += ("; used my step budget mid-search and did not reach a down-staircase yet. "
                "Call `explore_and_descend` AGAIN to continue — it resumes the complete "
-               "search for the hidden downstairs from where it stopped. Do NOT hand-search "
-               "tile-by-tile; that is what this skill does for you.")
+               "search for the hidden downstairs from where it stopped. But if this is "
+               "the SECOND call in a row that descended 0 floors, do something else "
+               "instead: pick a door or frontier from VISIBLE FEATURES and go there "
+               "yourself, and eat if you are Hungry — every step here costs clock.")
     return SkillResult(actions=[], feedback=fb, pre_executed=True, pre_reward=state["r"],
                        final_obs=state["obs"], pre_terminated=state["term"],
                        pre_truncated=state["trunc"])

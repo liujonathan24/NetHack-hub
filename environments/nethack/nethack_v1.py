@@ -558,7 +558,15 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
             "Drive the game only through the `nethack` MCP tools."
         )
         with tempfile.TemporaryDirectory() as tmp:
-            root = build_workspace(Path(tmp) / "workspace", objective=objective)
+            root = build_workspace(
+                Path(tmp) / "workspace",
+                objective=objective,
+                # The taskset already resolved the prompt against the published
+                # skill set; reusing it keeps AGENTS.md from advertising tools
+                # the MCP server does not serve (`tools/cli_harness_eval/
+                # workspace.py`, `tests/test_prompt_tool_surface.py`).
+                system_prompt=self.data.system_prompt or None,
+            )
             for path in sorted(root.rglob("*")):
                 if path.is_file():
                     await runtime.write(

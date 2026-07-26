@@ -18,7 +18,13 @@ def test_default_is_standard_full_game():
     env = NH.load_environment(n_examples=2)
     row = env.dataset[0]
     assert row["info"]["tier"] == "full_nle"
-    assert "Ascend" in row["prompt"][1]["content"]
+    # The success criterion is the stable marker of the ascension game. The
+    # user-visible *description* deliberately no longer says "Ascend": in
+    # NetHack jargon that means "win", but next to a glyph key reading
+    # "`<` stairs UP (NOT down)" a language model reads it as "go up".
+    content = row["prompt"][1]["content"]
+    assert "Success: ascended" in content
+    assert "Descend" in content and "Amulet of Yendor" in content
 
 
 def test_setup_overrides_are_stored_and_default_off():

@@ -38,10 +38,19 @@ def _force_rmtree(path: Path) -> None:
     shutil.rmtree(path)
 
 
-def build_workspace(dest: Path, *, objective: str) -> Path:
+def build_workspace(dest: Path, *, objective: str, system_prompt: str | None = None) -> Path:
+    """Write the workspace. `system_prompt` should be the taskset's RESOLVED
+    prompt (gated on the published tool set) — the CLI arms read AGENTS.md, not
+    a chat system message, so an ungated primer here would re-advertise tools
+    the MCP server does not publish. Falls back to the ungated module default
+    only for callers that have no toolset to gate against (tests, tooling).
+    """
     import sys
     sys.path.insert(0, str(_ENV))
-    from nethack_harness.prompt.rendering import SYSTEM_PROMPT
+    if system_prompt is None:
+        from nethack_harness.prompt.rendering import SYSTEM_PROMPT
+    else:
+        SYSTEM_PROMPT = system_prompt
 
     dest = Path(dest)
     if dest.exists():

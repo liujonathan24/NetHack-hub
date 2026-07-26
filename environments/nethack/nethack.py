@@ -74,7 +74,14 @@ FULL_GAME_SPEC = GameSpec(
     nle_task="NetHackScore-v0",
     des_file=None,
     max_episode_steps=100_000,
-    description="The full game. Ascend.",
+    # Rendered every turn as `Objective:` in the JOURNAL block. It used to read
+    # "The full game. Ascend." — NetHack jargon for "win", but to a language
+    # model sitting next to a glyph key that says "`<` stairs UP (NOT down)" it
+    # reads as an instruction to go UP, which is the opposite of the task.
+    description=(
+        "Descend as deep into the dungeon as you can and survive; ultimately "
+        "win the game (retrieve the Amulet of Yendor and escape)."
+    ),
     success_criterion="ascended",
 )
 
@@ -165,6 +172,7 @@ _patch_verifiers_message_from_response()
 # ---------- extracted modules (re-exported for back-compat) ----------
 from nethack_harness.prompt.rendering import (
     SYSTEM_PROMPT,
+    render_system_prompt as _render_system_prompt,
     _strip_blank_rows,
     _glyph_run_encode,
     _inventory_fingerprint,
@@ -587,10 +595,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_visited_tiles"].setdefault(int(_bl[12]), set()).add((_hx, _hy))
         except (KeyError, IndexError, TypeError, AttributeError):
             pass
-        # Track every (x, y) at which `>` was seen on the visible map. Needed
-        # because once the player steps ONTO `>`, the @ overlay hides it and
-        # extract_visible_features stops finding the tile — without memory,
-        # the agent oscillates on/off the stairs without realizing to descend.
+        # Track every (depth, x, y) at which `>` was seen on the visible map.
+        # Needed because once the player steps ONTO `>`, the @ overlay hides it
+        # and the feature extractor stops finding the tile — without memory, the
+        # agent oscillates on/off the stairs without realizing to descend. Keyed
+        # by depth: this set is never cleared, and (x,y) means a different tile
+        # on every floor (see rendering._remember_stairs_down).
         state["_seen_stairs_down"] = set()
         # Wave-2 Track B: visited-frontier memory. Tracks (level_key, (x,y)) →
         # consecutive turns the agent has been within 1 step of this frontier
@@ -1724,10 +1734,6 @@ def load_environment(
     # the env's spec carries the refiner hooks. (CH already carries it.)
     if bool(refine) and variant != "CH":
         spec = attach_refiner(spec)
-    dataset = _build_task_dataset(
-        n_examples, seed, explicit_seeds=explicit_seeds,
-        system_prompt=spec.system_prompt,
-    )
     _reward_funcs = _harness_overlay.apply_reward_weights(
         [scout_reward, descent_reward, success_reward, ascension_reward], _overlay_cfg,
     )
@@ -1753,6 +1759,25 @@ def load_environment(
     # The exact set of tool names offered to the model — used to gate
     # hallucinated tool calls in env_response (see allowed_skill_names).
     _allowed_skill_names = {getattr(t, "__name__", "") for t in tool_callables} - {""}
+
+    # Gate the system prompt on the tools we just resolved, so the advertised
+    # surface cannot exceed the published one. Under `skill_set="netplay"` no
+    # `move` adapter exists, yet the hand-written prompt told the agent to call
+    # it — exp1 measured 232 rejected `move` attempts. The prompt is now
+    # assembled from this set (see rendering.render_system_prompt), the way
+    # NetPlay and BALROG both build theirs. Overlays that REPLACE the prompt
+    # wholesale are left alone: they are the author's own text, not ours.
+    from nethack_harness.prompt import rendering as _rendering
+    if interface == "skill" and spec.system_prompt == _rendering.SYSTEM_PROMPT:
+        import dataclasses as _dc
+        spec = _dc.replace(
+            spec,
+            system_prompt=_render_system_prompt(_allowed_skill_names),
+        )
+    dataset = _build_task_dataset(
+        n_examples, seed, explicit_seeds=explicit_seeds,
+        system_prompt=spec.system_prompt,
+    )
 
     # Sub-experiment 1c: when a sub_lm_model id is given (and no explicit
     # sub_lm object was passed), build a real Prime-backed Sub-LM so
