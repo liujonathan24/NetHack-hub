@@ -1512,8 +1512,20 @@ def _build_task_dataset(n_examples: int, seed_base: int, explicit_seeds: Optiona
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Task: {spec.description}\nSuccess: {spec.success_criterion}\n\nBegin."},
             ],
-            "task": {"tier": spec.name, "seed": seed_val},
-            "info": {"tier": spec.name, "spec_description": spec.description},
+            # NB: no `task` column. `task` is a RESERVED rollout-input field in
+            # verifiers (>=0.1.14): `flatten_task_input` (verifiers/types.py)
+            # treats `input["task"]` — or `input["info"]["task"]` — as THE
+            # canonical rollout payload and REPLACES the whole input with it, so
+            # a row carrying `task={"tier":..,"seed":..}` loses its `prompt` and
+            # `init_state` then raises KeyError('prompt'). The per-rollout seed
+            # therefore rides in `info`, which `setup_state` already reads as its
+            # fallback (`task.get("seed", info.get("seed", ...))`). Callers that
+            # build a state by hand with an explicit `task` dict still work.
+            "info": {
+                "tier": spec.name,
+                "seed": seed_val,
+                "spec_description": spec.description,
+            },
         })
     return Dataset.from_list(rows)
 
