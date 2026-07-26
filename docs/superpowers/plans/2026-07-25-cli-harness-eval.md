@@ -1788,3 +1788,73 @@ makes the entire class of frame bug impossible to reintroduce.
 **Note for the writeup:** exp1's published numbers were produced with Bug 1 live. Its
 encoding-ranking conclusions may still hold (the bug is encoding-independent), but its absolute
 depths understate what the harness can do.
+
+---
+
+### Task 18: Strip to BALROG-minimal, and clamp the tool surface
+
+**Why.** `research-sota-methods.md` established our prompt hypothesis backwards. BALROG's entire
+objective scaffolding is two sentences — *"Explore the environment to find the stairs down to the
+next level."* / *"Your goal is to get as far as possible in the game."* — and
+`get_instruction_prompt(task=None)` **ignores** its `task` argument; the progression metric is never
+shown to the agent. NetPlay's default objective is `"Win the game."` **We already give more goal
+structure than either**, and NetPlay's own ablation moved depth **2.60 → 2.00** when tactical goal
+text was added. More scaffolding is measurably worse.
+
+The trace analyses agree from the other side: across 1,173 Claude Code calls, `recall` and
+`pin_objective` were **never** called and the wiki tools twice. The scaffolding is unused overhead.
+
+- [ ] **Step 1 — reduce `SYSTEM_PROMPT` to the factual minimum.**
+
+Keep only what the agent cannot derive: the `=== COORDINATES ===` frame paragraph (hard-won in
+Task 17), the glyph key, and the action list. **Delete** the STRATEGY PRIMER prose, the
+DESCEND ASAP section, the STAY ALIVE sermon, and the pitfalls list. Append BALROG's two objective
+sentences verbatim in place of our pinned-objective machinery.
+
+Keep a copy of the old prompt as `SYSTEM_PROMPT_VERBOSE` so the A/B is one config flag, not a
+`git revert`. **Test:** the rendered prompt is under a stated character budget and contains no
+strategy prose; both variants still name only tools that the active `skill_set` publishes (the
+generic assertion from Task 17 Bug 4).
+
+- [ ] **Step 2 — drop the journal and hint blocks for the CLI arms.**
+
+Per the human partner: Claude Code and Prime Agent manage their own reasoning and memory
+internally; our `=== JOURNAL ===` block, the `HINT ===` ladder, and the `add_note`/`recall`/
+`pin_objective` tools are redundant scaffolding for them. Gate them off for `self_dispatch=True`
+arms; the control keeps them (it is the v0 baseline and must not drift). **Test:** a self-dispatch
+rendered observation contains no JOURNAL or HINT block; a control one still does.
+
+- [ ] **Step 3 — clamp Claude Code's shell.**
+
+Set `disabled_tools = ["Bash"]` in `claude_code.toml`. The arm made **zero** Bash/Edit/Read calls
+across all five run1 rollouts, so this costs nothing measurable and removes the out-of-band path.
+Leave `Read` so the workspace (`wiki/`, `memory/`) stays reachable — that is the capability match
+for the control's wiki tools. **Test:** the rendered `--disallowedTools` argv contains `Bash`.
+
+- [ ] **Step 4 — Prime Agent: document that it cannot be clamped, and why.**
+
+Its only tool is `ipython`, a full Python interpreter with no denylist — in run1 it reached
+`glob('/scratch/**', recursive=True)` and printed `NETHACK_MCP_TOKEN` into its own trace. There is
+no config that prevents this. Record it in `configs/README.md` as a **known unenforced constraint**
+with the apptainer follow-up named (this cluster has `apptainer`/`singularity` but no Docker).
+Do **not** pretend a config fixes it.
+
+- [ ] **Step 5 — rotate and re-scope the secret handling.** Add `outputs/**/*.log` to
+`.gitignore` (a run1 log currently contains the leaked token and is NOT ignored), and confirm no
+tracked file contains it.
+
+### Task 19: Diagnose the mid-action cutoffs and the stray `^M`
+
+- [ ] **The cutoffs.** Three of five Prime Agent rollouts ended `agent_completed` **mid-action, on
+a tool call that never received a response** — no completion text, one still hunting dlvl 1's
+stairs. Budgets were nowhere near exhausted (107-130 of 400 calls; 34-42 min against a 7200 s
+timeout). The only invariant is wall-time, suggesting an internal Prime Agent session/idle limit.
+**Prove or disprove it**, and if it is a configurable limit, raise it. A clean negative is a
+result — say so rather than guessing.
+
+- [ ] **The stray `^M`.** `Unknown command '^M'` appeared 32× in one rollout and 12× in another —
+a carriage return left in NetHack's input buffer after certain `move_to` calls. The agent invented
+its own workaround (*"call engrave_elbereth to unstick the game"*) and burned an 18-turn streak on
+it. Do **both**: find why the CR is emitted and stop it, and make the engine swallow a stray CR as
+a no-op so it can never again surface as an "unknown command" to the agent. **Test:** a `move_to`
+sequence that previously left a CR no longer produces `Unknown command`.
