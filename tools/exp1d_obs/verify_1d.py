@@ -49,7 +49,10 @@ async def _setup(variant):
         explicit_seeds=[0],
     )
     ex = env.dataset[0]
-    state = {"task": ex["task"], "info": ex.get("info", {})}
+    # No `task` column — it is a reserved verifiers rollout-input field; the
+    # seed rides in `info` and `setup_state` reads it there. See
+    # `_build_task_dataset` in nethack.py.
+    state = {"task": {}, "info": ex["info"]}
     state = await env.setup_state(state)
     return env, state
 

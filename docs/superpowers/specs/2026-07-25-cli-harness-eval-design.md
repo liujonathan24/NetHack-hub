@@ -38,7 +38,7 @@ Only the **harness** varies.
 |---|---|---|
 | 0 — control | `nethack_v1.NetHackHarness` | exists |
 | 1 | Codex (`CLIHarness` built-in) | needs verifiers > 0.1.14 |
-| 2 | Prime Agent (external plugin) | needs PR #1985 loader, vendored |
+| 2 | Prime Agent (external plugin) | resolves on stock 0.2.1 (Task 12) |
 
 Claude Code and Cursor are deferred; they slot in as arms 3–4 with no redesign.
 
@@ -67,6 +67,17 @@ whatever mechanism the CLI already ships (`codex mcp add` for Codex, `mcpServers
 skill package for Prime Agent) rather than building a bespoke integration per arm.
 
 ## 5 · The dispatch split (the one substantial change)
+
+> **Amended by Task 12 — read with §10.** This section is written against verifiers 0.1.14,
+> where `self_dispatch` was a flag on one in-process toolset. On 0.2.1 the two values became
+> two *routes*: `self_dispatch=True` is the native v1 taskset whose `NetHackToolset` is an MCP
+> server, and `self_dispatch=False` — arm 0's `env_response` loop — is 0.2.x's v0 **legacy
+> bridge** (`vf-eval --id nethack`), which runs the v0 rollout verbatim. Passing
+> `self_dispatch=False` to the v1 toolset now raises, pointing at the bridge, rather than
+> silently running arm 0's name with MCP semantics. Everything below about the *gate*, the
+> *shared render half*, the *single dispatch path* (`_apply_tool_call`) and `obs_mode` still
+> holds unchanged; only "one flag" became "two routes over one execution path", and §10's
+> equivalence criterion is what holds them together.
 
 `_build_toolset(v0env)` currently returns `vf.Toolset(tools=list(v0env.tools), …)`, but
 `v0env.tools` are **schema-only stubs** — dispatch lives in `env_response`, which is why
@@ -139,18 +150,59 @@ across the 16 seeds, as in exp1 §3.1; marginal SEs at n=16 are wide and must no
    (exp1 confound #1). The team header must be set once, centrally, before any run.
 4. **Out-of-band state reads.** CLI arms keep native shell as a thinking aid but must not reach the
    engine or level files. Enforced by sandbox scope; verified by trace audit.
-5. **PR #1985 is OPEN.** Loader patch vendored (decided), so the Prime Agent arm does not wait on
-   upstream merge. Revisit when it lands.
+5. **PR #1985 is OPEN — and not needed.** *Amended by Task 12:* stock verifiers 0.2.1 already
+   resolves an external plugin by probing `find_spec("verifiers.v1.harnesses.<id>")` and falling
+   back to the top-level module (`verifiers/v1/loaders.py:32-45`); the PR's residual delta is
+   error-message quality only. The vendored patch has been **reverted** — a patched
+   site-packages is a reproducibility liability for a benchmark — and `tests/test_vendored_loader.py`
+   now pins both stock external-plugin resolution and a wheel-RECORD integrity check, so a future
+   patch fails the suite. The Prime Agent arm never waited on the merge.
 6. **No comparability to run2.** run2 was Gemini 3 Flash; this series is GLM 5.2. Arm 0 is the only
    baseline, and it must be run — there is no borrowing exp1's numbers.
 
 ## 10 · Testing
 
-- **Golden parity:** arm 0 with `self_dispatch=False` reproduces a recorded run2 rollout
-  turn-for-turn.
-- **Dispatch equivalence:** the same skill sequence through `self_dispatch=True` and `False`
-  yields identical engine state and identical trace fields.
-- **Gate:** `tools/encoding_eval/_verify_gate.py` passes on both paths — `move` executed = 0.
+> **Amended by Task 12.** The original two criteria were written against a `self_dispatch`
+> flag with two live values. Under verifiers 0.2.x that flag no longer has two values: a v1
+> toolset *is* an MCP server, so the only way a tool call reaches the engine is the call
+> itself, and the harness-driven (`self_dispatch=False`) loop moved to 0.2.x's v0 **legacy
+> bridge** — which is now arm 0's execution path. `self_dispatch=False` raises rather than
+> silently running arm 0's name with MCP semantics. The criteria below are re-expressed
+> against the two routes that actually exist; the property being checked is unchanged.
+
+- **Arm-0 fidelity:** arm 0 runs through 0.2.x's v0 legacy bridge (`vf-eval --id nethack`),
+  which executes the v0 rollout **verbatim** — `run_legacy_eval` calls `env.run_rollout`
+  (`verifiers/v1/legacy.py:517`), so `env_response`, the per-turn compaction pipeline, the
+  skill dispatch order and the v0 rubric are the same code exp1 validated. Fidelity is
+  therefore established by construction (no port in arm 0's path), not by replaying a
+  recorded run2 rollout — run2 was Gemini 3 Flash and this series is GLM 5.2, so a
+  turn-for-turn replay was never comparable anyway (see §9.6). Covered by
+  `environments/nethack/tests/test_v1_taskset.py::test_control_arm_runs_through_the_v0_legacy_bridge`,
+  which drives the bridge end-to-end with a keyless mock model.
+- **Cross-route dispatch equivalence:** the same skill sequence, from the same seed, must
+  yield identical engine state and identical trace fields whether dispatched by the **control
+  route** (v0 `env_response`, what the bridge runs) or the **native route** (the callables
+  `NetHackToolset._register` publishes over MCP). This is the check that catches
+  arm-0-vs-CLI-arm drift; if it fails the two arms are not playing the same game and no
+  comparison between them means anything.
+  - *Engine-state half — DONE (Task 12):*
+    `environments/nethack/tests/test_cross_route_equivalence.py` asserts identical engine
+    status, identical reward/stop scalars, and byte-identical rendered observations after
+    every step of a fixed 4-skill sequence, plus that the typed v1 state agrees with the v0
+    state the control arm's rewards read. Mutation-checked (a seed change on one route and a
+    disabled state mirror are both caught).
+  - *Trace-field half — TODO, Task 9 must implement:* needs a booted MCP tool server
+    (`python -m nethack_v1`) and a launched harness program, so it cannot run in process.
+    Task 9 must run one rollout per route over the same seed and the same forced skill
+    sequence and assert the resulting `Trace` fields agree — at minimum `reward`, the four
+    reward metrics, `num_turns`, and `stop_condition`.
+- **Gate:** `tools/encoding_eval/_verify_gate.py` passes on both routes — `move` executed = 0
+  (the script now asserts this explicitly: a rejected `move` leaves `structured_obs`
+  object-identical and `max_dlvl_reached` unchanged). On the native route the same gate is
+  covered by
+  `environments/nethack/tests/test_toolset_self_dispatch.py::test_netplay_gate_holds_at_the_mcp_registration_point`
+  (`move` is never published to MCP) and
+  `::test_calls_outside_the_exposed_set_are_refused_without_stepping`.
 - **Smoke per arm:** n=1, ~20 calls, verifying the arm reached the engine, the workspace seeded,
   the observation rendered, and the counter incremented — the exp1 discipline that caught
   silently-wasted runs.
@@ -159,7 +211,9 @@ across the 16 seeds, as in exp1 §3.1; marginal SEs at n=16 are wide and must no
 
 ```
 NetHack-hub/
-  environments/nethack/nethack_v1.py        # _build_toolset gains self_dispatch, obs_mode
+  environments/nethack/nethack_v1.py        # 0.2.1 taskset: NetHackToolset (MCP server, netplay
+                                            #   gate + call budget), NetHackTask (rewards/@stop),
+                                            #   NetHackTaskset, NetHackHarness (default harness)
   harnesses/nethack-prime-agent/            # installable distribution, NOT a loose module:
     pyproject.toml                          #   name = "nethack-prime-agent"
     nethack_prime_agent/__init__.py         #   __all__ exports exactly one Harness subclass

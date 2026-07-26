@@ -21,7 +21,11 @@ async def main():
     )
     # One task -> a live state via setup_state.
     ex = env.dataset[0]
-    state = {"task": ex["task"], "info": ex.get("info", {})}
+    # The row carries no `task` column: `task` is a RESERVED rollout-input field
+    # in verifiers (>=0.1.14) — `flatten_task_input` replaces the whole input
+    # with it — so the per-rollout seed rides in `info`, which `setup_state`
+    # reads as its fallback (`task.get("seed", info.get("seed", ...))`).
+    state = {"task": {}, "info": ex["info"]}
     state = await env.setup_state(state) if asyncio.iscoroutinefunction(env.setup_state) else env.setup_state(state)
     dlvl0 = state.get("max_dlvl_reached")
     turn0 = state["structured_obs"]
@@ -33,6 +37,13 @@ async def main():
     text = text if isinstance(text, str) else json.dumps(text)
     assert "not available" in text and "move" in text, f"move NOT rejected: {text[:200]!r}"
     print("PASS: withheld `move` rejected ->", [ln for ln in text.splitlines() if "not available" in ln][:1])
+    # The docstring's "NO env step taken" claim, actually asserted: a rejected
+    # call must not reach the engine, so the observation object and the depth
+    # bookkeeping are untouched. `dlvl0`/`turn0` were captured above and had
+    # been going unused, which left `move executed = 0` unproven.
+    assert state["structured_obs"] is turn0, "rejected `move` STEPPED the engine"
+    assert state.get("max_dlvl_reached") == dlvl0, "rejected `move` changed depth bookkeeping"
+    print("PASS: move executed = 0 (engine not stepped, depth unchanged)")
 
     # 2) An exposed tool (search) must NOT be rejected (dispatches normally).
     msg2 = {"role": "assistant", "tool_calls": [_make_toolcall("search", {})]}
