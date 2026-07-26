@@ -85,7 +85,13 @@ _PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL."
 
 # (required tools, text). A block is emitted only when every tool it names is
 # in the published set, so the advertised surface can never exceed the real one.
-_PROMPT_BLOCKS: list[tuple[tuple[str, ...], str]] = [
+#
+# This is the VERBOSE variant (pre-Task-18 behavior, byte-for-byte): the full
+# strategy primer, the DESCEND ASAP workhorse pitch, the STAY ALIVE sermon and
+# the pitfalls list. Kept as an explicit A/B opt-in (`SYSTEM_PROMPT_VERBOSE`,
+# `load_environment(verbose_prompt=True)`) — see `_PROMPT_BLOCKS_MINIMAL`
+# below for the default.
+_PROMPT_BLOCKS_VERBOSE: list[tuple[tuple[str, ...], str]] = [
     ((), _PROMPT_HEAD),
     ((), _PROMPT_DOORWAYS_HEAD),
     (("kick",),
@@ -111,6 +117,63 @@ _PROMPT_BLOCKS: list[tuple[tuple[str, ...], str]] = [
     (("engrave_elbereth", "pray"), _PROMPT_MELEE_SWARM),
     (("throw",), _PROMPT_RANGED),
     ((), _PROMPT_TAIL),
+]
+
+# --------------------------------------------------------------------------- #
+# Task 18: BALROG-minimal system prompt (the new default)                     #
+# --------------------------------------------------------------------------- #
+#
+# research-sota-methods.md: BALROG's entire objective scaffolding is two
+# sentences and NetPlay's default is "Win the game."; we gave MORE goal
+# structure than either and NetPlay's own ablation LOST depth (2.60 -> 2.00)
+# when tactical goal text was added. The trace analyses agree from the other
+# side: `recall`/`pin_objective` were never called in 1,173 Claude Code calls.
+#
+# Keep only what the agent cannot derive on its own: the COORDINATES frame
+# paragraph (Task 17), the glyph key, and the action list (SKILLS CHEAT
+# SHEET, assembled below same as the verbose variant). Delete the STRATEGY
+# PRIMER prose, the DESCEND ASAP section, the STAY ALIVE sermon and the
+# pitfalls list. Append BALROG's two objective sentences verbatim
+# (`balrog/environments/nle/__init__.py:107-131`) in place of our pinned-
+# objective machinery.
+_PROMPT_HEAD_MINIMAL = """You are playing NetHack, a procedurally-generated dungeon-crawling roguelike.
+
+Each turn shows: map (ASCII), stats, inventory, messages, any menu. Act by
+calling one tool.
+
+=== COORDINATES ===
+One frame, everywhere. `=== MAP ===` row 0 is the TOP row of the dungeon;
+`Pos: (x,y)` indexes it directly (your `@` is on map row y, column x); every
+coordinate in VISIBLE FEATURES and every (x, y) argument a tool takes is in
+that same frame. Copy coordinates straight across — no offsets."""
+
+_PROMPT_GLYPH_KEY_MINIMAL = """=== GLYPH KEY ===
+Terrain: `>` stairs DOWN, `<` stairs UP (NOT down), `_` altar, `{` fountain,
+`}` pool, `#` corridor, `.` floor, `|`/`-` walls, `+` closed door (or a
+spellbook lying on the floor), `\\` throne, `$` gold, `%` food/corpse,
+`[`/`)`/`(`/`*`/`?` items. Creatures are LETTERS (a-z, A-Z): `d` canine,
+`f` feline, `F` lichen/fungus, `r` rat, `x` grid bug, `B` bat, `k` kobold,
+`o` orc, `@` humans (and YOU). No "fireplace" glyph — adjacent `f` is a
+creature. `@` hides the tile under you — read UNDER PLAYER."""
+
+# BALROG's objective text, verbatim (`nle/__init__.py:107-131`): "Explore the
+# environment to find the stairs down to the next level." is one of its Tips
+# bullets and "Your goal is to get as far as possible in the game." is its
+# closing line. This replaces our `pin_objective`/JOURNAL machinery entirely
+# for the minimal prompt — no per-tier description, no milestone list.
+_PROMPT_TAIL_MINIMAL = """Explore the environment to find the stairs down to the next level.
+Your goal is to get as far as possible in the game."""
+
+_PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
+    ((), _PROMPT_HEAD_MINIMAL),
+    ((), _PROMPT_GLYPH_KEY_MINIMAL),
+    ((), _PROMPT_DOORWAYS_HEAD),
+    (("kick",),
+     "  `-----+-----` → `+` is a closed door; walk into it to open it, or\n"
+     "  `kick` it if it says \"locked\"."),
+    ((), _PROMPT_DOORWAYS_TAIL),
+    (("move_to",), "Use `move_to(x,y)` to walk to any of them."),
+    ((), _PROMPT_TAIL_MINIMAL),
 ]
 
 # One line per skill for the cheat sheet, emitted in this order and filtered to
@@ -145,7 +208,7 @@ _SKILL_BLURBS: tuple[tuple[str, str], ...] = (
 )
 
 
-def render_system_prompt(published_tools=None) -> str:
+def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     """Assemble the system prompt for a specific published tool set.
 
     `published_tools=None` means "everything the registry knows", which is the
@@ -153,6 +216,12 @@ def render_system_prompt(published_tools=None) -> str:
     `skill_set` (``load_environment``, the v1 taskset, the CLI workspace
     builder) pass the resolved adapter names so the prompt cannot advertise a
     tool the agent is unable to call.
+
+    `verbose=False` (default, Task 18) renders the BALROG-minimal prompt:
+    the COORDINATES paragraph, the glyph key, the action list, and BALROG's
+    two objective sentences — no strategy prose. `verbose=True` renders the
+    pre-Task-18 prompt (`SYSTEM_PROMPT_VERBOSE`), so the A/B is this one flag,
+    not a `git revert`.
     """
     if published_tools is None:
         from nethack_harness.tools.skills import registry as _registry
@@ -161,7 +230,8 @@ def render_system_prompt(published_tools=None) -> str:
     else:
         available = set(published_tools)
 
-    parts = [text for required, text in _PROMPT_BLOCKS
+    blocks = _PROMPT_BLOCKS_VERBOSE if verbose else _PROMPT_BLOCKS_MINIMAL
+    parts = [text for required, text in blocks
              if all(t in available for t in required)]
     sheet = [f"- {blurb}" for name, blurb in _SKILL_BLURBS if name in available]
     if sheet:
@@ -169,7 +239,13 @@ def render_system_prompt(published_tools=None) -> str:
     return "\n\n".join(parts)
 
 
+#: BALROG-minimal (Task 18 default): coordinates + glyph key + action list +
+#: BALROG's two objective sentences. No strategy prose.
 SYSTEM_PROMPT = render_system_prompt()
+
+#: Pre-Task-18 prompt: the strategy primer, DESCEND ASAP, STAY ALIVE, and the
+#: pitfalls list. Opt in via `load_environment(verbose_prompt=True)`.
+SYSTEM_PROMPT_VERBOSE = render_system_prompt(verbose=True)
 
 
 # ---------- observation formatting for chat ----------
@@ -861,9 +937,18 @@ def format_observation_as_chat(
     When `state` is threaded through, we deduplicate static content
     across turns. `compact=False` disables all token-savers (used by tests
     and the replay viewer to inspect raw content).
+
+    Task 18 Step 2: `state["_self_dispatch"]` (set in `setup_state` from the
+    env's `self_dispatch` constructor flag) gates the JOURNAL block and the
+    HINT ladder off. Claude Code and Prime Agent manage their own reasoning
+    and memory internally, so these are redundant scaffolding for them — the
+    trace analyses found `recall`/`pin_objective` never called across 1,173
+    Claude Code calls. The control arm never sets this flag (default False)
+    and keeps both blocks unchanged: it is the v0 baseline and must not drift.
     """
+    self_dispatch = bool(state and state.get("_self_dispatch"))
     lines: list[str] = []
-    if journal is not None and not journal.is_empty():
+    if journal is not None and not journal.is_empty() and not self_dispatch:
         # Diff-only journal: when state is threaded through and the journal
         # hasn't changed since last render, emit "(unchanged)" instead of the
         # full block. Saves ~journal_max_chars/turn on stretches with no
@@ -1166,7 +1251,7 @@ def format_observation_as_chat(
                     "working. Try a different frontier, a different exit, or "
                     "`search` for a hidden passage.]"
                 )
-        if hint:
+        if hint and not self_dispatch:
             lines.append(f"=== HINT === {hint}")
             lines.append("")
     # Hostiles-in-sight + VISIBLE FEATURES: render in BOTH compact and

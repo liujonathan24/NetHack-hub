@@ -40,3 +40,12 @@ dat/
 # not launch_cell.sh, which always sets `--output_dir`).
 /outputs/nethack_v1--*/
 /outputs/*--bash/
+
+# Task 18 Step 5: a run1 log (`outputs/cli_harness_eval/run1/prime_agent.log`)
+# was committed un-ignored and carried a leaked MCP bearer token -- the Prime
+# Agent arm's `ipython` tool has no denylist (see
+# tools/cli_harness_eval/configs/README.md §7) and printed it into its own
+# trace. Every consolidated run log under outputs/ is a raw capture of a
+# real eval invocation and must never be committed, regardless of which
+# subdirectory it lands in.
+/outputs/**/*.log

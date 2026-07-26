@@ -63,6 +63,29 @@ def test_all_three_arms_pin_the_identical_experiment():
     assert control["skill_set"] == "netplay"
 
 
+def test_claude_code_clamps_bash_but_keeps_read():
+    """Task 18 Step 3: the arm made ZERO Bash/Edit/Read calls across all five
+    run1 rollouts (analysis-claude-code.md §3), so disallowing Bash costs
+    nothing measurable and removes the out-of-band host-shell path. Read stays
+    enabled -- it is the capability match for the control arm's wiki tools
+    (`memory/`/`wiki/` in the seeded workspace, tools/cli_harness_eval/
+    workspace.py). Checked against the exact argv-building expression
+    `ClaudeCodeHarness.launch` uses so this fails if that logic ever changes
+    shape (verifiers/v1/harnesses/claude_code/harness.py)."""
+    from verifiers.v1.harnesses.claude_code.harness import ClaudeCodeHarnessConfig
+
+    harness_cfg = ClaudeCodeHarnessConfig.model_validate(_load("claude_code.toml")["harness"])
+
+    argv_fragment = [
+        arg
+        for tool in harness_cfg.disabled_tools or []
+        for arg in ("--disallowedTools", tool)
+    ]
+    assert "--disallowedTools" in argv_fragment
+    assert argv_fragment[argv_fragment.index("--disallowedTools") + 1] == "Bash"
+    assert "Read" not in argv_fragment
+
+
 def test_every_trace_dir_is_absolute_and_mutually_distinct():
     """Absolute: a relative `trace_dir` resolves inside a rollout's own
     ephemeral runtime workdir and is silently discarded at teardown (measured

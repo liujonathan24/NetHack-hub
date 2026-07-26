@@ -68,14 +68,18 @@ skill_set = "netplay"           # the netplay gate: `move` is never published
 
 [harness]
 id = "claude_code"
-# `disabled_tools` is deliberately EMPTY. Under `--bare` (which this pinned
-# harness always passes) Claude Code advertises only Bash / Edit / Read plus
-# the MCP resource helpers -- no WebFetch, no WebSearch. Those three are the
-# capability-match for the control arm's wiki tools and Journal: the workspace
-# primer tells the agent to grep `wiki/` and keep notes in `memory/`. Removing
-# them would make the CLI arm strictly weaker than the control, which is the
-# opposite of what this comparison is for. See configs/README.md §5 for the
-# host-access caveat that comes with the subprocess runtime.
+# Task 18 Step 3: Bash is disallowed. Under `--bare` (which this pinned
+# harness always passes) Claude Code advertises Bash / Edit / Read plus the
+# MCP resource helpers -- no WebFetch, no WebSearch. The arm made ZERO
+# Bash/Edit/Read calls across all five run1 rollouts (analysis-claude-code.md
+# §3), so withholding Bash costs nothing measurable and removes the
+# out-of-band host-shell path (configs/README.md §5.1/§7: the subprocess
+# runtime gives a real, unconfined host shell, and there is no container
+# runtime on this cluster to sandbox it instead). Read stays: it is the
+# capability-match for the control arm's wiki tools and Journal, and the
+# workspace primer tells the agent to grep `wiki/` and keep notes in
+# `memory/` via Edit -- Edit is also left enabled so that write path works.
+disabled_tools = ["Bash"]
 
 [harness.runtime]
 # Verified in Task 13 step 1: `NEEDS_CONTAINER` is a *Task*-level flag in the

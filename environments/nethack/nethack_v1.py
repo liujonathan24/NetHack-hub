@@ -276,6 +276,12 @@ def _build_v0_env(cfg: NetHackToolsetConfig | NetHackTasksetConfig, *, n_example
         map_detail=cfg.map_detail,
         character=cfg.character,
         trace_dir=cfg.trace_dir,
+        # Task 18 Step 2: this v1 toolset is only ever built with
+        # self_dispatch=True (NetHackToolset.__init__ raises otherwise), so
+        # this always gates the JOURNAL block + HINT ladder off for the
+        # CLI-agent arms. The control arm calls `nethack.load_environment`
+        # directly and never reaches this function, so it never sets this.
+        self_dispatch=cfg.self_dispatch,
         **dict(cfg.env_args or {}),
     )
 
@@ -352,6 +358,16 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         self.v0_state = None
         self.v0env = None
 
+    # Task 18 Step 2: redundant scaffolding for a CLI agent that manages its
+    # own reasoning and memory internally — the trace analyses found these
+    # three never/rarely called (recall/pin_objective: 0 of 1,173 Claude Code
+    # calls). Filtered ONLY here, i.e. only for this MCP-exposed toolset
+    # (always self_dispatch=True); the shared `skill_set="netplay"` resolution
+    # in `nethack.py`/`helpers.py` is untouched, so the control arm (which
+    # gets its tools from the v0 env directly, never through this class)
+    # keeps them.
+    _SELF_DISPATCH_REDUNDANT_TOOLS = frozenset({"add_note", "recall", "pin_objective"})
+
     # -- the action surface ------------------------------------------------- #
     def tool_functions(self) -> dict[str, Callable]:
         """The executing tools, keyed by the name the model sees.
@@ -366,7 +382,9 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         if self.v0env is None:
             raise RuntimeError("setup_task() must run before tool_functions()")
         return {
-            adapter.__name__: self._executing(adapter) for adapter in self.v0env.tools
+            adapter.__name__: self._executing(adapter)
+            for adapter in self.v0env.tools
+            if adapter.__name__ not in self._SELF_DISPATCH_REDUNDANT_TOOLS
         }
 
     def _executing(self, adapter: Callable) -> Callable:

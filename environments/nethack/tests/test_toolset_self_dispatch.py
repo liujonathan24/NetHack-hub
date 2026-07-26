@@ -79,6 +79,24 @@ def test_netplay_gate_holds_at_the_mcp_registration_point():
     assert set(recorder.tools) == set(toolset.tool_functions())
 
 
+def test_journal_tools_are_withheld_from_the_self_dispatch_toolset():
+    """Task 18 Step 2: add_note/recall/pin_objective are redundant scaffolding
+    for a CLI agent that manages its own reasoning/memory internally (the
+    trace analyses found them never/rarely called: recall and pin_objective
+    were 0 of 1,173 Claude Code calls). This toolset is only ever built with
+    self_dispatch=True, so the exclusion applies unconditionally here — the
+    shared `skill_set="netplay"` resolution the control arm uses elsewhere is
+    untouched (`test_prompt_tool_surface.py`, `helpers.py`)."""
+    toolset = _toolset()
+    names = set(toolset.tool_functions())
+    assert not ({"add_note", "recall", "pin_objective"} & names), names
+    # Still a real, non-empty action surface.
+    assert "explore_and_descend" in names
+    recorder = _Recorder()
+    toolset._register(recorder)
+    assert not ({"add_note", "recall", "pin_objective"} & set(recorder.tools))
+
+
 def test_calls_outside_the_exposed_set_are_refused_without_stepping():
     # Defense in depth: `_apply_tool_call` re-checks the exposed set and
     # refuses without consuming an engine step (nethack.py:754).

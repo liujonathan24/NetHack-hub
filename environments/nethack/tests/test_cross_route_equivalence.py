@@ -26,6 +26,16 @@ SCOPE: this covers engine state and the rendered observation, in process. The
 needs a booted MCP tool server and a launched harness program, so it is
 specified in the design doc as a Task 9 acceptance criterion, not implemented
 here.
+
+Task 18 Step 2 exception: the native route always builds its v0 env with
+``self_dispatch=True`` (a v1 toolset has no other mode -- see the
+``nethack_v1`` module docstring), which now intentionally drops the JOURNAL
+block and the HINT ladder from the rendered text (redundant scaffolding for a
+CLI agent that manages its own reasoning/memory). The control route defaults
+to ``self_dispatch=False`` and keeps both. That is a deliberate, documented
+divergence, not drift, so the observation-equality check below strips both
+blocks before comparing -- everything else (MAP, STATUS, INVENTORY,
+MESSAGES, VISIBLE FEATURES/MONSTERS, ...) must still match exactly.
 """
 
 import asyncio
@@ -78,6 +88,32 @@ def _text(content):
     from nethack_harness.prompt.content import content_to_text
 
     return content_to_text(content) if not isinstance(content, str) else content
+
+
+def _strip_self_dispatch_gated_blocks(text: str) -> str:
+    """Drop the JOURNAL block and any HINT line before comparing routes.
+
+    Task 18 Step 2 makes the native (self_dispatch=True) route omit both --
+    see the module docstring. Both are always emitted as a whole line/block
+    followed by a blank separator line, so this just skips each block
+    (header through the next blank line) so the remaining text stays
+    line-aligned between the two routes.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line == "=== JOURNAL ===" or line.startswith("=== HINT ==="):
+            i += 1
+            while i < len(lines) and lines[i] != "":
+                i += 1
+            if i < len(lines):  # skip the trailing blank separator too
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
 
 
 def _control_route():
@@ -161,9 +197,16 @@ def test_cross_route_dispatch_equivalence():
     for i, (a, b) in enumerate(zip(control_fp, native_fp)):
         assert a == b, f"engine state diverged at step {i} ({SEQUENCE[i][0]})"
 
-    # Identical rendered observation from every call.
+    # Identical rendered observation from every call, modulo the Task 18
+    # Step 2 JOURNAL/HINT gating (see module docstring).
     for i, (a, b) in enumerate(zip(control_obs, native_obs)):
-        assert a == b, f"observation diverged at step {i} ({SEQUENCE[i][0]})"
+        assert _strip_self_dispatch_gated_blocks(a) == _strip_self_dispatch_gated_blocks(b), (
+            f"observation diverged at step {i} ({SEQUENCE[i][0]})"
+        )
+    # And confirm the gating actually fired as expected on each side -- a
+    # silent regression here would make the check above pass vacuously.
+    assert any("=== JOURNAL ===" in text for text in control_obs)
+    assert not any("=== JOURNAL ===" in text for text in native_obs)
 
     # And the typed state the v1 rewards read agrees with the v0 state the
     # control arm's rewards read — otherwise the two arms would be scored off

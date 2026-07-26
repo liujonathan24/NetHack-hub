@@ -23,8 +23,13 @@ def test_wiki_pages_are_read_only(tmp_path):
 
 
 def test_agents_md_carries_the_system_prompt(tmp_path):
+    # Task 18: the fallback (ungated) module default is now the BALROG-minimal
+    # SYSTEM_PROMPT, not SYSTEM_PROMPT_VERBOSE -- assert on content that
+    # survives in both rather than the strategy prose that was deleted.
     ws = build_workspace(tmp_path / "ws", objective="x")
-    assert "STRATEGY: DESCEND ASAP" in (ws / "AGENTS.md").read_text()
+    text = (ws / "AGENTS.md").read_text()
+    assert "=== COORDINATES ===" in text
+    assert "STRATEGY: DESCEND ASAP" not in text
 
 
 def test_no_map_is_seeded(tmp_path):

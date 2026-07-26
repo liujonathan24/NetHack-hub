@@ -57,7 +57,7 @@ That is the single largest upgrade risk in this experiment.
   `.vf-claude/mcp.json` = `{"mcpServers": {"nethack": {"type": "http", "url": ...}}}`,
   then passes `--mcp-config .vf-claude/mcp.json --strict-mcp-config` so Claude Code sees
   *only* this server (no ambient user/global MCP config).
-* **Advertised names, verified from the trace of a real rollout** (`trace.tools`):
+* **Advertised names, verified from the trace of a real rollout, pre-Task-18** (`trace.tools`):
 
   ```
   mcp__nethack__add_note        mcp__nethack__explore_and_descend  mcp__nethack__quaff
@@ -71,6 +71,13 @@ That is the single largest upgrade risk in this experiment.
 
   18 tools. **`mcp__nethack__move` is absent** (the netplay gate) and
   `mcp__nethack__explore_and_descend` is present.
+
+  **Task 18 Step 2** withholds `add_note`, `recall` and `pin_objective` from this toolset
+  specifically (`NetHackToolset.tool_functions`, `nethack_v1.py`) — redundant scaffolding for a CLI
+  agent that manages its own reasoning/memory internally; the trace analyses found `recall` and
+  `pin_objective` called **zero** times across 1,173 Claude Code calls. **15 tools** are advertised
+  now. The shared `skill_set="netplay"` resolution the control arm uses is untouched, so the control
+  arm's own tool surface (through the v0 legacy bridge, not this class) still includes all three.
 
   Note the naming is harness-family specific: verifiers' own `null`/`bash` programs flatten
   the same tools to `nethack_search` (`harnesses/null/program.py:77-92`), while Claude Code,
@@ -285,3 +292,34 @@ Three operational facts the run established, all of which bite a 16-seed launch:
    `DaemonSocketClosedError`. The harness therefore leaves `install_dir/agent-<trace-id>/` behind
    (small, no secrets). Clear it between runs, and check `prime-agent doctor` if a run starts
    failing at launch.
+
+---
+
+## 7. Known unenforced constraint: Prime Agent's `ipython` has no denylist (Task 18 Step 4)
+
+Unlike `claude_code.toml` (§2, §5), **there is no `disabled_tools` for `prime_agent.toml` that
+does anything.** Prime Agent's only agent tool is `ipython` — a full Python interpreter running in
+the harness's own subprocess runtime, with no tool-level allowlist/denylist mechanism at all (§6:
+"Consistent with Prime Agent's single-tool design, MCP integrations are not exposed as new agent
+tools" — that quote is about *skills*, not about constraining what the interpreter itself can
+import or call). In the run1 acceptance rollout the agent reached `glob('/scratch/**',
+recursive=True)` from inside `ipython` and printed the leaked MCP bearer token
+(`NETHACK_MCP_TOKEN`) into its own trace — a live demonstration that nothing in this arm's config
+stops a Python `import os; os.environ` or an arbitrary filesystem walk. `PrimeAgentHarnessConfig`
+(`harnesses/nethack-prime-agent/nethack_prime_agent/__init__.py`) does the honest thing when asked
+to pretend otherwise: passing `disabled_tools` in the TOML makes `launch()` raise a loud
+`ValueError` instead of silently ignoring the setting and running an arm that differs from what the
+config says (`tests/test_prime_agent_harness.py::test_disabled_tools_is_refused_rather_than_silently_ignored`).
+**There is no config on either side of this — verifiers' `HarnessConfig.disabled_tools` or Prime
+Agent's own settings — that closes this off. Do not read the absence of a `disabled_tools` line in
+`prime_agent.toml` as "nothing to clamp"; it means clamping is not offered.**
+
+The real fix is sandboxing the *runtime*, not the tool surface: run this arm under a container
+(`harness.runtime.type = "docker"` or `"prime"` once available) instead of `subprocess`. This
+cluster has `apptainer`/`singularity` (confirmed present, §1) but no Docker/Podman, and
+`v1/runtimes/` (the pinned verifiers 0.2.1) has adapters for `subprocess`, `docker`, `modal`, and
+`prime` only — no apptainer adapter exists yet, so today there is no way to actually run this arm
+sandboxed on this cluster. Until either an apptainer runtime adapter is written or a paid Prime
+remote sandbox is used, the honest description of this arm is: **it runs with an unconfined Python
+interpreter and an unconfined host filesystem, and that is accepted, not solved, by anything in
+this repo.**

@@ -172,6 +172,7 @@ _patch_verifiers_message_from_response()
 # ---------- extracted modules (re-exported for back-compat) ----------
 from nethack_harness.prompt.rendering import (
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_VERBOSE,
     render_system_prompt as _render_system_prompt,
     _strip_blank_rows,
     _glyph_run_encode,
@@ -381,11 +382,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_state otherwise makes the journal non-empty on turn 1. Default
         # True preserves the always-pinned-objective behavior.
         pin_objective_on_setup: bool = True,
+        # Task 18 Step 2: True for the CLI-agent arms (nethack_v1's MCP toolset
+        # always sets this — self_dispatch=False has no v1 path at all), False
+        # for the control arm (the v0 legacy bridge never passes it). Threaded
+        # into state["_self_dispatch"] in setup_state, where
+        # rendering.format_observation_as_chat reads it to drop the JOURNAL
+        # block and the HINT ladder for the CLI arms while leaving the control
+        # arm's rendering byte-identical to pre-Task-18 behavior.
+        self_dispatch: bool = False,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
         self.pin_objective_on_setup = pin_objective_on_setup
+        self.self_dispatch = self_dispatch
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -627,6 +637,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["_descent_salient"] = _obs_flags.get("_descent_salient", False)
         state["_e1_obs"] = _obs_flags.get("_e1_obs", False)
         state["_e2_obs"] = _obs_flags.get("_e2_obs", False)
+        # Task 18 Step 2: gates the JOURNAL block + HINT ladder off for the
+        # CLI-agent arms (see the constructor's self_dispatch docstring).
+        state["_self_dispatch"] = self.self_dispatch
         state["last_reward"] = 0.0
         state["terminated"] = False
         state["journal"] = Journal()
@@ -1638,6 +1651,14 @@ def load_environment(
     # objective at setup → enables the no-memory arm (empty journal). See the
     # env constructor for the full rationale.
     pin_objective_on_setup: bool = True,
+    # Task 18: A/B the BALROG-minimal prompt (default) against the pre-Task-18
+    # strategy-heavy one via one config flag instead of a git revert.
+    verbose_prompt: bool = False,
+    # Task 18 Step 2: True for the CLI-agent arms (nethack_v1 sets this
+    # unconditionally — see NetHackVerifiersEnv's self_dispatch docstring).
+    # Gates the per-turn JOURNAL block and HINT ladder off for them; the
+    # control arm's default (False) keeps both, unchanged from pre-Task-18.
+    self_dispatch: bool = False,
     subgoal_proposer=None,
     compact_obs: bool = False,
     history_keep_full: int = 5,
@@ -1726,8 +1747,11 @@ def load_environment(
     _overlay_cfg = _harness_overlay.apply_overlay(_sys.modules[__name__])
     # Resolve the prompt recipe AFTER the overlay so the spec carries the
     # (possibly-overlaid) system prompt. SYSTEM_PROMPT here is this module's
-    # global, which apply_overlay just mutated in place.
-    spec = resolve_spec(variant, SYSTEM_PROMPT)
+    # global, which apply_overlay just mutated in place. verbose_prompt swaps
+    # in the pre-Task-18 SYSTEM_PROMPT_VERBOSE instead (see load_environment's
+    # docstring for the A/B).
+    _base_system_prompt = SYSTEM_PROMPT_VERBOSE if verbose_prompt else SYSTEM_PROMPT
+    spec = resolve_spec(variant, _base_system_prompt)
     # Decouple the teacher refiner from the obs format: when refine=True on a
     # non-CH variant, attach the CH refiner bundle (hooks + system inject +
     # run_macro tool) onto the resolved spec so the tool gets exposed below and
@@ -1768,11 +1792,11 @@ def load_environment(
     # NetPlay and BALROG both build theirs. Overlays that REPLACE the prompt
     # wholesale are left alone: they are the author's own text, not ours.
     from nethack_harness.prompt import rendering as _rendering
-    if interface == "skill" and spec.system_prompt == _rendering.SYSTEM_PROMPT:
+    if interface == "skill" and spec.system_prompt == _base_system_prompt:
         import dataclasses as _dc
         spec = _dc.replace(
             spec,
-            system_prompt=_render_system_prompt(_allowed_skill_names),
+            system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
         )
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
@@ -1819,6 +1843,7 @@ def load_environment(
         setup_character=character,
         allowed_skill_names=_allowed_skill_names,
         pin_objective_on_setup=pin_objective_on_setup,
+        self_dispatch=self_dispatch,
         **kwargs,
     )
 
@@ -1826,6 +1851,7 @@ def load_environment(
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "SYSTEM_PROMPT_VERBOSE",
     "GameSpec",
     "FULL_GAME_SPEC",
     "PRIMITIVES_GAME_SPEC",
