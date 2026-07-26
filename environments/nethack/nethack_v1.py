@@ -151,7 +151,7 @@ class NetHackToolsetConfig(vf.ToolsetConfig):
     # Which curriculum task to run (key in nethack.GAME_SPECS).
     task_spec: str = "full_nle"
     # Obs/skill-structure variant + structured-map detail (see v0 load_environment).
-    variant: str = "B1"
+    variant: str = "B0"
     map_detail: str = "full"
     # "skill" (one tool per skill) or "code" (single sandboxed `code` tool).
     interface: str = "skill"
@@ -204,7 +204,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
 
     # --- toolset knobs (projected onto NetHackToolsetConfig by load()) -------
     task_spec: str = "full_nle"
-    variant: str = "B1"
+    variant: str = "B0"
     map_detail: str = "full"
     interface: str = "skill"
     character: Optional[str] = None

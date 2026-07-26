@@ -32,7 +32,7 @@ character = "Val-hum-neu-fem"
 explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 n_examples = 16
 interface = "skill"
-variant = "B1"
+variant = "B0"           # uncompressed ASCII (exp1's deepest + cheapest cell)
 map_detail = "full"
 # Self-dispatch is the only v1 mode: a 0.2.x toolset is an MCP server, so the
 # tool call itself both executes the skill and returns the observation.

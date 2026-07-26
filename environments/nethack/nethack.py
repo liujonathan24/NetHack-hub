@@ -288,7 +288,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         sub_lm=None,
         subgoal_proposer=None,
         # Compaction knobs (survey rec). Set via load_environment kwargs.
-        compact_obs: bool = True,
+        compact_obs: bool = False,   # exp1 ran uncompacted; see load_environment
         history_keep_full: int = 5,
         history_drop_after: int = 100,
         belief_state_interval: int = 25,
@@ -298,7 +298,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # periodic self-refinement turns that prompt the agent to revise its
         # objective and record a lesson note (no NLE step consumed when the
         # agent calls pin_objective/add_note). See docs/PROMPTING_SURVEY.md.
-        variant: str = "B1",
+        variant: str = "B0",         # uncompressed ASCII; see load_environment
         # Detail level for the structured-map variants (JSON/TOON): "full"
         # emits rich entity attrs + RLE grid; "minimal" trims to kind/coord/desc.
         # Threaded onto state["map_detail"] for the per-turn template to read.
@@ -1608,12 +1608,12 @@ def load_environment(
     # env constructor for the full rationale.
     pin_objective_on_setup: bool = True,
     subgoal_proposer=None,
-    compact_obs: bool = True,
+    compact_obs: bool = False,
     history_keep_full: int = 5,
     history_drop_after: int = 100,
     belief_state_interval: int = 25,
     journal_render_max_chars: int = 2000,
-    variant: str = "B1",
+    variant: str = "B0",
     # Sub-experiment 1b (JSON cell-content ablation): per-cell SPATIAL/
     # EXPLORATION attributes to enrich the JSON map with, drawn from
     # {"seen","visited","reach"}. Pass as a JSON list (["seen","visited"]) or a

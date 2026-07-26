@@ -29,7 +29,7 @@ explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 n_examples = 16
 skill_set = "netplay"           # the netplay gate: no raw `move` adapter is built
 interface = "skill"
-variant = "B1"
+variant = "B0"           # uncompressed ASCII (exp1's deepest + cheapest cell)
 map_detail = "full"
 # The control arm's nearest counterpart to the CLI arms' `max_skill_calls`.
 #
