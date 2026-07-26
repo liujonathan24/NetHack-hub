@@ -758,17 +758,66 @@ def bootstrap_character(env: NetHackCoreEnv) -> dict[str, str]:
 # ---------- to-be-implemented ----------
 # These are real skills, just stubs for now. Each is a self-contained PR worth.
 
+def open_door_tiles(chars, glyphs):
+    """(x, y) of tiles drawn with a WALL glyph that are actually open doors.
+
+    NetHack renders an open door as the wall glyph rotated 90 degrees, so `-`
+    and `|` in the `chars` layer mean BOTH "wall" and "open door" — the one
+    ambiguity in the whole map. The glyph layer resolves it: `_glyph_clean_chars`
+    maps an open door to `.` and a real wall to `|`.
+    """
+    import numpy as np
+
+    if chars is None or glyphs is None:
+        return []
+    clean = _glyph_clean_chars(glyphs)
+    mask = (clean == ord(".")) & ((chars == ord("-")) | (chars == ord("|")))
+    ys, xs = np.nonzero(mask)
+    return [(int(x), int(y)) for y, x in zip(ys, xs)]
+
+
 def _current_chars_and_player(env: NetHackCoreEnv):
     """Pull the latest chars grid and player (x, y) from the underlying NLE.
 
     The skill API gets a StructuredObservation but we want the raw chars
     array for pathfinding. The CoreObservation lives in the verifiers state
     dict, not here; so we read it back from the env's last_observation.
+
+    OPEN DOORS ARE PATCHED TO `.` before the grid is handed to anything that
+    paths over it. `pathfinding._WALKABLE_CHARS` cannot contain `-`/`|` — those
+    are also the wall glyphs, and a walkable wall would let `a_star` route
+    straight through solid rock — so on the raw `chars` layer an open door is
+    simply impassable. Consequences, all observed:
+
+      * `a_star` could not path THROUGH an open door, so a room whose only
+        exits were open doors was sealed as far as `move_to` was concerned;
+      * `move_to`'s fast unreachable-target exit refused those tiles outright
+        with "there is no route to it and never will be" — a false statement
+        about a tile the HINT had just told the agent to walk to. In the
+        committed smoke3 run this fired on control turns 6 and 13 and
+        prime_agent turn 9, and the control arm died in its starting room.
+
+    `explore_and_descend` never hit this because it builds its own glyph-derived
+    grid (`obs_map` -> `_glyph_clean_chars`). This makes the other skills agree
+    with it. The patch is strictly additive: it only ever turns a verified open
+    door into floor, and leaves walls, closed doors (`+`, already walkable),
+    items and monsters exactly as they were.
     """
     keys = env.observation_keys
     last = env.last_observation
     chars = last[keys.index("chars")]
     blstats = last[keys.index("blstats")]
+    try:
+        glyphs = last[keys.index("glyphs")] if "glyphs" in keys else None
+        doors = open_door_tiles(chars, glyphs)
+        if doors:
+            chars = chars.copy()
+            for dx, dy in doors:
+                chars[dy, dx] = ord(".")
+    except Exception:
+        # Never let the disambiguation break a skill; worst case we are back to
+        # the old ambiguous grid.
+        pass
     return chars, (int(blstats[0]), int(blstats[1]))
 
 

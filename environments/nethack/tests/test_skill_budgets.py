@@ -15,6 +15,7 @@ import time
 
 from nethack_core.env import CoreObservation, NetHackCoreEnv
 from nethack_core.observations import shape
+from nethack_harness.prompt import features
 from nethack_harness.tools import skills
 from nethack_harness.tools.skills import (
     bootstrap_character,
@@ -40,20 +41,42 @@ def _core(env) -> CoreObservation:
 # move_to must fail fast on a target it can never reach                        #
 # --------------------------------------------------------------------------- #
 
+def _open_door_tiles(core):
+    """Tiles NetHack draws with a WALL glyph that are actually open doors.
+
+    NetHack renders an open door as the wall glyph rotated 90 degrees, so `-`
+    and `|` in `chars` are ambiguous. The GLYPH layer is not: `_glyph_clean_chars`
+    maps an open door to `.` and a real wall to `|`.
+    """
+    import numpy as np
+
+    clean = skills._glyph_clean_chars(core.glyphs)
+    mask = (clean == ord(".")) & (
+        (core.chars == ord("-")) | (core.chars == ord("|"))
+    )
+    ys, xs = np.nonzero(mask)
+    return {(int(x), int(y)) for y, x in zip(ys, xs)}
+
+
 def test_move_to_a_wall_fails_immediately_instead_of_probing_into_it():
     env, obs, character = _env()
     try:
-        chars = _core(env).chars
-        # Find a wall tile on the starting room's perimeter.
+        core = _core(env)
+        chars = core.chars
+        doors = _open_door_tiles(core)
+        # A REAL wall -- explicitly NOT an open door, which NetHack draws with
+        # the same glyph. Taking the first `-`/`|` on the map (as this test
+        # originally did) can land on an open door, which would enshrine the
+        # false-refusal bug this suite is supposed to catch.
         wall = None
         for y in range(chars.shape[0]):
             for x in range(chars.shape[1]):
-                if chr(int(chars[y, x])) in "-|":
+                if chr(int(chars[y, x])) in "-|" and (x, y) not in doors:
                     wall = (x, y)
                     break
             if wall:
                 break
-        assert wall is not None, "no wall glyph on the starting map"
+        assert wall is not None, "no real wall glyph on the starting map"
         t0 = time.monotonic()
         res = move_to(env, shape(_core(env), character), x=wall[0], y=wall[1])
         elapsed = time.monotonic() - t0
@@ -65,6 +88,59 @@ def test_move_to_a_wall_fails_immediately_instead_of_probing_into_it():
         assert "wall" in res.feedback.lower() or "not walkable" in res.feedback.lower()
     finally:
         env.close()
+
+
+def test_every_recommended_exit_is_a_legal_move_to_target():
+    """The prompt and the tool must not contradict each other.
+
+    `nearest_exit` ranks over `door (open/gap)` and `door (closed)` and the HINT
+    tells the agent to `move_to` the winner. NetHack draws an OPEN door as `-`
+    or `|`, and `move_to`'s fast unreachable-target exit refuses exactly those
+    glyphs with "there is no route to it and never will be" -- a false statement
+    about a tile the same observation just recommended. It fired on two of three
+    arms of the committed smoke3 run (control turns 6 and 13, prime_agent turn
+    9) and helped wedge the control arm in its starting room until it died.
+
+    So: every tile `nearest_exit` could name must be a tile `move_to` accepts.
+    """
+    checked = 0
+    wall_drawn_doors = 0
+    for seed in (0, 1, 2):
+        env, obs, character = _env(seed)
+        try:
+            for _ in range(3):
+                structured = shape(_core(env), character)
+                explore_and_descend(env, structured, max_floors=1, max_game_steps=60)
+                core = _core(env)
+                feats = features.visible_features(core)
+                doors = _open_door_tiles(core)
+                for f in features.exits(feats):
+                    res = move_to(
+                        env, shape(core, character), x=f.x, y=f.y
+                    )
+                    if "diverted to" in res.feedback:
+                        continue  # `>` short-circuit; never reaches the check
+                    assert "never will be" not in res.feedback, (
+                        f"seed {seed}: hint can recommend {f.label} at "
+                        f"({f.x},{f.y}) but move_to refuses it: {res.feedback}"
+                    )
+                    checked += 1
+                    if (f.x, f.y) in doors:
+                        wall_drawn_doors += 1
+                        # The specific failure: an open door drawn as a wall
+                        # glyph must be routable, not merely un-refused.
+                        assert res.actions, (
+                            f"seed {seed}: no path to open door ({f.x},{f.y}) "
+                            f"drawn as {chr(int(core.chars[f.y, f.x]))!r}: "
+                            f"{res.feedback}"
+                        )
+        finally:
+            env.close()
+    assert checked >= 10, f"only {checked} exits checked — test is vacuous"
+    assert wall_drawn_doors >= 1, (
+        "no open door drawn with a wall glyph was seen — the regression this "
+        "test exists for would not be exercised"
+    )
 
 
 def test_move_to_out_of_bounds_fails_immediately():
