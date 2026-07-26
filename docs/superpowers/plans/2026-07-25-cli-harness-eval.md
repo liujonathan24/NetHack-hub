@@ -1657,3 +1657,62 @@ Four untracked `outputs/` trees exist from the proving runs. Acceptance artifact
 gitignored. Make it explicit either way.
 
 - [ ] **Step 5: Green the suite and commit**
+
+---
+
+### Task 16: Vendor NetPlay's real skill layer
+
+**Decided by the human partner: bite-for-bite identical NetPlay code**, not a reimplementation.
+
+**Why.** Research established our 18-tool set is not NetPlay's action surface: NetPlay exposes ~31
+skills, we never implement 20 of them, 6 of ours have no NetPlay counterpart, and the shared names
+diverge semantically — our `attack(direction)` is a bump (`skills.py:330` is literally
+`move(...)`), while NetPlay's `melee_attack(x,y)` pursues a target until it dies; our
+`explore_and_descend` caps its search, while NetPlay's `explore_level` runs until exploration is
+provably exhausted. Those two gaps plausibly explain why 8 of 16 exp1 rollouts never left dlvl 1.
+
+**Feasibility, verified — this is smaller than it first looked.** `netplay/nethack_agent/skills.py`
+is 696 lines with **zero** `autoascend` references; autoascend is vendored in that repo but the
+LLM-facing skill layer does not use it. Imports are `netplay.*`, `nle.env`, `nle.nethack`, `numpy`.
+Both licenses are **MIT** (`LICENSE`, `autoascend/LICENSE`), so vendoring with attribution is clean.
+
+**Source:** `https://github.com/CommanderCero/NetPlay`
+
+**The only real adaptation is the engine seam.** They import `from nle.env import NLE` and
+`from nle.nethack import actions, glyph_is_pet`; we run our own fork behind `nethack_core`, and
+`nle` is not installed. `nethack_core.actions` already mirrors NLE's enums (`Command`,
+`CompassDirection`, `CompassDirectionLonger`, `MiscAction`, `MiscDirection`, `TextCharacters`).
+
+- [ ] **Step 1: Vendor the skill layer verbatim**
+
+Copy under `environments/nethack/vendor/netplay/`, preserving both `LICENSE` files and a
+`PROVENANCE.md` recording the upstream repo, commit SHA, and what was changed:
+`netplay/nethack_agent/{skills,pathfinding,tracking,describe,agent,descriptors,skill_selection}.py`,
+`netplay/nethack_utils/{glyphs,monster,monflag,screen_symbols,nle_wrapper}.py`,
+`netplay/core/{skill,skill_repository,descriptor}.py`.
+**Do not rewrite logic.** Adapt imports only; every behavioural line stays as upstream wrote it.
+
+- [ ] **Step 2: Resolve the `nle` dependency**
+
+Prefer installing `nle` into `.venv-cli-eval` purely for its constants (`nle.nethack.actions`,
+`glyph_is_pet`) if that works without pulling a second live engine. If it does not, write a thin
+`nle` shim re-exporting the `nethack_core` equivalents. Whichever route, record why. The env seam
+(`NLE.step`, observation access) binds to our `NetHackCoreEnv`.
+
+- [ ] **Step 3: Expose them as a new skill set — do not replace the existing one**
+
+Register the ported skills in `nethack_harness/tools/skills.py` behind
+`skill_set="netplay_true"`, leaving the current `netplay` set untouched. That keeps the three
+proven arms runnable and lets us A/B the action surface deliberately.
+Cover: `ALL_COMMAND_SKILLS`, `set_avoid_monster_flag`, `melee_attack`, `explore_level`, `move_to`,
+`go_to`, `press_key`, `type_text` (per `netplay/__init__.py:9-18`).
+
+- [ ] **Step 4: Prove one skill end-to-end**
+
+`melee_attack` and `explore_level` are the two that matter. Drive each against a real engine on a
+pinned seed and assert it moves the game — not a mock.
+
+- [ ] **Step 5: Keep the suite green**
+
+The 208 existing tests must still pass; `.venv-cli-eval` stays stock apart from any deliberate
+`nle` install, which must be recorded.
