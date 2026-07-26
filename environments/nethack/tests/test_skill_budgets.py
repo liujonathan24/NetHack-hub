@@ -124,6 +124,27 @@ def test_explore_and_descend_default_step_budget_is_bounded():
     assert sig.parameters["max_game_steps"].default == default
 
 
+def test_explore_and_descend_budget_is_a_cap_not_just_a_default():
+    """A default the model can override to 100000 is not a bound.
+
+    Observed live in smoke3: the agent called it with `max_game_steps=200`,
+    stepping straight past the default. NetPlay's 100-turn cap is not
+    agent-overridable either.
+    """
+    env, obs, character = _env()
+    try:
+        res = explore_and_descend(
+            env, shape(_core(env), character),
+            max_floors=1, max_game_steps=100000, max_seconds=30.0,
+        )
+        turn = int(_core(env).blstats[20])
+        assert turn <= skills._EAD_MAX_GAME_STEPS + 50, (
+            f"burned {turn} in-game turns in one call: {res.feedback}"
+        )
+    finally:
+        env.close()
+
+
 def test_explore_and_descend_honours_a_wall_clock_deadline():
     env, obs, character = _env()
     try:
@@ -134,7 +155,7 @@ def test_explore_and_descend_honours_a_wall_clock_deadline():
         )
         elapsed = time.monotonic() - t0
         assert elapsed < 5.0, f"deadline ignored: {elapsed:.1f}s"
-        assert "time" in res.feedback.lower() or "budget" in res.feedback.lower(), (
+        assert "wall-clock time budget" in res.feedback, (
             f"deadline exit not reported: {res.feedback}"
         )
     finally:

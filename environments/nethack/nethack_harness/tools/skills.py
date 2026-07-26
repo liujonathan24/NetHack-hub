@@ -1396,8 +1396,17 @@ def find_and_descend(env: NetHackCoreEnv, obs: StructuredObservation, max_action
 # something pathological happens (a pathfinding blowup on a huge revealed
 # level), never during normal play. It exists so that one skill call can never
 # eat a rollout's wall-clock, which is unbounded today.
+#
+# Both are CAPS, not just defaults: the model chooses the arguments, and
+# smoke3 caught it calling `explore_and_descend(max_game_steps=200)` on its own
+# — stepping straight past the default. NetPlay's 100-turn cap is likewise not
+# agent-overridable. The ceiling is set above the default so an agent that
+# knows it is mid-search can still ask for a longer run, just not an unbounded
+# one.
 _EAD_DEFAULT_GAME_STEPS = 120
+_EAD_MAX_GAME_STEPS = 200
 _EAD_DEFAULT_SECONDS = 60.0
+_EAD_MAX_SECONDS = 60.0
 
 _EAD_CMAP_LUT = None
 _EAD_CLOSED_CMAPS = None
@@ -1468,10 +1477,17 @@ def _glyph_clean_chars(glyphs):
     "parameters": {
         "max_floors": {"type": "integer", "default": 1,
                        "description": "descend at most this many floors before returning"},
-        "max_game_steps": {"type": "integer", "default": _EAD_DEFAULT_GAME_STEPS,
-                           "description": "hard in-game step budget for this call"},
-        "max_seconds": {"type": "number", "default": _EAD_DEFAULT_SECONDS,
-                        "description": "hard wall-clock budget for this call"},
+        "max_game_steps": {
+            "type": "integer", "default": _EAD_DEFAULT_GAME_STEPS,
+            "description": (
+                f"in-game step budget for this call; capped at "
+                f"{_EAD_MAX_GAME_STEPS} (in-game turns are your hunger clock)"
+            ),
+        },
+        "max_seconds": {
+            "type": "number", "default": _EAD_DEFAULT_SECONDS,
+            "description": f"wall-clock budget; capped at {_EAD_MAX_SECONDS:g}s",
+        },
     },
 })
 def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
@@ -1487,6 +1503,10 @@ def explore_and_descend(env: NetHackCoreEnv, obs: StructuredObservation,
     import time as _time
 
     import numpy as np
+
+    # Clamp, don't trust: these arrive from the model.
+    max_game_steps = max(1, min(int(max_game_steps), _EAD_MAX_GAME_STEPS))
+    max_seconds = min(float(max_seconds), _EAD_MAX_SECONDS) if max_seconds and max_seconds > 0 else _EAD_MAX_SECONDS
     from nethack_core import actions as _nh
     # Glyph predicates (glyph_is_monster/pet) -- pure-Python, nle-free.
     from nethack_core import glyphs as _glyph
