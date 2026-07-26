@@ -47,7 +47,14 @@ max_turns = 200
 # Per-turn NDJSON, one file per rollout — the same channel the acceptance
 # artifact under `tools/cli_harness_eval/acceptance/` was cut from. Without this
 # the only record of what the agent saw is the trace's tool results.
-trace_dir = "outputs/cli_harness_eval/claude_code/turns"
+#
+# ABSOLUTE ON PURPOSE. `trace_dir` is resolved by the TOOL SERVER process, whose
+# cwd is its own runtime workdir (`/tmp/vf-<id>`), and that directory is deleted
+# at teardown — so a relative value silently discards the entire per-turn record
+# with no error. Measured (Task 10, arm 2): two otherwise identical rollouts
+# produced no file (relative) and 12 lines (absolute). `prime_agent.toml`
+# already carries the fix; `control.toml` gets it in the same commit.
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/cli_harness_eval/claude_code/turns"
 # Seed AGENTS.md / CLAUDE.md, wiki/ and memory/ into the agent's workdir --
 # the filesystem counterpart of the affordances the control arm gets through
 # its system prompt, wiki tools and Journal.

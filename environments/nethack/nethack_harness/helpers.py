@@ -154,6 +154,13 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
         entry = {
             "turn": state.get("turn_count", 0),
             "t_wall": _time.time(),
+            # Strictly monotonic clock (unaffected by NTP/wall-clock
+            # adjustments), alongside `t_wall`. Diffing consecutive `t_mono`
+            # values is the reliable way to measure seconds/call and detect
+            # superlinear latency growth as context accumulates over a long
+            # rollout (`t_wall` deltas can be corrupted by a clock step
+            # mid-rollout; `t_mono` cannot).
+            "t_mono": _time.monotonic(),
             "variant": env_self.variant,
             "raw_grid": grid,
             "status": status,

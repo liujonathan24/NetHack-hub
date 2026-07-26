@@ -740,6 +740,32 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if skill_name == "" and _NO_TOOL_CALL_SENTINEL in skill_args:
             return skill_args[_NO_TOOL_CALL_SENTINEL]
 
+        # Dead character: refuse to step the engine. The native verifiers
+        # rollout loop already stops calling in via `is_completed` once
+        # `state["terminated"]` is set, but the MCP-exposed toolset (Claude
+        # Code, Prime Agent) calls `_apply_tool_call` directly, per tool
+        # call, with no such gate in between — that is exactly how the
+        # committed arm-2 acceptance rollout burned 7 of its 12 calls on a
+        # tombstone `--More--` screen after dying at call 6. Once
+        # `state["died"]` is set (by the zero-HP check or either terminal
+        # detector below), every further call is a no-op against the engine:
+        # no `env.step`, no turn-counter advance, no reward.
+        if state.get("died"):
+            content = self.spec.turn_template(
+                state["structured_obs"], state["journal"], state,
+                compact=self.compact_obs,
+                journal_max_chars=self.journal_render_max_chars,
+            )
+            content = compose_user_content(
+                content,
+                ["[Your character is dead. The game is over; no further actions are possible.]"],
+            )
+            _write_trace_entry(
+                self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
+                [], 0.0, content_to_text(content), obs_content=content,
+            )
+            return content
+
         env: NetHackCoreEnv = state["env"]
 
         # Gate hallucinated tool calls: reject any skill the model was NOT given
@@ -1024,6 +1050,21 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # be confused for a death here.)
         if terminated and not state["ascended"] and not state["died"]:
             state["died"] = True
+            state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+        # Zero-HP fallback: neither detector above catches a death whose
+        # message screen never reaches the marker scan and whose NLE
+        # `terminated` flag never fires — e.g. NetHack's death sequence parks
+        # on a prompt chain (Final Attributes -> possessions -> tombstone)
+        # that the env's own auto-dismiss loop cannot outlast, or a raw state
+        # poke (`modify={"hp": 0}`) that bypasses the engine's death codepath
+        # entirely. `hitpoints == 0` in the shaped status is authoritative
+        # for death regardless of how the game got there: this is an
+        # ADDITIONAL path, not a replacement for the two detectors above, so
+        # a real ascension or a message-detected death still short-circuits
+        # first via the `state["died"]`/`state["ascended"]` guards.
+        if not state["ascended"] and not state["died"] and s.get("hitpoints", 1) == 0:
+            state["died"] = True
+            state["terminated"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.

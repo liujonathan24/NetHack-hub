@@ -62,7 +62,13 @@ max_turns = 150
 # reward, dlvl, hp) — one file per rollout. This is the only channel that
 # records what the agent actually saw each turn; the acceptance artifact under
 # `tools/cli_harness_eval/acceptance/` was cut from its CLI-arm counterpart.
-trace_dir = "outputs/cli_harness_eval/control/turns"
+#
+# ABSOLUTE ON PURPOSE — see prime_agent.toml's note on the same key and
+# configs/README.md caveat 1: a relative value resolves inside the rollout's
+# own runtime workdir, which is deleted at teardown, so the per-turn NDJSON
+# would be lost with no error. `claude_code.toml` gets the same fix in the
+# same commit; `prime_agent.toml` already carries it (Task 10).
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/cli_harness_eval/control/turns"
 
 [timeout]
 setup = 1800.0
