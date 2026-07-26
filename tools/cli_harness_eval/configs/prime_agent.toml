@@ -56,7 +56,17 @@ max_skill_calls = 150
 max_turns = 200
 # Per-turn NDJSON, one file per rollout — the same channel the acceptance
 # artifacts under `tools/cli_harness_eval/acceptance/` were cut from.
-trace_dir = "outputs/cli_harness_eval/prime_agent/turns"
+#
+# ABSOLUTE ON PURPOSE. `trace_dir` is resolved by the TOOL SERVER process, whose
+# cwd is its own runtime workdir (`/tmp/vf-<id>`), and that directory is deleted
+# at teardown — so a relative value silently discards the entire per-turn record
+# with no error. Measured: two otherwise identical rollouts produced no file
+# (relative) and 12 lines (absolute). `control.toml` and `claude_code.toml` still
+# carry relative values; fixing those belongs to Task 11, which owns the launch.
+#
+# Machine-specific, like `harness.path_prepend` below. Elsewhere, override on the
+# command line: `--taskset.trace-dir "$PWD/outputs/..."`.
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/cli_harness_eval/prime_agent/turns"
 # Seed AGENTS.md / CLAUDE.md, wiki/ and memory/ into the agent's workdir. Prime
 # Agent loads AGENTS.md (and CLAUDE.md) from the cwd at startup, the same way
 # Claude Code does, so this lands as real context on both arms.

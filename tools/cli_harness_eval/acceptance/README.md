@@ -78,19 +78,60 @@ runtime, seed 0, `Val-hum-neu-fem`, `task_spec="full_nle"`, `skill_set="netplay"
 ## What it shows
 
 * **`trace.tools` is a single tool, `ipython`** — the structural difference from arm 1, whose
-  trace lists 18 `mcp__nethack__*` tools. Every NetHack call happens *inside* Python, so the
-  per-skill breakdown is not in the trace; `metrics.skill_calls` and the tool server's own log
-  are where it lives. **Task 11 must not count arm-2 skills from the node graph.**
+  trace lists 18 `mcp__nethack__*` tools. Every NetHack call happens *inside* Python, so there
+  are no structured per-skill tool names to count: the breakdown below had to be recovered by
+  regexing `nethack\.(\w+)\(` out of the Python source in `tool_calls[].arguments.code`, which is
+  textual and fragile (a call built dynamically, or in a loop, would be missed).
+  `metrics.skill_calls` is the authoritative total. **Task 11 must take arm-2 counts from
+  `metrics`, not from the node graph.**
 * `metrics`: `skill_calls = 12` (the cap), `budget_exhausted = 1`, `moves_executed = 0`,
-  `max_dlvl_reached = 2`, `descent_count = 1`.
+  `max_dlvl_reached = 2`, `descent_count = 1`, **`died = 0`** — which is wrong; see below.
 * `stop_condition = "call_budget_exhausted"`, `errors: []` — the toolset-side referee ended the
   episode, counting over the HTTP `/state` channel.
+* **The skills the agent actually ran**, in order, derived from the 18 `ipython` calls in
+  `traces.jsonl` and cross-checked against the 12 lines of `turns.ndjson`:
+
+  | # | skill | observation head (`turns.ndjson`) |
+  |---|---|---|
+  | 1 | `explore_and_descend()` | `descended 0 floor(s) over 400 game steps` |
+  | 2 | `explore_and_descend()` | `descended 1 floor(s) over 120 game steps` |
+  | 3 | `explore_and_descend()` | `descended 0 floor(s) …` |
+  | 4 | `eat(item='food ration')` | `[Selected an uncursed food ration.]` |
+  | 5 | `explore_and_descend()` | `descended 0 floor(s) …` |
+  | 6 | `explore_and_descend()` | `[autohalt: menu auto-dismissed x1]` — **HP reaches 0 here** |
+  | 7 | `pray()` | `[Prayed.]` |
+  | 8 | `explore_and_descend()` | `[Nothing to explore from here…]` |
+  | 9 | `move_to(x=57, y=15)` | `[Already at (57,15).]` |
+  | 10 | `search()` | `[Searched.]` |
+  | 11 | `attack(direction='N')` | `[Moved N (blocked at first step).]` |
+  | 12 | `explore_and_descend()` | `[Nothing to explore from here…]` |
+  | 13 | `descend()` | **refused** — the cap was already spent |
+
+  So `explore_and_descend` ×7, `eat` ×1, `pray` ×1, `move_to` ×1, `search` ×1, `attack` ×1 = 12
+  executed, plus a 13th (`descend`) refused by the referee. The refusal *string* is not in the
+  trace: the 18th `ipython` call has no tool result at all (17 results for 18 calls), because the
+  `@stop` hook fired on `budget_exhausted` before it could be relayed.
 * **18 model turns for 12 executed skills**, versus arm 1's ~1 skill per turn: the agent spent
   turns on discovery (`await nethack.list_tools()`, reading `SKILL.md`) that arm 1 gets free.
-* The netplay gate held in a new place. The agent tried `await nethack.move(direction='N')` and
-  `McpIntegration.__getattr__` refused it client-side — `'nethack' has no tool 'move'.
-  Available: ...` — so the call never reached the wire, let alone the engine
-  (`moves_executed = 0`).
+* **The `move` gate here is BY CONSTRUCTION, not measured.** `move` is absent from the 18 tools
+  the server advertises, so `await nethack.move(...)` would raise `AttributeError` in the kernel
+  — but **this agent never tried it**. There is no `nethack.move(` call anywhere in
+  `traces.jsonl`, and no refusal text. `moves_executed = 0` is the gate-leak canary Task 13
+  §10.3 describes: it cannot fail while `skill_set = "netplay"`, and it is not independent
+  evidence. What does carry the gate is `move` being absent from the advertised tool list and
+  `_verify_gate.py`'s no-step assertion.
+* **The character DIED at call 6, and the run was scored `died = 0`.** `turns.ndjson` shows
+  `hp = 0` from turn 6 onward; the observations from there carry `Final Attributes: … You are
+  dead. --More--` with the in-game turn frozen at 1514; and the last seven calls all drained into
+  that tombstone screen. The episode still ended on `call_budget_exhausted`. **`died` is unusable
+  on the CLI arms as it stands**, and post-death budget drain needs its own detector: at 150 calls
+  an agent that dies at call 20 burns 130 no-ops and is scored not-died.
+* **`attack` executes the low-level `move` primitive.** `attack` is
+  `return move(env, obs, direction=direction)` (`nethack_harness/tools/skills.py:330`), and call
+  11's result is literally `[Moved N (blocked at first step).]`. `moves_executed` counts only the
+  adapter *named* `move` (`nethack_v1.py:401-406`), so this never shows up there. The accurate
+  statement of the gate is **"no unrestricted `move` tool was published"** — not "the low-level
+  `move` primitive never executes". Symmetric across arms, so not a bias.
 * Tool results are the full rendered observation (`=== JOURNAL ===` / `=== MAP ===` /
   `=== STATUS ===` / `=== INVENTORY ===` / `=== ADJACENT ===`), printed by the agent's own code.
 

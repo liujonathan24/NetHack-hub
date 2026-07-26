@@ -134,6 +134,20 @@ def test_the_three_arms_pin_the_same_experiment():
     assert cc["trace_dir"] != pa["trace_dir"] != control["args"]["trace_dir"]
 
 
+def test_the_prime_agent_arms_trace_dir_is_absolute():
+    """REGRESSION, measured. `trace_dir` is resolved by the TOOL SERVER process,
+    whose cwd is its own runtime workdir (`/tmp/vf-<id>`), and that directory is
+    deleted at teardown. A relative value therefore discards the entire per-turn
+    NDJSON with no error: two otherwise identical rollouts produced no file
+    (relative) and 12 lines (absolute).
+
+    Only this arm's config is asserted. `control.toml` and `claude_code.toml` are
+    still relative on purpose — Task 11 owns the launch and those two arms.
+    """
+    trace_dir = _load("prime_agent.toml")["taskset"]["trace_dir"]
+    assert pathlib.PurePosixPath(trace_dir).is_absolute(), trace_dir
+
+
 def test_the_prime_agent_arm_selects_the_external_harness_on_the_subprocess_runtime():
     prime = _load("prime_agent.toml")
     assert prime["harness"]["id"] == "nethack-prime-agent"

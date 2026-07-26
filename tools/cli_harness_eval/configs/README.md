@@ -254,9 +254,17 @@ One rollout, seed 0, `max_skill_calls = 12`, `z-ai/glm-5.2`, subprocess runtime:
 `skill_calls = 12` (the cap), `budget_exhausted = 1`, `stop_condition = "call_budget_exhausted"`,
 `moves_executed = 0`, `errors: []`, `max_dlvl_reached = 2` — the agent descended a floor. It took
 **18 model turns for 12 executed skills** (arm 1 runs ~1 skill per turn), spending the difference
-on discovery: reading `SKILL.md` and calling `await nethack.list_tools()`.
+on discovery: reading `SKILL.md` and calling `await nethack.list_tools()`. The executed sequence
+was `explore_and_descend` ×7, `eat`, `pray`, `move_to`, `search`, `attack`, plus a 13th call
+(`descend`) refused by the referee.
 
-**The run is committed** under [`../acceptance/`](../acceptance/README.md).
+**The run is committed** under [`../acceptance/`](../acceptance/README.md), whose "What it shows"
+section carries the per-call table and two scoring findings Task 11 must handle: the character
+**died at call 6** and was still scored `died = 0` (the last seven calls drained into a tombstone
+screen), and **`attack` executes the low-level `move` primitive**, so the gate's honest phrasing
+is "no unrestricted `move` tool was published" rather than "the low-level `move` never executes".
+Note also that this agent never attempted `move`, so arm 2's `move` gate is asserted **by
+construction** here, not measured.
 
 Three operational facts the run established, all of which bite a 16-seed launch:
 
