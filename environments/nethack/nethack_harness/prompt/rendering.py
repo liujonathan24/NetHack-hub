@@ -545,6 +545,18 @@ def _hero_depth(structured) -> int:
         return -1
 
 
+# Mirrors nethack_harness.tools.skills.eat()'s food-keyword filter exactly, so
+# the HINT ladder can never recommend an item the eat() skill would then
+# reject, and never claims "no food" when eat() would actually find some.
+_FOOD_KEYWORDS = ("food", "corpse", "ration", "fruit", "apple", "pancake", "cookie", "tripe")
+
+
+def _edible_inventory_items(structured) -> list:
+    """Inventory items eat() would accept, in inventory order."""
+    inv = getattr(structured, "inventory", None) or []
+    return [it for it in inv if any(k in it.description.lower() for k in _FOOD_KEYWORDS)]
+
+
 def _remember_stairs_down(state, structured, feats) -> None:
     """Memoise every `>` we can see, KEYED BY DEPTH.
 
@@ -573,6 +585,32 @@ def _remembered_stairs_down(state, structured) -> set:
         elif len(entry) == 2:   # legacy unkeyed entry; treat as current floor
             out.add(tuple(entry))
     return out
+
+
+def _tried_exits_on_level(state, depth) -> set:
+    """Exits already recommended-and-abandoned on the CURRENT floor, as {(x,y)}.
+
+    KEYED BY DEPTH for the same reason `_remembered_stairs_down` is: (x,y) means
+    a different tile on every level, and an unkeyed memo would carry Dlvl 1's
+    "already tried" doors onto Dlvl 2 and permanently exclude legitimate exits
+    there (the class of bug Task 17 fixed for the `>` memo).
+    """
+    out = set()
+    for entry in (state.get("_tried_exits") if state is not None else None) or ():
+        if len(entry) == 3:
+            d, x, y = entry
+            if d == depth:
+                out.add((x, y))
+    return out
+
+
+def _mark_exit_tried(state, depth: int, x: int, y: int) -> None:
+    """Record that (x,y) on floor `depth` was recommended repeatedly without
+    the situation changing, so later renders route around it instead of
+    cycling back."""
+    if state is None:
+        return
+    state.setdefault("_tried_exits", set()).add((depth, x, y))
 
 
 def _descent_status_block(structured, state) -> list[str]:
@@ -1103,11 +1141,32 @@ def format_observation_as_chat(
                 h = structured.status.get("hunger_state")
                 if h is not None and h >= 3:
                     # Weak (3) or worse — agent will start losing HP unless they eat.
-                    hint = (
-                        f"Hunger is at {('Weak','Fainting','Starving')[min(h-3,2)]}. "
-                        "Call `eat(item=<food letter>)` now; if no food in inventory, "
-                        "`pray` (once) for divine aid."
-                    )
+                    label = ("Weak", "Fainting", "Starving")[min(h - 3, 2)]
+                    edible = _edible_inventory_items(structured)
+                    if edible:
+                        # Name the actual letter — 40/40 observed turns told the
+                        # agent to eat a literal `<food letter>` placeholder,
+                        # which no tool call accepts.
+                        it = edible[0]
+                        also = (f" (also: {', '.join(e.letter for e in edible[1:3])})"
+                                if len(edible) > 1 else "")
+                        hint = (
+                            f"Hunger is at {label}. You have food: {it.letter} "
+                            f"({it.description}){also}. Call "
+                            f"`eat(item=\"{it.letter}\")` now."
+                        )
+                    else:
+                        # No edible item exists — telling the agent to `eat`
+                        # anyway is unactionable (this is the bug: 40/40 traced
+                        # turns did exactly that, and 2/5 seeds starved). Say
+                        # plainly there is no food and give a reachable action.
+                        hint = (
+                            f"Hunger is at {label}. No food in inventory — "
+                            "nothing to eat. `pray` once for divine aid (skip "
+                            "if you've prayed recently), or push toward "
+                            "unexplored ground / the next floor to find a "
+                            "corpse or ration."
+                        )
         if hint is None and under and "stairs DOWN" in under:
             hint = "You are on stairs down. Call `descend` now."
         elif hint is None and under and under.startswith("on tile:"):
@@ -1210,6 +1269,13 @@ def format_observation_as_chat(
         # kick tiles it could have walked through. Now it ranks over the
         # structured feature list, states how many exits there are, and only
         # mentions kicking for a genuinely closed door.
+        # Set only when this render's hint is the exit-navigation one below,
+        # so the repeat-escalation block can mark that SPECIFIC exit "tried"
+        # once it has been repeated without progress — instead of the model
+        # cycling back to it later (13,10 -> 26,10 -> 34,4 -> ... -> 13,10 in
+        # the traced run, 26% of turns carrying a stale "not working" warning
+        # that never actually changed the recommendation).
+        exit_hint_target: Optional[tuple[int, int, int]] = None
         if hint is None and not _on_stairs_override and state is not None and "raw_obs" in state:
             try:
                 from nethack_harness.prompt.features import (
@@ -1220,7 +1286,10 @@ def format_observation_as_chat(
                     all_exits = exits(feats)
                     px = int(structured.status.get("x", 0))
                     py = int(structured.status.get("y", 0))
-                    best = nearest_exit(feats, px, py)
+                    depth = _hero_depth(structured)
+                    tried = _tried_exits_on_level(state, depth)
+                    untried = [f for f in all_exits if (f.x, f.y) not in tried]
+                    best = nearest_exit(untried, px, py) if untried else None
                     if best is not None:
                         n = len(all_exits)
                         kind = ("a closed door" if best.label == DOOR_CLOSED
@@ -1232,6 +1301,17 @@ def format_observation_as_chat(
                             f"No `>` visible. Nearest way out is {kind} at "
                             f"({best.x},{best.y}) — `move_to(x={best.x}, "
                             f"y={best.y})`.{extra}{others}"
+                        )
+                        exit_hint_target = (depth, best.x, best.y)
+                    elif all_exits:
+                        # Every exit on this level was already recommended and
+                        # abandoned (see the escalation block below) — cycling
+                        # through them again is the thrash this fixes.
+                        hint = (
+                            "Every visible exit from this area has already "
+                            "been tried without progress. Call "
+                            "`search(times=10)` for a hidden passage instead "
+                            "of retrying a known exit."
                         )
             except Exception:
                 pass
@@ -1251,6 +1331,8 @@ def format_observation_as_chat(
                     "working. Try a different frontier, a different exit, or "
                     "`search` for a hidden passage.]"
                 )
+                if exit_hint_target is not None:
+                    _mark_exit_tried(state, *exit_hint_target)
         if hint and not self_dispatch:
             lines.append(f"=== HINT === {hint}")
             lines.append("")
