@@ -526,12 +526,28 @@ def pray(env: NetHackCoreEnv, obs: StructuredObservation) -> SkillResult:
     "parameters": {},
 })
 def engrave_elbereth(env: NetHackCoreEnv, obs: StructuredObservation) -> SkillResult:
-    # E + - (use finger) + Elbereth + Enter + Enter
+    # E + - (use finger) + Elbereth + Enter.
+    #
+    # There used to be a SECOND, unconditional Enter here ("any prompt close").
+    # That CR was the origin of the `Unknown command '^M'` the agents kept
+    # tripping over: whenever the engrave finished without leaving a prompt
+    # open, the extra CR reached NetHack's command dispatcher (`rhack`), which
+    # renders byte 13 as `^M` and says so on the top line -- where it then sat,
+    # unrepainted, for every following turn. It appeared 31x in one run-1
+    # rollout and 17x in another, and one agent invented (and wrote into its
+    # notes) a bogus ritual around it: "when move_to fails to advance turn,
+    # call engrave_elbereth to unstick the game".
+    #
+    # Closing a prompt is not this skill's job: env_response already runs a
+    # guarded auto-dismiss loop after every skill (nethack.py, "Auto-dismiss any
+    # menu/inventory_prompt that's still open") which presses CR only while a
+    # --More-- is actually up. The keystroke funnel also swallows a stray CR now
+    # (`_cr_would_be_unknown_command`), so this is belt and braces -- but the
+    # source of the stray CR is gone either way.
     actions = [int(ord('E')), int(ord('-'))]
     for ch in "Elbereth":
         actions.append(int(ord(ch)))
     actions.append(int(nethack.MiscAction.MORE))  # finish text
-    actions.append(int(nethack.MiscAction.MORE))  # any prompt close
     return SkillResult(actions, "Engraved Elbereth.")
 
 

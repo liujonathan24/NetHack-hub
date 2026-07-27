@@ -42,13 +42,22 @@ class TypedNetHackInterface(NetHackInterface):
     def step(self, action):
         if isinstance(action, Action):
             from nethack_harness.tools.skills import registry
-            from nethack_harness.helpers import _to_action_indices
+            from nethack_harness.helpers import (
+                CARRIAGE_RETURN,
+                _cr_would_be_unknown_command,
+                _to_action_indices,
+            )
 
             res = registry.call(action.name, self._env, self._structured, **action.args)
             total = 0.0
             term = trunc = False
             info = {"feedback": res.feedback}
             for idx in _to_action_indices(self._env, res.actions):
+                # Same stray-CR swallow as the harness env_response funnel, so
+                # the two keystroke paths cannot diverge: a CR that reaches
+                # command context only ever yields `Unknown command '^M'.`
+                if idx == CARRIAGE_RETURN and _cr_would_be_unknown_command(self._raw):
+                    continue
                 self._raw, r, term, trunc, _info2 = self._env.step(idx)
                 total += float(r)
                 if term or trunc:

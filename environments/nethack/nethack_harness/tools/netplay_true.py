@@ -44,6 +44,10 @@ import netplay.nethack_agent.skills as netplay_skills  # noqa: E402
 from netplay.nethack_agent.agent import NetHackAgent  # noqa: E402
 
 from nethack_harness.tools.skills import SkillResult, registry  # noqa: E402
+from nethack_harness.helpers import (  # noqa: E402
+    CARRIAGE_RETURN,
+    _cr_would_be_unknown_command,
+)
 
 
 # Upstream netplay/__init__.py:9-18, verbatim in content and order.
@@ -151,6 +155,19 @@ class NetPlayEngineEnv:
         return _ObsMapping(core), {}
 
     def step(self, action):
+        # Same stray-CR swallow as the harness funnel (nethack.py env_response /
+        # interface.py TypedNetHackInterface.step). Upstream's `press_key`/
+        # `type_text` skills can pass a bare CR (RawKeyPress.KEYPRESS_ENTER = 13,
+        # nethack_utils/nle_wrapper.py) straight to this method -- e.g.
+        # `np_press_key(key="enter")` outside a prompt -- and every netplay_true
+        # skill routes its engine steps through here (see `run_netplay_skill`'s
+        # `_tracking_step`), so this is the one place that has to catch it. A CR
+        # that reaches command context is only ever `Unknown command '^M'.`; a
+        # CR a prompt is waiting for is untouched (checked live, same as the
+        # other two funnels).
+        if int(action) == CARRIAGE_RETURN and _cr_would_be_unknown_command(self.last_raw):
+            core = self.last_raw
+            return _ObsMapping(core), 0.0, bool(self.terminated), bool(self.truncated), {}
         core, reward, terminated, truncated, info = self._env.step(int(action))
         self.reward_acc += float(reward)
         self.terminated = self.terminated or bool(terminated)

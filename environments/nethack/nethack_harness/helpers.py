@@ -673,6 +673,48 @@ def _to_action_indices(env: NetHackCoreEnv, actions: list[int]) -> list[int]:
     return [int(a) for a in actions]
 
 
+# Carriage return. NetHack binds it in prompt contexts (getlin submit, --More--
+# acknowledge, menu confirm) but NOT in command context, where `rhack()` falls
+# through to its bad-command branch and prints `Unknown command '^M'.`
+# (third_party/NetHack/src/src/cmd.c, `visctrl()` renders 13 as "^M").
+CARRIAGE_RETURN = 13
+
+
+def _cr_would_be_unknown_command(obs) -> bool:
+    """True when feeding a CR to the engine *right now* would be a stray CR.
+
+    A stray CR is one that reaches NetHack's command dispatcher rather than a
+    prompt, and its only effect is the `Unknown command '^M'.` top-line message.
+    That message then persists on the tty until something repaints it, so a
+    single stray CR pollutes the agent's observation for many turns afterwards.
+
+    The discriminator is the engine's own `misc` observation, which is exactly
+    the three "am I waiting for input, and what kind" flags:
+
+        misc == (in_yn_function, in_getlin, xwaitingforspace)
+
+    Measured against a live engine (Val/Monk, seed 19):
+
+        idle, awaiting a command  -> (0, 0, 0)   <- a CR here is stray
+        "[- or ?*]" item prompt   -> (1, 0, 0)
+        --More--                  -> (0, 1, 1)
+        getlin ("write what?")    -> (0, 1, 0)
+        inventory menu, "(end)"   -> (0, 0, 1)
+
+    So a CR is stray iff every flag is clear. Anything else -- including a state
+    we cannot read -- is treated as "a prompt might be open", and the CR is sent
+    unchanged. Never raises: a detector failure must not break a rollout, and
+    failing open only restores the previous behaviour.
+    """
+    try:
+        misc = obs.get("misc") if isinstance(obs, dict) else getattr(obs, "misc", None)
+        if misc is None:
+            return False
+        return all(int(v) == 0 for v in misc)
+    except Exception:
+        return False
+
+
 
 
 # ---------- rewards ----------
@@ -928,12 +970,29 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
     elif "," in skill_set:
-        keep = {s.strip() for s in skill_set.split(",")}
+        # Tokens are tool names, EXCEPT a preset name, which expands to that
+        # preset's tools. The 1d arms are documented above as
+        # "<netplay tools>,reveal,request_map" — but a token like "netplay_true"
+        # matches no *registered tool*, so the arm silently collapsed to just
+        # `request_map` (1 tool). Expanding presets by recursion keeps this
+        # correct as the presets themselves change.
+        tokens = [s.strip() for s in skill_set.split(",") if s.strip()]
+        presets = {"netplay", "netplay_true", "dir8", "move", "full"}
         out = []
+        seen: set = set()
+        for tok in tokens:
+            if tok in presets:
+                for adapter in _build_skill_adapter_callables(skill_set=tok):
+                    nm = getattr(adapter, "__name__", "")
+                    if nm and nm not in seen:
+                        seen.add(nm)
+                        out.append(adapter)
+        keep = {t for t in tokens if t not in presets}
         for name, schema in skill_registry.all_schemas().items():
             if name in _HARNESS_OWNED: continue
-            if name not in keep: continue
+            if name not in keep or name in seen: continue
             params = schema.get("parameters", {}) or {}
+            seen.add(name)
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
     # default 'full'

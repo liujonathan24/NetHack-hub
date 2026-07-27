@@ -215,6 +215,8 @@ from nethack_harness.helpers import (
     _maybe_belief_state_summary,
     _maybe_distill,
     _to_action_indices,
+    _cr_would_be_unknown_command,
+    CARRIAGE_RETURN,
     scout_reward,
     descent_reward,
     success_reward,
@@ -947,7 +949,18 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # behaviour is unchanged.
             for step_obs in (getattr(result, "pre_visible_obs", None) or []):
                 _record_scout_and_visited(state, step_obs)
+        cr_swallowed = 0
         for step_i, action in enumerate(action_indices):
+            # Swallow a stray carriage return. A CR that lands in command
+            # context is never anything but `Unknown command '^M'.` on the top
+            # line, which then persists in the observation for many turns and
+            # has demonstrably sent agents chasing an imaginary "stuck input
+            # buffer" (see `_cr_would_be_unknown_command`). Dropping it here --
+            # the single funnel every skill's keystrokes pass through -- makes
+            # it a no-op instead. A CR that a prompt is waiting for is untouched.
+            if action == CARRIAGE_RETURN and _cr_would_be_unknown_command(last_obs):
+                cr_swallowed += 1
+                continue
             last_obs, r, terminated, truncated, info = env.step(action)
             total_reward += r
             _record_scout_and_visited(state, last_obs)
@@ -971,6 +984,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                     if "[yn" in msg or "--More--" in msg:
                         halt_reason = "prompt opened mid-sequence"
                         break
+
+        # Observability: a non-zero count means a skill tried to feed the engine
+        # a CR in command context. It is harmless now, but it still points at a
+        # skill that is emitting keystrokes it does not need.
+        state["cr_swallowed_total"] = int(state.get("cr_swallowed_total", 0)) + cr_swallowed
 
         scout_after = len(state["scout_tiles_seen"])
         state["scout_delta"] = scout_after - scout_before
