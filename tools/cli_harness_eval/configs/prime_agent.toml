@@ -127,3 +127,11 @@ type = "subprocess"
 [timeout]
 setup = 1800.0
 rollout = 7200.0
+
+# Provider transients must not kill a rollout. Prime intermittently returns
+# `finish_reason: "error"`, which verifiers' ModdedChatCompletion schema rejects
+# (it allows only stop|length|tool_calls|content_filter|function_call); pydantic
+# raises inside the interception server and the harness exits 1. Measured: 1 of
+# 20 rollouts lost this way. The default is max_retries=0, so one hiccup is fatal.
+[retries.rollout]
+max_retries = 2
