@@ -283,6 +283,30 @@ def _map_rows_only(map_view: str) -> str:
     return "\n".join(rows[_TTY_MESSAGE_ROWS:])
 
 
+def _render_ascii_map(structured, state) -> str:
+    """The `=== MAP ===` body: chars-plane render when available, tty legacy
+    render otherwise.
+
+    `nethack_harness.prompt.ascii_map.render_map_from_chars` reads `chars` —
+    the game's actual dungeon state, which cannot contain menu/prompt prose
+    — instead of `structured.map_view` (built from `tty_chars`, see that
+    module's docstring for the bleed this avoids). `state["raw_obs"]` is
+    always set by the time a real turn renders (nethack.py sets it before
+    calling the turn template); the tty fallback exists only so a
+    hand-built StructuredObservation with no `raw_obs` in state (a handful
+    of synthetic-state unit tests that pass `include_map=False` anyway)
+    still renders something rather than raising.
+    """
+    if state is not None:
+        raw = state.get("raw_obs")
+        chars = getattr(raw, "chars", None) if raw is not None else None
+        if chars is not None:
+            from nethack_harness.prompt.ascii_map import render_map_from_chars
+
+            return render_map_from_chars(chars)
+    return _map_rows_only(structured.map_view)
+
+
 def _strip_blank_rows(map_view: str) -> str:
     """Drop fully-blank rows; trim trailing whitespace per row."""
     out = []
@@ -1024,7 +1048,7 @@ def format_observation_as_chat(
         lines.extend(_e1_spatial_belief_block(state, structured))
     if include_map:
         lines.append("=== MAP ===")
-        map_view = _map_rows_only(structured.map_view)
+        map_view = _render_ascii_map(structured, state)
         # Wave-3 Track C v2 (variant E2): paint '?' over truly-unseen tiles
         # adjacent to each frontier, directly on the map. Done BEFORE compaction
         # so glyph-RLE still applies to floor/corridor runs — and AFTER the

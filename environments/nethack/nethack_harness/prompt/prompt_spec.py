@@ -35,6 +35,7 @@ from nethack_harness.prompt.rendering import (
     _format_obs_glyphbox_native,
     _format_obs_summarize_reset,
     _glyph_run_encode,
+    _render_ascii_map,
     _strip_blank_rows,
 )
 from nethack_harness.helpers import (
@@ -198,7 +199,7 @@ def _balrog_plus_map_template(fmt):
                 chars=raw.chars,
             )
             return f"{desc}\n=== MAP (JSON) ===\n{body}\n"
-        map_view = structured.map_view
+        map_view = _render_ascii_map(structured, state)
         if compact:
             map_view = _glyph_run_encode(_strip_blank_rows(map_view))
         return f"{desc}\n=== MAP ===\n{map_view}\n"
@@ -374,12 +375,37 @@ def _balrog_delayed_map_template():
         desc = _format_obs_balrog(structured, journal, state, journal_max_chars)
         if not show_map:
             return f"{desc}\n{_DELAYED_MAP_PLACEHOLDER}\n"
-        map_view = structured.map_view
+        map_view = _render_ascii_map(structured, state)
         if compact:
             map_view = _glyph_run_encode(_strip_blank_rows(map_view))
         return f"{desc}\n=== MAP ===\n{map_view}\n"
 
     return _render
+
+
+def _bbox_json_template(structured, journal, state, *, compact, journal_max_chars):
+    """JSON body with the per-tile `cells` withheld; map regions via reveal().
+
+    `json_encode(..., detail="minimal")` emits player + entities and no map body
+    at all, which is exactly the half we want kept: entities stay structured and
+    coordinate-addressable, while the 21x79 tile array — the part that costs
+    thousands of tokens per turn — is served only when the agent asks for it.
+    Everything non-map (journal, status, inventory, under-player) renders as
+    usual, matching the plain BBOX cell.
+    """
+    from nethack_core.map_model import build_map_model
+    from nethack_harness.prompt.map_encoders import json_encode
+
+    body = json_encode(build_map_model(state["raw_obs"]), detail="minimal")
+    rest = format_observation_as_chat(
+        structured, journal, state, compact=compact,
+        journal_max_chars=journal_max_chars,
+        include_map=False, include_local=False,
+    )
+    return (
+        f"=== MAP (JSON, entities only) ===\n{body}\n"
+        f"{_BBOX_MAP_PLACEHOLDER}\n\n{rest}"
+    )
 
 
 def _bbox_template(structured, journal, state, *, compact, journal_max_chars):
@@ -596,6 +622,17 @@ def _build_registry(system_prompt: str) -> dict:
         # reveal(x1,y1,x2,y2), which returns an ASCII crop as tool feedback.
         "BBOX": canonical("BBOX", turn_template=_bbox_template,
                           obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # JSON body (player + entities, structured and addressable) with the
+        # per-tile `cells` array WITHHELD; the agent pulls map regions via
+        # reveal(x1,y1,x2,y2). Measured motivation: JSON inline costs ~3,400
+        # tok/turn (~4,300 with all 1b layers) against B0's ~690, while BBOX
+        # delivery runs ~480 because `reveal` fires on only 1-2% of turns. This
+        # cell asks whether JSON's structure is worth having once you stop
+        # paying for it every turn — and re-tests 1b's null result, which may
+        # have been an attention problem at 12-15k chars rather than the layers
+        # carrying no information.
+        "BBOX_JSON": canonical("BBOX_JSON", turn_template=_bbox_json_template,
+                               obs=ObsSpec(setup_flags={"_bbox_map": True})),
         # Continual-harness adaptation: periodic self-refinement directive.
         "P": canonical("P", turn_hooks=(_p_refinement_hook,)),
         # Full Continual Harness: refiner + sub-agents + system inject + run_macro.

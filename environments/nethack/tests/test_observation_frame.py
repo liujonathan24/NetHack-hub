@@ -156,8 +156,12 @@ def test_rendered_map_row_index_equals_map_y():
         rendered = format_observation_as_chat(
             structured, None, state={"raw_obs": raw}, compact=False
         )
-        block = rendered.split("=== MAP ===\n", 1)[1].split("\n\n", 1)[0]
-        rows = block.split("\n")
+        # Split on the next `===` header, not on the first blank line: since
+        # the MAP block now renders from `chars` (never the tty banner/menu),
+        # unexplored rows near the top of a fresh map are genuinely blank —
+        # splitting on "\n\n" would truncate the block before the player's row.
+        block = rendered.split("=== MAP ===\n", 1)[1].split("\n=== STATUS ===", 1)[0]
+        rows = block.rstrip("\n").split("\n")
         px = int(structured.status["x"])
         py = int(structured.status["y"])
         assert len(rows) > py, "map block is shorter than the player's row"
