@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+#
+# Run Prime Agent inside an apptainer container that cannot see /scratch.
+#
+# WHY THIS EXISTS
+# ---------------
+# Prime Agent's only built-in tool is `ipython` -- a full Python interpreter with
+# no denylist -- so nothing in its configuration can stop the agent from reading
+# the filesystem. In run 1 one rollout abandoned the game, probed the harness's
+# internals, printed the live MCP bearer token into its own trace, and then ran
+# `glob('/scratch/**', recursive=True)` on a shared multi-user GPFS filesystem;
+# it is the leading suspect for the 1h53m stall that burned that rollout. A
+# config-level clamp (arm 1's `disabled_tools = ["Bash"]`) is not an answer to a
+# Python interpreter. This is: an OS-level mount namespace where /scratch does
+# not exist.
+#
+# Drop-in: it takes prime-agent's argv and answers `--version` like the real
+# binary, so it satisfies `PrimeAgentHarness.setup`'s
+# `command -v <binary> && <binary> --version` probe. Point the arm at it with
+#
+#     [harness]
+#     binary = "<repo>/tools/cli_harness_eval/sandbox/prime-agent-apptainer"
+#
+# WHAT IS AND IS NOT VISIBLE INSIDE
+# ---------------------------------
+#   denied  /scratch, /projects, /tigress, $HOME, and every other site bind
+#           (`--no-mount bind-paths,home,cwd` drops apptainer.conf's site block
+#           at /etc/apptainer/apptainer.conf:440-446 plus the home and cwd binds;
+#           `mount hostfs = no` means nothing else is auto-bound)
+#   allowed /tmp -- required, and not optional: the rollout workspace
+#           (`/tmp/vf-<id>`), the skill package and per-rollout config
+#           (`$PRIME_AGENT_INSTALL_DIR`), and Prime Agent's per-user daemon
+#           socket (`/tmp/prime-agent-<uid>`) all live there
+#   allowed /opt/node -- the node+prime-agent install, bound READ-ONLY from
+#           wherever it lives on the host. It is the one path re-exposed from
+#           /scratch, at a different mount point, because prime-agent is an npm
+#           global with prebuilt native modules and rebuilding it inside an image
+#           is a bigger risk than exposing its own source read-only.
+#   allowed the host network namespace (no `--net`), so the MCP tool server and
+#           verifiers' interception endpoint stay reachable on 127.0.0.1 with no
+#           port mapping. Verified: a host-bound 127.0.0.1 listener answers 200
+#           from inside the container.
+#
+# The container is NOT a security boundary against a determined adversary --
+# it is a mount namespace, and apptainer runs as the invoking user. It is a hard
+# stop on the specific failure this experiment hit: an agent wandering a shared
+# cluster filesystem.
+set -euo pipefail
+
+: "${VF_SANDBOX_IMAGE:=docker://python:3.12-slim}"
+: "${VF_SANDBOX_NODE_DIR:=/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1}"
+: "${VF_SANDBOX_UV:=/home/jl0796/.local/bin/uv}"
+: "${VF_SANDBOX_HOME:=/tmp/vf-prime-agent/sandbox-home}"
+: "${VF_SANDBOX_TMP:=/tmp/vf-sandbox-tmp}"
+: "${PRIME_AGENT_INSTALL_DIR:=/tmp/vf-prime-agent}"
+# Keep SIF blobs off the home quota; /tmp here is a real 64G local filesystem.
+: "${APPTAINER_CACHEDIR:=/tmp/apptainer-cache-$(id -u)}"
+export APPTAINER_CACHEDIR
+
+command -v apptainer >/dev/null 2>&1 || {
+  echo "prime-agent-apptainer: apptainer not found on PATH" >&2
+  exit 127
+}
+[ -x "$VF_SANDBOX_NODE_DIR/bin/prime-agent" ] || [ -f "$VF_SANDBOX_NODE_DIR/bin/prime-agent" ] || {
+  echo "prime-agent-apptainer: no prime-agent under VF_SANDBOX_NODE_DIR=$VF_SANDBOX_NODE_DIR" >&2
+  exit 127
+}
+mkdir -p "$APPTAINER_CACHEDIR" "$VF_SANDBOX_HOME" "$VF_SANDBOX_TMP" "$PRIME_AGENT_INSTALL_DIR"
+
+# `/tmp` inside is `$VF_SANDBOX_TMP`, NOT the host `/tmp`. This is the difference
+# between real isolation and the appearance of it: Prime Agent is daemon-backed
+# even under `--print`, its supervisor socket is `<tmpdir()>/prime-agent-<uid>`,
+# and with the host `/tmp` mounted the containerized CLI attaches to whatever
+# supervisor is already listening there -- INCLUDING an uncontainerized one on
+# the host, in which case the IPython kernel runs outside the container and the
+# sandbox buys nothing. Measured: a run with the host `/tmp` mounted connected to
+# `/tmp/prime-agent-<uid>/daemon.sock` owned by a host process. Giving the
+# container its own `/tmp` means every supervisor that can ever answer at that
+# path is itself inside a container.
+#
+# Only two host paths are re-bound on top, both required and both the agent's
+# own: the per-rollout workspace verifiers created (the cwd) and the harness's
+# `install_dir`, which carries the skill package and the per-rollout
+# `settings.json` / `models.json` by absolute path.
+binds=(
+  --bind "$VF_SANDBOX_TMP:/tmp"
+  --bind "$PRIME_AGENT_INSTALL_DIR:$PRIME_AGENT_INSTALL_DIR"
+  --bind "$VF_SANDBOX_NODE_DIR:/opt/node:ro"
+)
+# `--no-mount bind-paths` drops apptainer.conf's WHOLE bind list, and on this
+# system that list includes /etc/hosts (line 111) -- and the image ships no
+# resolver config -- so DNS dies inside: `uv python install 3.11` failed with
+# "failed to lookup address information: Temporary failure in name resolution".
+# Restore just the two resolver files, read-only. The container still shares the
+# host network namespace either way; this only makes names resolvable.
+for f in /etc/resolv.conf /etc/hosts; do
+  [ -e "$f" ] && binds+=(--bind "$f:$f:ro")
+done
+[ -x "$VF_SANDBOX_UV" ] && binds+=(--bind "$VF_SANDBOX_UV:/usr/local/bin/uv:ro")
+
+# The harness runs us with cwd = the rollout workspace under /tmp, which exists
+# inside. Anything else (a developer invoking this by hand from a checkout on
+# /scratch) would not, and `--pwd` on a missing directory is a hard failure --
+# so fall back rather than exploding.
+workdir="$PWD"
+case "$workdir" in
+  "$PRIME_AGENT_INSTALL_DIR"|"$PRIME_AGENT_INSTALL_DIR"/*)
+    ;;                                    # already bound above
+  /tmp/*)
+    binds+=(--bind "$workdir:$workdir") ;;  # the per-rollout `/tmp/vf-<id>`
+  *)
+    workdir=/tmp ;;                       # a hand-run from somewhere else
+esac
+
+# `--home` (not `--env HOME=...`, which apptainer refuses: "Overriding HOME
+# environment variable with APPTAINERENV_HOME is not permitted") both sets HOME
+# and replaces the default home bind, so the operator's real home never appears.
+# Prime Agent builds its IPython kernel venv under `$HOME/.prime`, so this has to
+# be writable and stable across rollouts or every seed pays for a venv rebuild.
+# On this cluster the host XDG_* variables point INTO /scratch, and apptainer
+# passes the host environment through. Left alone they send Prime Agent's kernel
+# bootstrap (`uv python install 3.11`, ipykernel, prime-agent-runtime) at a path
+# that does not exist inside the container -- the observed failure was
+# `/usr/local/bin/uv python install 3.11 failed with exit code 2`. Redirect the
+# whole XDG set, plus uv's own two overrides, into the sandbox home. That home is
+# stable across rollouts, so the bootstrap is paid once and every later rollout
+# starts warm.
+exec apptainer exec \
+  --no-mount bind-paths,cwd,tmp \
+  --home "$VF_SANDBOX_HOME:$VF_SANDBOX_HOME" \
+  --pwd "$workdir" \
+  "${binds[@]}" \
+  --env PATH="/opt/node/bin:/usr/local/bin:/usr/bin:/bin" \
+  --env XDG_DATA_HOME="$VF_SANDBOX_HOME/.local/share" \
+  --env XDG_CACHE_HOME="$VF_SANDBOX_HOME/.cache" \
+  --env XDG_CONFIG_HOME="$VF_SANDBOX_HOME/.config" \
+  --env XDG_STATE_HOME="$VF_SANDBOX_HOME/.local/state" \
+  --env UV_CACHE_DIR="$VF_SANDBOX_HOME/.cache/uv" \
+  --env UV_PYTHON_INSTALL_DIR="$VF_SANDBOX_HOME/.local/share/uv/python" \
+  "$VF_SANDBOX_IMAGE" \
+  prime-agent "$@"

@@ -60,7 +60,11 @@ def test_all_three_arms_pin_the_identical_experiment():
     assert control["explicit_seeds"] == list(range(16))
     assert control["character"] == "Val-hum-neu-fem"
     assert control["task_spec"] == "full_nle"
-    assert control["skill_set"] == "netplay"
+    # The skill set is an EXPERIMENT VARIABLE — 18-tool `netplay` (ours) vs the 31
+    # vendored upstream skills in `netplay_true`. Pin it to a known set rather than
+    # one literal; the property that must hold is that all three arms AGREE, which
+    # the parity loop above already enforces across every arm.
+    assert control["skill_set"] in ("netplay", "netplay_true")
 
 
 def test_claude_code_clamps_bash_but_keeps_read():

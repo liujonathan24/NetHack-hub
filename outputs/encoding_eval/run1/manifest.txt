@@ -1,0 +1,10 @@
+run_name    run1
+started     2026-07-26T18:58:23-04:00
+max_turns   400
+seeds       first 5 of the pinned explicit_seeds (seeds 0..4)
+cells       B0 JSON TOON IMG_TTY
+skill_set   netplay_true (31 vendored upstream NetPlay skills)
+git_head    0cdc7fe1e078eb6bf099cba081ce032425cceda2
+git_dirty   yes
+finished    2026-07-26T19:21:01-04:00
+[sweep] cells that FAILED: B0 TOON IMG_TTY

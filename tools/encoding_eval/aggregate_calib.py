@@ -51,29 +51,46 @@ def _trace_stats(path: str) -> dict:
 
 
 def _results_rows(run_dir: str) -> dict:
-    """example_id -> {turns, tool_calls, in_tok, out_tok, truncated, error}."""
+    """example_id -> {turns, tool_calls, in_tok, out_tok, truncated, error}.
+
+    Reads BOTH shapes: `results.jsonl` (the v0 `vf-eval` CLI) and `traces.jsonl`
+    (the v1 `eval` CLI, which is what the current launchers use). They differ:
+    v1 keys the row by `id`, carries usage under `extra_usage`, and records
+    failures in an `errors` list rather than a single `error` object.
+    """
     out: dict = {}
-    for f in glob.glob(os.path.join(run_dir, "**", "results.jsonl"), recursive=True):
-        for line in open(f):
-            try:
-                r = json.loads(line)
-            except ValueError:
-                continue
-            m = r.get("metrics") or {}
-            tu = r.get("token_usage") or {}
-            out[r.get("example_id")] = {
-                "turns": int(m.get("num_turns") or 0),
-                "tool_calls": int(m.get("total_tool_calls") or 0),
-                "in_tok": float(tu.get("input_tokens") or 0),
-                "out_tok": float(tu.get("output_tokens") or 0),
-                "truncated": bool(r.get("is_truncated")),
-                "error": bool(r.get("error")),
-            }
+    for name in ("results.jsonl", "traces.jsonl"):
+        for f in glob.glob(os.path.join(run_dir, "**", name), recursive=True):
+            for i, line in enumerate(open(f)):
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                m = r.get("metrics") or {}
+                tu = r.get("token_usage") or r.get("extra_usage") or {}
+                if not isinstance(tu, dict):
+                    tu = {}
+                key = r.get("example_id")
+                if key is None:
+                    key = (r.get("task") or {}).get("idx", r.get("id", i))
+                err = r.get("error") or (r.get("errors") or None)
+                out[key] = {
+                    "turns": int(m.get("num_turns") or 0),
+                    "tool_calls": int(m.get("total_tool_calls") or 0),
+                    "in_tok": float(tu.get("input_tokens") or 0),
+                    "out_tok": float(tu.get("output_tokens") or 0),
+                    "truncated": bool(r.get("is_truncated")),
+                    "error": bool(err),
+                }
     return out
 
 
 def main(run_dir: str) -> None:
-    traces = sorted(glob.glob(os.path.join(run_dir, "trace", "*.ndjson")))
+    # `trace/` is the v0 vf-eval launcher's directory; `turns/` is the v1 one's.
+    traces = sorted(
+        glob.glob(os.path.join(run_dir, "trace", "*.ndjson"))
+        + glob.glob(os.path.join(run_dir, "turns", "*.ndjson"))
+    )
     res = _results_rows(run_dir)
 
     print(f"{'seed':>4} {'turns':>6} {'dlvl':>5} {'XL':>3} {'BALROG%':>8} "

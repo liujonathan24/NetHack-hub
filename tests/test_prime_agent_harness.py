@@ -11,6 +11,7 @@ arms, and the three per-rollout files whose contents decide *which model* and
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
 import tomllib
 
@@ -117,12 +118,14 @@ def test_the_three_arms_pin_the_same_experiment():
     for key in ("task_spec", "character", "explicit_seeds", "n_examples", "interface",
                 "variant", "map_detail"):
         assert c_args[key] == cc[key] == pa[key], key
+    # Parity is the invariant; the SET is an experiment variable (18-tool `netplay`
+    # vs the 31 vendored upstream skills in `netplay_true`).
     assert (
         c_args["skill_set"]
         == claude["taskset"]["env_args"]["skill_set"]
         == prime["taskset"]["env_args"]["skill_set"]
-        == "netplay"
     )
+    assert c_args["skill_set"] in ("netplay", "netplay_true")
     assert control["num_tasks"] == claude["num_tasks"] == prime["num_tasks"] == 16
     # Budget: exactly-150 on both CLI arms, at-most-150 on the control arm.
     assert cc["max_skill_calls"] == pa["max_skill_calls"] == 150
@@ -319,3 +322,62 @@ def test_the_daemon_socket_is_left_shared_on_purpose():
     # under it, so deleting it kills the daemon and the NEXT rollout fails with
     # `DaemonSocketClosedError`. Measured twice; see the comment in `launch`.
     assert not [argv for argv, _ in runtime.commands if argv[:2] == ["rm", "-rf"]]
+
+
+# -- the declared context window (the run-1 mid-action cutoffs) --------------
+#
+# Three of five run-1 rollouts ended `agent_completed` mid-action, on a tool call
+# that never got a follow-up, with 107-130 of 400 skill calls and 34-43 of 120
+# minutes used. Cause: `models.json` declared no `contextWindow`, Prime Agent
+# normalizes that to 128000 (`definition.contextWindow ?? 128e3`), and its
+# session host ends the agent loop the first time context exceeds
+# `contextWindow - reserveTokens` = 111,616 tokens
+# (`_shouldStopForThresholdCompaction` -> `shouldStopAfterTurn`). Under `--print`
+# nothing resumes it: the CLI exits 0 with no output, which verifiers can only
+# record as a clean completion. Reproduced against a stub model reporting a
+# controlled `usage.total_tokens` ramp: omitted -> stops at 120,000; declared as
+# 300000 -> stops at 290,000 (i.e. at `contextWindow - 16384` either way).
+
+
+def test_the_declared_context_window_reaches_models_json():
+    runtime = _launch(context_window=1048576)
+    models = json.loads(
+        next(v for k, v in runtime.files.items() if k.endswith("models.json"))
+    )
+    model_def = models["providers"]["intercept"]["models"][0]
+    assert model_def["contextWindow"] == 1048576
+
+
+def test_an_unset_context_window_is_omitted_and_warned_about(caplog):
+    """0 keeps the old wire format rather than guessing a window, but it must
+    not pass silently -- the failure it causes is invisible in the trace."""
+    with caplog.at_level(logging.WARNING, logger="nethack_prime_agent"):
+        runtime = _launch()
+    models = json.loads(
+        next(v for k, v in runtime.files.items() if k.endswith("models.json"))
+    )
+    assert "contextWindow" not in models["providers"]["intercept"]["models"][0]
+    assert any("context_window is unset" in r.getMessage() for r in caplog.records)
+
+
+def test_the_shipped_arm_config_declares_the_models_real_context_window():
+    """A regression guard on the config, not just the code: the cutoff comes
+    back the moment this value goes missing."""
+    prime = _load("prime_agent.toml")
+    assert prime["harness"]["context_window"] == 1048576
+    # Threshold headroom sanity: the cutoffs happened at ~110k tokens, so the
+    # declared window must leave far more than that before `- reserveTokens`.
+    assert prime["harness"]["context_window"] - 16384 > 500_000
+
+
+def test_the_cli_streams_are_persisted_for_the_next_silent_exit():
+    """Verifiers only surfaces a harness program's output on a non-zero exit, so
+    an exit-0 truncation leaves nothing to read. Keep both streams."""
+    runtime = _launch()
+    assert runtime.files["/tmp/vf-prime-agent/agent-trace-abc/program.stdout.txt"] == b"ok"
+    assert runtime.files["/tmp/vf-prime-agent/agent-trace-abc/program.stderr.txt"] == b""
+
+
+def test_output_capture_can_be_turned_off():
+    runtime = _launch(capture_output=False)
+    assert not [k for k in runtime.files if k.endswith("program.stdout.txt")]

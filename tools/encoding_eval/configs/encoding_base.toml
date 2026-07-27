@@ -1,0 +1,57 @@
+# Encoding sweep BASE config — every cell is this file plus a single
+# `--args '{"variant": "..."}'` override, so the cells cannot drift apart.
+#
+#   tools/encoding_eval/launch_encoding_cell.sh B0 outputs/encoding_eval/run1/B0 400 5
+#
+# Runs through verifiers 0.2.1's v0 LEGACY BRIDGE (`id` + no `taskset.id`,
+# `verifiers/v1/env.py:128`), which calls the v0 `env.run_rollout` verbatim.
+# That is the same path experiment 1 validated, so encoding numbers here are
+# comparable to exp1's in mechanism — though NOT in absolute value, because
+# this sweep runs the real NetPlay action surface (below) where exp1 ran the
+# older 18-tool set.
+#
+# Requires on PYTHONPATH: tools/pycompat (the service_tier shim), the engine
+# repo, the repo root, and environments/nethack — the launcher sets all four.
+
+id = "nethack"
+model = "google/gemini-3-flash-preview"
+num_tasks = 5
+num_rollouts = 1
+rich = false
+push = false
+
+[args]
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+n_examples = 16
+interface = "skill"
+
+# The REAL NetPlay action surface (31 vendored upstream skills), not the older
+# 18-tool `netplay` preset. Measured on a 5-seed B0 calibration: mean BALROG
+# 1.97% vs exp1's 1.15%, mean dlvl 2.20 vs 2.00. Holding this fixed across
+# cells is what makes the comparison about the ENCODING and nothing else.
+skill_set = "netplay_true"
+
+# Overridden per cell by the launcher. B0 = uncompressed ASCII.
+variant = "B0"
+map_detail = "full"
+
+# Uncompacted on purpose. exp1 ran `compact_obs=false` in every cell and
+# excluded compacted ASCII (B1) by decision; compaction is a second variable
+# that would ride along on top of the encoding being measured.
+compact_obs = false
+
+# 400 is not expected to bind. The same calibration ended all five rollouts on
+# DEATH at 29-140 turns (`is_truncated` false throughout), so the cap is a
+# safety rail rather than the thing deciding episode length.
+max_turns = 400
+
+# Set per cell by the launcher (absolute — a relative value resolves inside the
+# rollout's runtime workdir, which is deleted at teardown, losing the per-turn
+# NDJSON with no error).
+trace_dir = "/tmp/encoding_eval_unset"
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0

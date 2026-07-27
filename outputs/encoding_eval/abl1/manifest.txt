@@ -1,0 +1,7 @@
+run_name  abl1
+started   2026-07-26T19:20:34-04:00
+max_turns 400   seeds first 5
+cells     15
+git_head  0cdc7fe1e078eb6bf099cba081ce032425cceda2
+finished  2026-07-26T19:42:01-04:00
+[abl] FAILED cells: enc_B_json 1b_none 1b_seen 1b_seen_visited 1b_all 1c_no_memory 1d_dm_json 1d_bbox
