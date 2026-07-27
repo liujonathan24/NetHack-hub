@@ -193,6 +193,7 @@ from nethack_harness.prompt.rendering import (
     _paint_frontiers_on_map,
     format_observation_as_chat,
 )
+from nethack_harness.prompt.interactive_state import detect_blocking_ui
 from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
@@ -759,6 +760,27 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         content = await self._apply_tool_call(state, skill_name, skill_args)
         return [vf.UserMessage(role="user", content=content)]
 
+    def _render_obs_text(self, state: vf.State, journal=None) -> str:
+        """`spec.turn_template`, prefixed with a blocking-UI warning when one applies.
+
+        Every per-turn render goes through here. The `=== MAP ===` block is
+        built from the glyph plane (`prompt/ascii_map.py`), which has no
+        representation for an open menu or prompt — so without this prefix an
+        agent that opens the inventory sees an unchanged, normal-looking map
+        while the game clock is frozen, and repeats the identical observation
+        forever. Measured: 3 of 5 `b80_b0` seeds burned 2,499 calls each at
+        game time 1 this way. See `prompt/interactive_state.py`.
+        """
+        obs_text = self.spec.turn_template(
+            state["structured_obs"],
+            state["journal"] if journal is None else journal,
+            state,
+            compact=self.compact_obs,
+            journal_max_chars=self.journal_render_max_chars,
+        )
+        warning = detect_blocking_ui(state.get("raw_obs"))
+        return f"{warning}\n{obs_text}" if warning else obs_text
+
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
         """Execute one skill against the engine and return the rendered observation.
 
@@ -814,11 +836,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # compass tools ARE in the exposed set). No NLE step is consumed.
         if self._allowed_skill_names and skill_name not in self._allowed_skill_names:
             avail = ", ".join(sorted(self._allowed_skill_names))
-            obs_text = self.spec.turn_template(
-                state["structured_obs"], state["journal"], state,
-                compact=self.compact_obs,
-                journal_max_chars=self.journal_render_max_chars,
-            )
+            obs_text = self._render_obs_text(state)
             content = compose_user_content(
                 obs_text,
                 [f"[Tool {skill_name!r} is not available. Call one of: {avail}]"],
@@ -905,11 +923,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             journal: Journal = state["journal"]
             feedback = result.journal_op(journal)
             state["scout_delta"] = 0  # no exploration happened
-            obs_text = self.spec.turn_template(
-                state["structured_obs"], journal, state,
-                compact=self.compact_obs,
-                journal_max_chars=self.journal_render_max_chars,
-            )
+            obs_text = self._render_obs_text(state, journal)
             content = compose_user_content(obs_text, [f"[{feedback}]"] if feedback else [])
             return content
 
@@ -1338,11 +1352,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
 
         # Build the per-turn user message from the spec's turn template.
-        obs_text = self.spec.turn_template(
-            state["structured_obs"], state["journal"], state,
-            compact=self.compact_obs,
-            journal_max_chars=self.journal_render_max_chars,
-        )
+        obs_text = self._render_obs_text(state)
         prefix_parts = []
         # Per-turn hooks declared by the spec (P self-refinement directive; CH
         # refiner + sub-agent triggers). Each mutates prefix_parts/state in
