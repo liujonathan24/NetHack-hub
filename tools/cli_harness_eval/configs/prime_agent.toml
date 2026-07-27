@@ -92,6 +92,21 @@ id = "nethack-prime-agent"
 # version). Pin the version here so a background `npm -g` upgrade cannot change
 # the scaffold under test mid-experiment; `setup` fails loudly on a mismatch.
 version = "0.3.3"
+# ARM SYMMETRY, load-bearing for every scaffold claim this config supports.
+# `11d773b` added an auto-resume loop that relaunches Prime Agent on a clean
+# exit while the character is alive (default `max_relaunches = 5`). Claude Code
+# is a stock verifiers built-in harness with no equivalent hook, so leaving the
+# default on hands ONE arm up to 5 extra chances to finish its budget -- and the
+# headline result this config exists to measure is precisely "prime_agent vs
+# claude_code". A win under that asymmetry is uninterpretable.
+#
+# The published m2 matrix is unaffected: it ran at HEAD=b8089e3 (matrix start
+# 04:18, `11d773b` landed 05:18), so neither arm had the hook, and every rollout
+# that DID record the metric afterwards measured 0 relaunches. Pinning 0 keeps
+# later cells matched to that baseline rather than silently drifting off it.
+# Raise this only for a deliberate "does auto-resume help?" experiment, which
+# needs its own control, not this file.
+max_relaunches = 0
 # `node` (prime-agent's bin is a `#!/usr/bin/env node` script) and `uv` (it
 # builds its IPython kernel venv with it) must be on PATH inside the runtime.
 # The subprocess runtime inherits the host PATH, which on this cluster does not
