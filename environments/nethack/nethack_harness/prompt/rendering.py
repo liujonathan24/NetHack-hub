@@ -81,7 +81,9 @@ _PROMPT_RANGED = """- **Ranged / approaching threats.** Kill dangerous monsters 
   `throw(item=..., direction=...)` (daggers, darts, rocks, spears) instead of
   letting them reach you. Hit it before it hits you."""
 
-_PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL."""
+_PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL. Keep acting
+every turn — the episode ends only when your character dies or you run out of
+calls, never because you stopped, summarized, or declared the run finished."""
 
 # (required tools, text). A block is emitted only when every tool it names is
 # in the published set, so the advertised surface can never exceed the real one.
@@ -161,8 +163,18 @@ creature. `@` hides the tile under you — read UNDER PLAYER."""
 # bullets and "Your goal is to get as far as possible in the game." is its
 # closing line. This replaces our `pin_objective`/JOURNAL machinery entirely
 # for the minimal prompt — no per-tier description, no milestone list.
+#
+# CLI-harness eval: `stop_condition = "agent_completed"` only means the CLI
+# process exited 0 with no `@stop` firing mid-rollout — under `--print` mode
+# that happens the moment the model stops emitting tool calls, whether or not
+# the character is still alive, costing 15-25% of measured rollouts. One
+# sentence, not a section (see the module-level note above on why the prompt
+# stays BALROG-minimal): tell the agent explicitly that ending its turn is not
+# how the episode ends.
 _PROMPT_TAIL_MINIMAL = """Explore the environment to find the stairs down to the next level.
-Your goal is to get as far as possible in the game."""
+Your goal is to get as far as possible in the game. Keep acting every turn —
+the episode ends only when your character dies or you run out of calls, never
+because you stopped, summarized, or declared the run finished."""
 
 _PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
     ((), _PROMPT_HEAD_MINIMAL),
