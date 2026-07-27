@@ -314,12 +314,211 @@ config says (`tests/test_prime_agent_harness.py::test_disabled_tools_is_refused_
 Agent's own settings — that closes this off. Do not read the absence of a `disabled_tools` line in
 `prime_agent.toml` as "nothing to clamp"; it means clamping is not offered.**
 
-The real fix is sandboxing the *runtime*, not the tool surface: run this arm under a container
-(`harness.runtime.type = "docker"` or `"prime"` once available) instead of `subprocess`. This
-cluster has `apptainer`/`singularity` (confirmed present, §1) but no Docker/Podman, and
-`v1/runtimes/` (the pinned verifiers 0.2.1) has adapters for `subprocess`, `docker`, `modal`, and
-`prime` only — no apptainer adapter exists yet, so today there is no way to actually run this arm
-sandboxed on this cluster. Until either an apptainer runtime adapter is written or a paid Prime
-remote sandbox is used, the honest description of this arm is: **it runs with an unconfined Python
-interpreter and an unconfined host filesystem, and that is accepted, not solved, by anything in
-this repo.**
+The real fix is sandboxing the *runtime*, not the tool surface. **This is now done — see §7.1.**
+The paragraph that used to sit here observed that the pinned verifiers 0.2.1 has no apptainer
+runtime adapter (true: `v1/runtimes/RuntimeConfig` is a closed discriminated union over
+`subprocess | docker | modal | prime`, with no plugin hook) and concluded the arm therefore had to
+run unconfined. That conclusion was wrong — the container does not have to be introduced at the
+*runtime* layer at all.
+
+### 7.1 The sandbox: `tools/cli_harness_eval/sandbox/prime-agent-apptainer` (Task 19 Part C)
+
+`PrimeAgentHarnessConfig.binary` is injected into argv and only ever `exec`'d, so pointing it at a
+wrapper that `exec`s `apptainer exec … prime-agent "$@"` containerizes the arm with **no patch to
+verifiers and no new runtime adapter**. That is what the wrapper is; its header carries the full
+rationale and the exact flag set.
+
+```toml
+[harness]
+binary = "<repo>/tools/cli_harness_eval/sandbox/prime-agent-apptainer"
+```
+
+What the mount namespace looks like from inside:
+
+| path | state | why |
+|---|---|---|
+| `/scratch`, `/projects`, `/tigress` | **absent** | `--no-mount bind-paths` drops the site block at `/etc/apptainer/apptainer.conf:440-446` |
+| `$HOME` | **absent** | `--home /tmp/vf-prime-agent/sandbox-home:…` replaces the home bind *and* sets `HOME` |
+| the launching cwd | **absent** | `--no-mount cwd`; without it, launching from a checkout on `/scratch` silently re-binds `/scratch` (measured) |
+| `/tmp` | present | not optional — the rollout workspace `/tmp/vf-<id>`, `install_dir`, and Prime Agent's per-user daemon socket `/tmp/prime-agent-<uid>` all live there |
+| `/opt/node` | present, read-only | the node + `prime-agent@0.3.3` install, bound from wherever it lives on the host. The one path re-exposed out of `/scratch`, at a different mount point |
+| host loopback | reachable | no `--net`, so the container shares the host network namespace and both the MCP server and the interception endpoint stay on `127.0.0.1` with no port mapping |
+
+**Demonstrated, not asserted.** The agent was handed exactly the run-1 offending operations as its
+own `ipython` tool call; this is what came back in its tool result, captured off the wire from the
+following request body:
+
+```
+GLOB_SCRATCH_STAR: []
+GLOB_SCRATCH_RECURSIVE: []
+GLOB_HOME: []
+GLOB_PROJECTS: []
+LISTDIR_SCRATCH: FileNotFoundError [Errno 2] No such file or directory: '/scratch'
+OPEN_SCRATCH: FileNotFoundError [Errno 2] No such file or directory: '/scratch/gpfs/…/README.md'
+```
+
+The identical probe against the unsandboxed binary returns the real directory listings, so the
+container — not the probe — is what closes it. A full `--print` session was also driven end to end
+through the wrapper (1175 model round-trips, IPython kernel executing inside the container, model
+traffic reaching a host-bound `127.0.0.1` listener), so this is not a `--version` smoke test.
+
+**What it is not.** Apptainer runs as the invoking user, and this is a mount namespace, not a
+security boundary against a determined adversary: `/tmp` is shared with the host, `/opt/node` is
+readable, and the network is the host's. It is a hard stop on the specific failure this experiment
+hit — an agent walking a shared multi-user GPFS filesystem — and nothing more.
+
+**Environment knobs**, all overridable, defaults are this cluster's: `VF_SANDBOX_IMAGE`
+(`docker://python:3.12-slim`), `VF_SANDBOX_NODE_DIR`, `VF_SANDBOX_UV`, `VF_SANDBOX_HOME`,
+`APPTAINER_CACHEDIR` (defaults to `/tmp/apptainer-cache-<uid>`, keeping SIF blobs off the home
+quota).
+
+### 7.2 The wired-in default: `bwrap`, via `harness.sandbox` (no wrapper binary needed)
+
+§7.1's apptainer wrapper requires pointing `harness.binary` at
+`tools/cli_harness_eval/sandbox/prime-agent-apptainer` by hand. There is a second, simpler
+mechanism now built directly into `PrimeAgentHarness.launch`: `harness.sandbox = true` (set in
+`prime_agent.toml`) prepends a `bwrap` (bubblewrap) argv prefix to the CLI invocation itself —
+`PrimeAgentHarness._sandbox_prefix` in
+`harnesses/nethack-prime-agent/nethack_prime_agent/__init__.py`. No wrapper script, no image, no
+`apptainer` dependency; `bwrap` (0.6.3 here, `/usr/bin/bwrap`) is a single static-ish binary that
+just builds a mount namespace and `exec`s.
+
+The base recipe — verified working on this machine before any extra binds were added:
+
+```bash
+bwrap --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 \
+      --ro-bind /bin /bin --ro-bind /etc /etc \
+      --proc /proc --dev /dev --tmpfs /tmp \
+      --bind <WORKSPACE> /work --chdir /work \
+      --unshare-pid --die-with-parent \
+      <COMMAND...>
+```
+
+confirmed from inside: `cwd=/work`, workspace files readable/writable, `os.path.exists('/scratch')`
+is `False`, opening a repo file raises `FileNotFoundError`, and (no `--unshare-net`) a loopback HTTP
+request still succeeds — required, since the agent reaches both the MCP tool server and the
+interception model endpoint on `127.0.0.1`.
+
+**What `_sandbox_prefix` adds on top, and why each one is unavoidable:**
+
+* **`path_prepend`'s entries, one level above `bin/`, read-only.** `prime-agent` and `uv` have to
+  resolve on PATH inside the sandbox too, and on this cluster both live under `/scratch` (an nvm
+  install for the former, `~/.local/bin` for the latter isn't under `/scratch` but is bound the
+  same way for uniformity). Binding only the `bin/` directory runs `prime-agent --version` but
+  breaks the CLI at the first real command — resolving `harness.binary` from
+  `.../v24.13.1/bin/prime-agent` is a symlink to
+  `.../v24.13.1/lib/node_modules/prime-agent/dist/bundle/cli.js`, so the whole version root
+  (`bin/` + `lib/` + …) has to come back, not just the symlink's directory. **Measured
+  consequence:** because that root sits under `/scratch`, re-exposing it forces `bwrap` to
+  materialize the intermediate path as empty stub directories all the way from `/scratch` down to
+  the bound leaf — `os.path.exists('/scratch')` is `True` under the harness's actual prefix, not
+  `False` as in the base recipe above. Nothing else is reachable through that stub: no sibling of
+  the bound leaf, no other user's data, no repo file. `tests/test_sandbox_isolation.py` proves both
+  claims separately — the unmodified base recipe (fully absent `/scratch`) and the harness's
+  extended prefix (present-but-empty-except-the-one-leaf `/scratch`).
+* **`install_dir` (default `/tmp/vf-prime-agent`), read-write.** Carries the skill package and
+  every rollout's `models.json`/`settings.json`/`auth.json` (§6.1); Prime Agent has to read and
+  write it. Bound after `--tmpfs /tmp` in the argv (order matters — `bwrap` applies binds in
+  sequence, and a bind nested under an earlier `--tmpfs` needs to come later to attach on top of
+  it).
+* **The rollout workspace**, i.e. the `subprocess` runtime's own workdir (`runtime.workdir`,
+  `/tmp/vf-<runtime-name>`) — the counterpart of the base recipe's `<WORKSPACE>`/`/work`, except
+  bound at its real path and `--chdir`'d there rather than remapped to `/work`, since nothing else
+  in the launch argv needs to know about a `/work` alias.
+
+**Two things this does NOT cover, left as known gaps, not fixed here:**
+
+1. **`$HOME` is never bound.** Prime Agent's IPython kernel-venv bootstrap writes under
+   `~/.prime/agent/kernel-venv` (§6.2) — a real path on this operator's *actual* home
+   (`/home/<user>`, not under `/scratch`), but the sandbox namespace has no `/home` at all. A
+   sandboxed rollout cannot find or reuse that venv.
+2. **`/tmp` is a fresh, per-rollout `tmpfs`, not the host's.** §6.3's "the daemon socket is left
+   shared on purpose" no longer holds under `sandbox = true`: Prime Agent's per-user daemon socket
+   (`<tmpdir()>/prime-agent-<uid>/…`) is resolved *inside* the sandbox's own empty `/tmp`, so each
+   sandboxed rollout gets an isolated supervisor rather than attaching to a shared one.
+
+Both follow directly from taking the base recipe as given rather than redesigning it (the task this
+was built against was explicit: *use the proven recipe, don't redesign it*). Together they mean a
+sandboxed Prime Agent rollout has not been driven end-to-end against a real model in this pass —
+only the isolation properties themselves (workspace read/write, `/scratch` unreachable content,
+repo file unreadable, loopback network) were proven, via `tests/test_sandbox_isolation.py` and the
+ad hoc `prime-agent --version` smoke below. Before spending a paid sandboxed run, re-verify the
+kernel-venv path survives (it may simply rebuild every rollout, which is slow but not unsafe) and
+budget for a fresh daemon per rollout.
+
+**Ad hoc smoke, not part of the committed test suite (machine-specific paths):** with the nvm node
+root and `~/.local` re-bound as above, `prime-agent --version` inside the sandbox printed `0.3.3`
+(matching the unsandboxed CLI) and `ls /scratch` inside returned only the single synthetic path
+segment needed to reach the bound leaf — no other file anywhere under `/scratch` was listable or
+openable.
+
+### 7.3 The Claude Code arm: no sandbox toggle, and why
+
+Arm 1 does **not** get either treatment above. Both §7.1's wrapper-binary approach and §7.2's
+in-harness `bwrap` prefix rely on the same hook: the harness controls what ends up in argv[0].
+Verifiers' bundled `ClaudeCodeHarness` hard-codes its binary path (`CLAUDE_BIN`,
+`verifiers/v1/harnesses/claude_code/harness.py`) and exposes no `binary` field and no other
+command-prefix hook — there is no way to reach it without patching the installed `verifiers`
+package, which must stay stock (`claude_code.toml` records this decision at `[harness]` directly).
+The route to close this gap, if it's ever needed, is the one this repo already uses for arm 2: a
+small external harness plugin subclassing `ClaudeCodeHarness` and overriding `launch` to prepend
+either wrapper to argv. Until that exists, arm 1's only clamp remains `disabled_tools = ["Bash"]`
+(Task 18) — a tool-surface denylist, not filesystem isolation, and weaker than arm 2's: Read, Edit
+and the MCP client itself still run against the real, unconfined host filesystem. It is at least a
+*denylist*, which is more than Prime Agent's bare `ipython` offers on its own (§7 above).
+
+---
+
+## 8. Implementation-specific: the stray `^M`, and how we stop it (Task 19 Part B)
+
+Run 1 carried `Unknown command '^M'.` on NetHack's top line for 31 turns of one Prime Agent seed
+and 17 of another. It is worth knowing about because **it is ours, not NetHack's**, and because one
+agent built a false theory on top of it and wrote that theory into its own notes: *"When move_to
+fails to advance turn, call engrave_elbereth to unstick the game (clears ^M from input buffer)"* —
+then burned an 18-turn streak acting on it.
+
+**Cause.** `engrave_elbereth` emitted `E - E l b e r e t h \r \r`: a first CR to submit the
+engraving text and a second, unconditional one to "close any prompt". When no prompt was open, that
+second CR reached NetHack's command dispatcher, which has no binding for byte 13, so `rhack()`
+takes its bad-command branch and `visctrl()` renders the byte as `^M`. Every one of the 48
+occurrences across run 1 was originated by that exact twelve-byte action list. It *looked* like a
+`move_to` bug only because NetHack's top line is not cleared until something repaints it, so the
+one stray CR sat in the observation of every following turn.
+
+**Two fixes, both shipped.**
+
+1. *Source.* `engrave_elbereth` no longer emits the second CR. Closing a prompt was never its job:
+   `env_response` already runs a guarded auto-dismiss loop after every skill that presses CR only
+   while a `--More--` is actually up.
+2. *Funnel.* Every skill's keystrokes pass through one loop in `env_response` (and one in
+   `TypedNetHackInterface.step`). Both now drop a CR that would land in command context, making a
+   stray CR a no-op that can never again surface to the agent. The discriminator is the engine's own
+   `misc` observation — `(in_yn_function, in_getlin, xwaitingforspace)` — and a CR is stray iff all
+   three are clear. Measured against a live engine: idle `(0,0,0)`, item prompt `(1,0,0)`,
+   `--More--` `(0,1,1)`, getlin `(0,1,0)`, menu `(0,0,1)`. It fails open: an unreadable observation
+   means "a prompt might be open", and the CR is sent unchanged, so the CRs that `descend`,
+   `ascend` and `pray` legitimately need are untouched.
+
+`state["cr_swallowed_total"]` counts how often the guard fired; a non-zero value means some skill is
+still emitting keystrokes it does not need. Tests:
+`environments/nethack/tests/test_stray_carriage_return.py`.
+
+---
+
+## 9. Implementation-specific: `harness.context_window` (Task 19 Part A)
+
+**Do not remove `context_window` from `prime_agent.toml`.** A custom provider's model definition
+that omits `contextWindow` is normalized to `128e3` by Prime Agent, and its session host then ends
+the agent loop the first time context exceeds `contextWindow - reserveTokens` = 111,616 tokens
+(`_shouldStopForThresholdCompaction` → `shouldStopAfterTurn`). Under `--print` nothing resumes it:
+the CLI exits 0 having printed nothing, and verifiers can only record a clean exit as
+`agent_completed`. That is what ended three of five run-1 rollouts mid-action, on a tool call that
+never received a response, at 107-130 of 400 skill calls and 34-43 minutes of a 7200 s budget.
+
+It is set to `1048576`, the value Prime Agent's own bundled catalog carries for `z-ai/glm-5.2`.
+**Change it whenever you change `model`.** Leaving it at `0` keeps the old wire format and logs a
+loud warning rather than guessing a window on your behalf.
+
+The CLI's stdout/stderr are now persisted to `install_dir/agent-<trace id>/program.{stdout,stderr}.txt`
+(`harness.capture_output`, on by default). Verifiers only surfaces a harness program's output on a
+non-zero exit, so an exit-0 truncation like this one otherwise leaves nothing at all to read.

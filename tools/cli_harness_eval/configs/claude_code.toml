@@ -64,7 +64,7 @@ seed_workspace = true
 colocated = false
 
 [taskset.env_args]
-skill_set = "netplay"           # the netplay gate: `move` is never published
+skill_set = "netplay_true"           # the netplay gate: `move` is never published
 
 [harness]
 id = "claude_code"
@@ -80,6 +80,19 @@ id = "claude_code"
 # workspace primer tells the agent to grep `wiki/` and keep notes in
 # `memory/` via Edit -- Edit is also left enabled so that write path works.
 disabled_tools = ["Bash"]
+# NO `sandbox` TOGGLE HERE, ON PURPOSE. The Prime Agent arm can be wrapped in a
+# `bwrap` mount-namespace sandbox (see prime_agent.toml's `harness.sandbox`)
+# because `PrimeAgentHarnessConfig.binary` is a plain string this repo's own
+# harness plugin injects into argv. Stock verifiers' `ClaudeCodeHarness`
+# (`v1/harnesses/claude_code/harness.py`) hard-codes its binary path (`CLAUDE_BIN`)
+# with no `binary` field and no other command-prefix hook -- there is no way to
+# reach it without patching the installed `verifiers` package, which must stay
+# stock. So this arm is NOT filesystem-sandboxed; `disabled_tools = ["Bash"]`
+# above remains its only clamp, and it is weaker (a tool-surface denylist, not
+# isolation -- Read/Edit/the MCP client itself still run against the real,
+# unconfined host filesystem). See configs/README.md §7.3 for the full account
+# and what closing this gap would require (an external harness plugin
+# subclassing ClaudeCodeHarness, the same route `nethack-prime-agent` uses).
 
 [harness.runtime]
 # Verified in Task 13 step 1: `NEEDS_CONTAINER` is a *Task*-level flag in the

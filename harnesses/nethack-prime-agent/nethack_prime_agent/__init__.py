@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import secrets
 import shlex
@@ -102,6 +103,67 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     """Declare the model as reasoning-capable in `models.json`. `None` derives it
     from `ctx.sampling.reasoning_effort` the way the `pi` harness does."""
 
+    context_window: int = 0
+    """The model's context window, in tokens, declared in `models.json`.
+
+    **Leaving this at 0 silently truncates every long rollout.** A custom
+    provider's model definition that omits `contextWindow` is normalized to
+    `128e3` by Prime Agent (`definition.contextWindow ?? 128e3`). Its session
+    host then stops the agent loop the moment
+    `contextTokens > contextWindow - reserveTokens` (reserve is 16384 by
+    default) -- `_shouldStopForThresholdCompaction`, whose `true` propagates out
+    of `shouldStopAfterTurn` and ends the loop. Under `--print` nothing resumes
+    it: `promptAndWait` returns, the last message is a tool result rather than
+    an assistant message, print mode emits nothing, and the CLI exits 0.
+    Verifiers can only read a clean exit as `agent_completed`.
+
+    That is what ended three of five run-1 rollouts mid-action, on a tool call
+    that never got a follow-up, with 107-130 of 400 skill calls and 34-43 of 120
+    minutes used. Reproduced against a local stub model reporting a controlled
+    `usage.total_tokens` ramp: with the field omitted the run stops on the first
+    response over 111,616 tokens (128000-16384); declaring `contextWindow =
+    300000` moves the stop to the first response over 283,616 (300000-16384).
+    Same binary, same prompt, nothing else changed.
+
+    So: set it to the real context window of the model under test. Prime Agent's
+    own bundled catalog lists `z-ai/glm-5.2` at 1048576. `0` preserves the old
+    behaviour and logs a warning rather than guessing a window on your behalf."""
+
+    capture_output: bool = True
+    """Write the CLI's stdout/stderr into `install_dir/agent-<trace id>/`.
+
+    Verifiers only surfaces a harness program's output when it exits non-zero
+    (`Harness.run`), so the run-1 cutoffs -- which exited 0 -- left nothing at
+    all to read. Keeping the streams costs a few KB per rollout and is the
+    difference between diagnosing the next silent exit and re-running blind."""
+
+    sandbox: bool = False
+    """Prefix the launch argv with a `bwrap` (bubblewrap) mount-namespace
+    sandbox that hides everything from the agent's `ipython` tool except an
+    explicit allowlist -- most importantly, `/scratch` (this cluster's shared
+    multi-user GPFS filesystem) and this repository. See
+    `tools/cli_harness_eval/configs/README.md` §7 for why: Prime Agent's only
+    built-in tool is `ipython`, a full Python interpreter with no denylist, and
+    in a prior run the agent abandoned the game, ran
+    `glob('/scratch/**', recursive=True)`, and printed a live MCP bearer token
+    into its own trace. `disabled_tools` cannot stop a Python interpreter --
+    this can, at the mount-namespace level, unconditionally.
+
+    Defaults to False so every existing caller (including the `_RecordingRuntime`
+    test fixture in `tests/test_prime_agent_harness.py`, which has no `workdir`)
+    is unaffected; `prime_agent.toml` turns it on for the real arm.
+
+    `setup` fails loudly if this is True and `bwrap` cannot be resolved, rather
+    than silently running the arm unconfined. `launch` fails loudly if this is
+    True and the runtime has no filesystem `workdir` (i.e. anything but the
+    `subprocess` runtime) -- there is nothing to sandbox a remote/container
+    runtime's own process with."""
+
+    sandbox_bwrap: str = "bwrap"
+    """`bwrap` executable. Resolved the same way as `binary` -- through PATH,
+    with `path_prepend` applied first -- so an absolute override works for a
+    non-PATH install."""
+
 
 class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
     APPENDS_SYSTEM_PROMPT = True  # `--append-system-prompt` (usage.md CLI reference)
@@ -157,16 +219,106 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             data = (package / name).read_bytes()
             await runtime.write(f"{self._skill_dir}/{name}", data)
 
+        if self.config.sandbox:
+            # Same "fail loud, not silently unconfined" philosophy as the
+            # prime-agent probe above: a missing `bwrap` must stop the run, not
+            # quietly disable the one thing standing between the agent's
+            # `ipython` and `/scratch`.
+            bwrap = self.config.sandbox_bwrap
+            probe = await runtime.run(
+                ["sh", "-c", f"command -v {shlex.quote(bwrap)}"],
+                self._env_with_path(),
+            )
+            if probe.exit_code != 0:
+                raise RuntimeError(
+                    f"harness.sandbox is true but {bwrap!r} was not found on PATH: "
+                    f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}. "
+                    "Install bubblewrap, set `harness.sandbox_bwrap` to an absolute "
+                    "path, or set `harness.sandbox = false` to run unconfined "
+                    "(see configs/README.md §7)."
+                )
+
     # -- launch -------------------------------------------------------------
 
     def _env_with_path(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         env = {**self.config.resolved_env, **(extra or {})}
         if self.config.path_prepend:
-            import os
-
             inherited = env.get("PATH") or os.environ.get("PATH", "")
             env["PATH"] = f"{self.config.path_prepend}:{inherited}"
         return env
+
+    def _sandbox_prefix(self, workdir: str) -> list[str]:
+        """Build the `bwrap` argv that hides everything from the sandboxed
+        process except an explicit allowlist. Base recipe verified working on
+        this machine (configs/README.md §7): base OS dirs read-only, a fresh
+        `/proc`/`/dev`/`/tmp`, and the workspace bound read-write. Extended here
+        with exactly what `PrimeAgentHarness` itself needs to still run --
+        `path_prepend` (the agent binary, and `uv`) and `install_dir` (the skill
+        package plus this rollout's `models.json`/`settings.json`/`auth.json`) --
+        nothing else.
+
+        `path_prepend` entries on this cluster resolve under `/scratch` (the npm
+        global lives under an nvm install there), so re-exposing them makes the
+        exact string `/scratch` walkable again as an EMPTY stub down to that one
+        bound leaf (`bwrap` must materialize the intermediate directories to
+        attach a mount deep inside them) -- measured, not assumed. No sibling
+        directory or file anywhere under `/scratch` is reachable through that
+        stub; see `tests/test_sandbox_isolation.py` for the proof, both for the
+        base recipe with no extra binds (where `/scratch` is fully absent) and
+        for this harness's actual extended prefix (where the stub exists but is
+        empty except the one required leaf).
+
+        NOT covered: `$HOME` is never bound, so anything Prime Agent does under
+        `~/.prime` (its kernel-venv bootstrap, per configs/README.md §6.2) will
+        not find it there and `/tmp` is a fresh, per-rollout tmpfs, so the
+        shared daemon-socket design (`configs/README.md`, "the daemon socket is
+        left shared on purpose") does not apply here -- each sandboxed rollout
+        gets its own daemon. Both are recorded, not fixed, in
+        `tools/cli_harness_eval/configs/README.md` §7.3.
+        """
+        binds: list[str] = []
+        for base in ("/usr", "/lib", "/lib64", "/bin", "/etc"):
+            if os.path.isdir(base):
+                binds += ["--ro-bind", base, base]
+        for entry in filter(None, self.config.path_prepend.split(":")):
+            # One level above `bin/`, so an npm global's `lib/node_modules`
+            # symlink target (where the real JS/venvs live) resolves too --
+            # `harness.binary` under this cluster's nvm install is exactly such
+            # a symlink. Measured: binding only `bin/` runs `prime-agent
+            # --version` but breaks module resolution for the CLI itself.
+            root = os.path.dirname(entry) if os.path.basename(entry) == "bin" else entry
+            if os.path.isdir(root):
+                binds += ["--ro-bind", root, root]
+        # An absolute, non-PATH `sandbox_bwrap` override might live outside
+        # everything bound above (e.g. a home-directory install of bwrap
+        # itself); the base-OS binds cover the stock `/usr/bin/bwrap`.
+        bwrap_dir = os.path.dirname(self.config.sandbox_bwrap)
+        if bwrap_dir and bwrap_dir not in ("/usr/bin", "/bin") and os.path.isdir(bwrap_dir):
+            binds += ["--ro-bind", bwrap_dir, bwrap_dir]
+        return [
+            self.config.sandbox_bwrap,
+            *binds,
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--tmpfs",
+            "/tmp",
+            # Read-write: the skill package plus this rollout's models/settings/
+            # auth, all under `install_dir` (fixed on purpose -- module
+            # docstring). Nested under `/tmp` by default, so this must come
+            # after `--tmpfs /tmp` above; `bwrap` creates the intermediate dirs.
+            "--bind",
+            self.config.install_dir,
+            self.config.install_dir,
+            "--bind",
+            workdir,
+            workdir,
+            "--chdir",
+            workdir,
+            "--unshare-pid",
+            "--die-with-parent",
+        ]
 
     async def launch(
         self,
@@ -217,6 +369,24 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         reasoning = self.config.reasoning
         if reasoning is None:
             reasoning = ctx.sampling.reasoning_effort not in (None, "none")
+        model_def: dict = {
+            "id": ctx.model,
+            "reasoning": bool(reasoning),
+            "input": ["text"],
+        }
+        if self.config.context_window > 0:
+            model_def["contextWindow"] = int(self.config.context_window)
+        else:
+            # Not fatal -- a short rollout never reaches the threshold -- but a
+            # long one dies silently, so it must not pass unremarked. See
+            # `PrimeAgentHarnessConfig.context_window`.
+            logger.warning(
+                "harness.context_window is unset: Prime Agent will assume 128000 "
+                "tokens for %r and END THE RUN (exit 0, reported as "
+                "'agent_completed') once context passes ~111,616 tokens. Set it "
+                "to the model's real context window.",
+                ctx.model,
+            )
         models = {
             "providers": {
                 PROVIDER: {
@@ -226,13 +396,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                     # (models.md, Value Resolution), so the interception secret
                     # never lands on disk.
                     "apiKey": KEY_VAR,
-                    "models": [
-                        {
-                            "id": ctx.model,
-                            "reasoning": bool(reasoning),
-                            "input": ["text"],
-                        }
-                    ],
+                    "models": [model_def],
                 }
             }
         }
@@ -307,6 +471,20 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # `@word` is never re-read as a flag or a file attachment.
         argv += ["--", prompt]
 
+        if self.config.sandbox:
+            # `bwrap` only `exec`s into `argv`; it does not replay or inspect it,
+            # so prepending it here changes nothing about what Prime Agent sees
+            # or does -- only what filesystem paths exist when it looks.
+            workdir = getattr(runtime, "workdir", None)
+            if workdir is None:
+                raise RuntimeError(
+                    "harness.sandbox is true but this runtime has no filesystem "
+                    "`workdir` to sandbox (only the `subprocess` runtime does). "
+                    "Set `harness.runtime.type = \"subprocess\"` or "
+                    "`harness.sandbox = false`."
+                )
+            argv = self._sandbox_prefix(str(workdir)) + argv
+
         # NOTE the absent teardown. `rm -rf agent_dir` is the obvious cleanup and
         # it BREAKS THE NEXT ROLLOUT: the supervisor at the shared socket keeps
         # live state under this directory (`daemon-workers/`, `session-leases/`),
@@ -315,4 +493,14 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # The directory is small and carries no secret (models.json holds an env
         # var NAME, auth.json is empty, settings.json holds localhost URLs), so it
         # is left in `install_dir` for the operator to clear between runs.
-        return await runtime.run_program(argv, env)
+        result = await runtime.run_program(argv, env)
+        if self.config.capture_output:
+            # Best effort: a diagnostics write must never fail a scored rollout.
+            for name, stream in (("stdout", result.stdout), ("stderr", result.stderr)):
+                try:
+                    await runtime.write(
+                        f"{agent_dir}/program.{name}.txt", (stream or "").encode()
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("could not persist prime-agent %s", name)
+        return result

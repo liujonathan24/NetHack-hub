@@ -76,7 +76,7 @@ seed_workspace = true
 colocated = false
 
 [taskset.env_args]
-skill_set = "netplay"           # the netplay gate: `move` is never published
+skill_set = "netplay_true"           # the netplay gate: `move` is never published
 
 [harness]
 id = "nethack-prime-agent"
@@ -104,6 +104,20 @@ path_prepend = "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/
 # — check `ls -ld /tmp/vf-prime-agent` before launching and override this if the
 # directory belongs to someone else. See configs/README.md caveat 6.
 install_dir = "/tmp/vf-prime-agent"
+# THE MODEL'S REAL CONTEXT WINDOW. Not optional cosmetics: a custom provider's
+# model definition that omits `contextWindow` is normalized to 128000 by Prime
+# Agent, and its session host then ENDS THE AGENT LOOP the first time context
+# exceeds `contextWindow - 16384` = 111,616 tokens. Under `--print` nothing
+# resumes it — the CLI exits 0 with no output, and verifiers can only record
+# that as `agent_completed`. It is what truncated three of five run-1 rollouts
+# mid-action at 107-130 of 400 skill calls. 1048576 is the value Prime Agent's
+# own bundled catalog carries for `z-ai/glm-5.2`. CHANGE IT WITH `model` ABOVE.
+context_window = 1048576
+# Hides /scratch (this cluster's shared multi-user GPFS filesystem) and this
+# repo from the agent's `ipython` tool via a `bwrap` mount-namespace sandbox --
+# see configs/README.md §7. `setup` fails loudly if `bwrap` is missing rather
+# than silently running unconfined.
+sandbox = true
 
 [harness.runtime]
 # Same determination as arm 1: `NEEDS_CONTAINER` is Task-level in the pinned
