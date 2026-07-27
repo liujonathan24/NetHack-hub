@@ -104,7 +104,14 @@ else
   OVERRIDES=(--taskset.max_skill_calls "${MAX_CALLS}" --taskset.trace_dir "${TRACE_DIR}")
 fi
 
-echo "[launch_cell] arm=${ARM} config=${CFG} max_calls=${MAX_CALLS} n=${N} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
+# MODEL overrides the model pinned in the arm's TOML. The arms MUST agree on it
+# -- that is the whole point of the comparison -- so set it once for the sweep
+# (run_sweep.sh passes it through), never per-arm.
+if [ -n "${MODEL:-}" ]; then
+  OVERRIDES+=(--model "${MODEL}")
+fi
+
+echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} max_calls=${MAX_CALLS} n=${N} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
 exec "${EVAL_BIN}" @ "${CFG}" \
   --num_tasks "${N}" \
