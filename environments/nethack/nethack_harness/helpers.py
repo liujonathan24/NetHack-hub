@@ -864,6 +864,9 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
     # Namespace prefix of the vendored NetPlay skills (see tools/netplay_true.py).
     _NETPLAY_TRUE_PREFIX = "np_"
 
+    # Namespace prefix of BALROG's 80 raw commands (see tools/balrog_actions.py).
+    _BALROG_PREFIX = "bal_"
+
     # skill_set: 'full' (default), 'move' (only move + survival), 'dir8'
     # (8 single-direction tools + survival, no `move` aggregator), or a
     # comma-separated whitelist e.g. 'move,descend,search'. The ladder
@@ -969,6 +972,29 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
+    elif skill_set == "balrog80":
+        # BALROG's published NLE action surface: the 80 text commands in their
+        # `balrog/environments/nle/__init__.py` ACTIONS dict, and nothing else.
+        #
+        # This is the matched-action-space baseline for reading our encoding
+        # results against BALROG's leaderboard numbers. It is deliberately
+        # HARSHER than `dir8`: no pathfinding of any kind, no closed loops, and
+        # no in-skill item selection -- `bal_eat` opens NetHack's own "What do
+        # you want to eat?" prompt and the agent answers it on the next turn.
+        # It is also, in one respect, more capable than `dir8`: `bal_travel`
+        # and `bal_far_*` are stock NetHack commands that cover ground, so a
+        # BALROG agent is not the unaided single-stepper it first appears.
+        #
+        # No journal/wiki tools here. BALROG gives its agent none, and adding
+        # them would confound exactly the memory axis 1c measures.
+        from nethack_harness.tools import balrog_actions as _bal
+        keep = set(_bal.BALROG_TOOL_NAMES)
+        out = []
+        for name, schema in skill_registry.all_schemas().items():
+            if name not in keep: continue
+            params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        return out
     elif "," in skill_set:
         # Tokens are tool names, EXCEPT a preset name, which expands to that
         # preset's tools. The 1d arms are documented above as
@@ -977,7 +1003,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # `request_map` (1 tool). Expanding presets by recursion keeps this
         # correct as the presets themselves change.
         tokens = [s.strip() for s in skill_set.split(",") if s.strip()]
-        presets = {"netplay", "netplay_true", "dir8", "move", "full"}
+        presets = {"netplay", "netplay_true", "dir8", "move", "full", "balrog80"}
         out = []
         seen: set = set()
         for tok in tokens:
@@ -1006,6 +1032,11 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # ACTION SURFACE, not extra tools, so they must never leak into 'full'
         # -- that would silently add 31 tools to every existing arm.
         if name.startswith(_NETPLAY_TRUE_PREFIX):
+            continue
+        # Same reasoning for BALROG's 80 raw commands: importing
+        # tools.balrog_actions registers them globally, and they are an
+        # alternative ACTION SURFACE, not extra tools.
+        if name.startswith(_BALROG_PREFIX):
             continue
         params = schema.get("parameters", {}) or {}
         out.append(_make_skill_adapter(name, schema.get("description", ""), params))

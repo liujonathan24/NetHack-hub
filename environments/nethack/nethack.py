@@ -403,6 +403,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._setup_level_blob = setup_level_blob
         self._setup_character = setup_character
         self._allowed_skill_names = set(allowed_skill_names or ())
+        # BALROG's 80-command surface (tools/balrog_actions.py) makes NetHack's
+        # own prompts part of the agent's job: `bal_eat` opens "What do you want
+        # to eat?" and the agent answers it next turn with `bal_d`-style keys.
+        # The auto-dismiss loop below would ESC that prompt shut before the
+        # agent ever saw it, so `bal_eat` could never actually eat and the arm
+        # would score badly for a reason that has nothing to do with encoding.
+        # --More-- acknowledgement is NOT disabled: BALROG runs `skip_more:
+        # True`, so both harnesses skip those automatically.
+        self._balrog_raw_prompts = any(
+            n.startswith("bal_") for n in self._allowed_skill_names
+        )
         # Pluggable LM backends. Both default to None → the rollout-time code
         # falls back to the deterministic Offline* implementations. Swap in
         # prime-rl-backed clients by passing them here from load_environment.
@@ -1023,6 +1034,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # intended action. MORE/CR (13) acknowledges them.
             has_more = any("--More--" in m for m in (so.messages or [])) or _obs_tty_has_more(last_obs)
             if so.menu is None and so.inventory_prompt is None and yn is None and not has_more:
+                break
+            # Under the BALROG raw-command surface, answering menus / item
+            # prompts / y-n questions is the AGENT's job (see
+            # `_balrog_raw_prompts` in __init__). Only --More-- is still
+            # acknowledged for it, matching BALROG's own `skip_more: True`.
+            if self._balrog_raw_prompts and not has_more:
                 break
             if yn is not None:
                 ans = yn["answer"]
