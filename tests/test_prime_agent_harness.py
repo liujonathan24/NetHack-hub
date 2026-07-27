@@ -172,12 +172,20 @@ def test_the_prime_agent_arm_selects_the_external_harness_on_the_subprocess_runt
 
 
 class _RecordingRuntime:
-    """Captures `runtime.write` / `run` instead of touching a filesystem."""
+    """Captures `runtime.write` / `run` instead of touching a filesystem.
 
-    def __init__(self):
+    `exit_code` is constant across every `run_program` call in a test: enough
+    to exercise the relaunch loop's own decision (episode-live vs. not), since
+    a non-zero exit is never reached mid-loop in these tests -- a crash on the
+    first attempt already keeps the loop from starting (`PrimeAgentHarness.
+    launch` only relaunches while `result.exit_code == 0`).
+    """
+
+    def __init__(self, exit_code: int = 0):
         self.files: dict[str, bytes] = {}
         self.programs: list[tuple[list[str], dict[str, str]]] = []
         self.commands: list[tuple[list[str], dict[str, str]]] = []
+        self._exit_code = exit_code
 
     async def write(self, path, data):
         self.files[path] = data
@@ -192,16 +200,64 @@ class _RecordingRuntime:
         from verifiers.v1.runtimes import ProgramResult
 
         self.programs.append((argv, env))
-        return ProgramResult(exit_code=0, stdout="ok", stderr="")
+        return ProgramResult(exit_code=self._exit_code, stdout="ok", stderr="")
+
+
+class _FakeNetHackState:
+    """Stands in for `nethack_v1.NetHackState` as synced onto `trace.state` over
+    the interception `/state` channel -- only the fields `PrimeAgentHarness.
+    _episode_live` reads."""
+
+    def __init__(self, *, terminated: bool = True, budget_exhausted: bool = False,
+                 skill_calls: int = 0):
+        self.terminated = terminated
+        self.budget_exhausted = budget_exhausted
+        self.skill_calls = skill_calls
+
+
+class _FakeTrace:
+    """Stands in for `verifiers.v1.trace.Trace`: carries `.state` (relaunch's
+    liveness read) and a `record_metric` matching `Trace.record_metric`'s exact
+    semantics (last-write, coerced to float), so `trace.metrics` is inspectable
+    after `launch` returns."""
+
+    def __init__(self, *, id="trace-abc", task=None, state=None):
+        self.id = id
+        self.task = task
+        self.state = state if state is not None else _FakeNetHackState()
+        self.metrics: dict[str, float] = {}
+
+    def record_metric(self, name, value):
+        self.metrics[name] = float(value)
+
+
+def _build_trace(state=None):
+    import types
+
+    from verifiers.v1.task import TaskData
+
+    return _FakeTrace(
+        task=types.SimpleNamespace(
+            data=TaskData(
+                idx=0, prompt="Play NetHack.", system_prompt="You are a Valkyrie."
+            )
+        ),
+        state=state,
+    )
 
 
 def _launch(**config_overrides):
-    """Drive `launch` against the recording runtime and return what it wrote."""
+    """Drive `launch` against the recording runtime and return what it wrote.
+
+    Uses a `terminated=True` fake state by default (the referee's own read on
+    "the episode is over"), so every pre-existing test here -- none of which
+    knows about relaunching -- keeps seeing exactly the one `run_program` call
+    it always has.
+    """
     import asyncio
     import types
 
     from nethack_prime_agent import PrimeAgentHarness, PrimeAgentHarnessConfig
-    from verifiers.v1.task import TaskData
 
     harness = PrimeAgentHarness(
         PrimeAgentHarnessConfig(id="nethack-prime-agent", **config_overrides)
@@ -210,14 +266,7 @@ def _launch(**config_overrides):
         model="z-ai/glm-5.2",
         sampling=types.SimpleNamespace(reasoning_effort=None),
     )
-    trace = types.SimpleNamespace(
-        id="trace-abc",
-        task=types.SimpleNamespace(
-            data=TaskData(
-                idx=0, prompt="Play NetHack.", system_prompt="You are a Valkyrie."
-            )
-        ),
-    )
+    trace = _build_trace()
     runtime = _RecordingRuntime()
     asyncio.run(
         harness.launch(
@@ -230,6 +279,36 @@ def _launch(**config_overrides):
         )
     )
     return runtime
+
+
+def _launch_with_state(state, runtime=None, **config_overrides):
+    """Like `_launch`, but returns `(runtime, trace)` and takes an explicit
+    fake `NetHackState`, for the relaunch-decision tests."""
+    import asyncio
+    import types
+
+    from nethack_prime_agent import PrimeAgentHarness, PrimeAgentHarnessConfig
+
+    harness = PrimeAgentHarness(
+        PrimeAgentHarnessConfig(id="nethack-prime-agent", **config_overrides)
+    )
+    ctx = types.SimpleNamespace(
+        model="z-ai/glm-5.2",
+        sampling=types.SimpleNamespace(reasoning_effort=None),
+    )
+    trace = _build_trace(state=state)
+    runtime = runtime if runtime is not None else _RecordingRuntime()
+    asyncio.run(
+        harness.launch(
+            ctx,
+            trace,
+            runtime,
+            "http://127.0.0.1:9999/v1",
+            "vf-secret",
+            {"nethack": "http://127.0.0.1:41449"},
+        )
+    )
+    return runtime, trace
 
 
 def test_models_json_routes_the_agent_through_interception_not_a_vendor():
@@ -381,3 +460,91 @@ def test_the_cli_streams_are_persisted_for_the_next_silent_exit():
 def test_output_capture_can_be_turned_off():
     runtime = _launch(capture_output=False)
     assert not [k for k in runtime.files if k.endswith("program.stdout.txt")]
+
+
+# -- auto-resume relaunching --------------------------------------------------
+#
+# `stop_condition = "agent_completed"` (`verifiers/v1/harness.py:109-118`,
+# stock, read-only) only means the CLI process exited 0 with no `@stop` firing
+# -- under Prime Agent's `--print` mode that happens the instant the model
+# stops emitting tool calls, whether or not the character is alive. Measured:
+# 15-25% of rollouts stop this way, sessions ending anywhere from 0 to ~170 of
+# a 400-call budget. `launch` cannot rely on the stock `Harness.run` loop to
+# fix this (read-only, not vendored) -- it has to decide for itself, from
+# `trace.state` (synced live from the toolset over the `/state` channel), and
+# loop.
+
+
+def test_relaunches_while_the_game_is_still_live_and_budget_remains():
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False, skill_calls=42)
+    runtime, trace = _launch_with_state(live, max_relaunches=3)
+    # One initial attempt plus exactly `max_relaunches` more: the fake state
+    # never changes, so "still alive" holds at every check and only the cap
+    # stops the loop.
+    assert len(runtime.programs) == 1 + 3
+    assert trace.metrics["prime_agent_relaunches"] == 3.0
+
+
+def test_does_not_relaunch_after_the_character_dies():
+    dead = _FakeNetHackState(terminated=True, budget_exhausted=False, skill_calls=42)
+    runtime, trace = _launch_with_state(dead, max_relaunches=5)
+    assert len(runtime.programs) == 1
+    assert trace.metrics["prime_agent_relaunches"] == 0.0
+
+
+def test_does_not_relaunch_once_the_call_budget_is_exhausted():
+    """Alive but out of calls is also a real stop, not a false one -- the
+    toolset's own referee (`NetHackState.budget_exhausted`) binds every arm,
+    including a CLI agent whose internal loop this harness does not control."""
+    out_of_calls = _FakeNetHackState(terminated=False, budget_exhausted=True)
+    runtime, trace = _launch_with_state(out_of_calls, max_relaunches=5)
+    assert len(runtime.programs) == 1
+    assert trace.metrics["prime_agent_relaunches"] == 0.0
+
+
+def test_a_crashing_first_attempt_is_not_relaunched():
+    """A non-zero exit is a real failure the stock `Harness.run` must still
+    raise on (`result.exit_code != 0` -> `HarnessError`) -- relaunching over it
+    would mask a crash as a resumable pause."""
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False)
+    crashing = _RecordingRuntime(exit_code=1)
+    runtime, trace = _launch_with_state(live, runtime=crashing, max_relaunches=5)
+    assert len(runtime.programs) == 1
+    assert trace.metrics["prime_agent_relaunches"] == 0.0
+
+
+def test_relaunches_still_respect_the_declared_zero_cap():
+    """`max_relaunches = 0` is a valid way to disable the feature entirely
+    without touching the relaunch-decision code path."""
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False)
+    runtime, trace = _launch_with_state(live, max_relaunches=0)
+    assert len(runtime.programs) == 1
+    assert trace.metrics["prime_agent_relaunches"] == 0.0
+
+
+def test_relaunch_argv_swaps_in_the_resume_prompt_not_the_original_task():
+    """The MCP tool server (and the game it owns) is per-rollout, not
+    per-CLI-process, so it is exactly where the last attempt left it -- only
+    the agent's own conversation is gone. Re-sending "Task: ... Begin." after
+    hundreds of tool calls would read as an instruction to restart, so a
+    relaunch gets a distinct resume prompt instead."""
+    from nethack_prime_agent import _RESUME_PROMPT
+
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False)
+    runtime, _ = _launch_with_state(live, max_relaunches=2)
+    assert len(runtime.programs) == 3
+    first_argv, _ = runtime.programs[0]
+    assert first_argv[-2:] == ["--", "Play NetHack."]
+    for argv, _ in runtime.programs[1:]:
+        assert argv[-2:] == ["--", _RESUME_PROMPT]
+        # Everything else about the relaunch invocation is unchanged.
+        assert argv[:-1] == first_argv[:-1]
+
+
+def test_relaunch_output_is_persisted_without_overwriting_the_first_attempt():
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False)
+    runtime, _ = _launch_with_state(live, max_relaunches=2)
+    prefix = "/tmp/vf-prime-agent/agent-trace-abc/"
+    assert runtime.files[f"{prefix}program.stdout.txt"] == b"ok"
+    assert runtime.files[f"{prefix}program.stdout.relaunch1.txt"] == b"ok"
+    assert runtime.files[f"{prefix}program.stdout.relaunch2.txt"] == b"ok"

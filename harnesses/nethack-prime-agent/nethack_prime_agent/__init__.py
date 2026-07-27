@@ -62,6 +62,21 @@ PROVIDER = "intercept"
 KEY_VAR = "PRIME_AGENT_INTERCEPT_KEY"
 MCP_TOKEN_VAR = "NETHACK_MCP_TOKEN"
 
+# The prompt a relaunch gets instead of the original task prompt. The MCP tool
+# server (and the NetHack game it owns) is per-ROLLOUT, not per-CLI-process, so
+# it is still sitting exactly where the previous `--no-session` process left
+# it; only the agent's own conversation is gone. Re-sending the original
+# "Task: ... Begin." prompt after hundreds of tool calls would read as an
+# instruction to start over, so this tells it plainly that it is not starting
+# over -- see `PrimeAgentHarnessConfig.max_relaunches` for the measurements
+# that motivate relaunching at all.
+_RESUME_PROMPT = (
+    "Your previous session ended, but the game did not: it is still running "
+    "and your character is still alive. Call a NetHack tool now to see the "
+    "current state and keep playing from there. Do not restart the task, "
+    "re-describe the objective, or treat this as a new game."
+)
+
 # Files copied out of this distribution into the runtime to form the skill
 # package (`skills.md#python-backed-skills` layout).
 _SKILL_FILES = ("SKILL.md", "pyproject.toml", "src/nethack/__init__.py")
@@ -163,6 +178,31 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     """`bwrap` executable. Resolved the same way as `binary` -- through PATH,
     with `path_prepend` applied first -- so an absolute override works for a
     non-PATH install."""
+
+    max_relaunches: int = 5
+    """Cap on auto-resume relaunches (`launch` returning `exit_code == 0` while
+    the game is neither dead nor budget-exhausted -- see `PrimeAgentHarness.
+    _episode_live`). `--print` mode exits the moment the model stops emitting
+    tool calls, whether or not the character is alive, and the stock
+    `verifiers` harness loop (`v1/harness.py:109-118`) reads that clean exit as
+    `stop_condition = "agent_completed"` -- a false completion signal that
+    measurably drags down every arm comparison (15-25% of rollouts stop this
+    way; measured sessions ended anywhere from 0 to ~170 of a 400-call budget).
+    This cannot be fixed by patching `Harness.run` (stock, read-only), so
+    `launch` loops on it directly: relaunch reuses the same MCP tool server
+    (game state persists there across CLI processes) and swaps in
+    `_RESUME_PROMPT` so the fresh `--no-session` process picks the game back up
+    instead of re-reading the original task prompt as if nothing had happened.
+
+    5 is a deliberately modest cap, not a "guarantee the budget is reached"
+    number: the worst measured session (Prime Agent, 20 of 400 calls) would
+    need on the order of 20 relaunches to exhaust a 400-call budget by itself,
+    and the observed 0-call session (Prime Agent, executed nothing at all)
+    shows relaunching does not always help -- a session that still is not
+    progressing after 5 fresh attempts is a broken rollout, not something to
+    paper over with unbounded retries burning wall-clock and provider spend.
+    `relaunches` is recorded on `trace.metrics["prime_agent_relaunches"]` every
+    rollout (including 0) so this is never invisible in the aggregate."""
 
 
 class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
@@ -493,14 +533,90 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # The directory is small and carries no secret (models.json holds an env
         # var NAME, auth.json is empty, settings.json holds localhost URLs), so it
         # is left in `install_dir` for the operator to clear between runs.
+        result = await self._run_once(runtime, argv, env, agent_dir, attempt=0)
+
+        # Auto-resume: a clean exit only means `--print` mode ran out of tool
+        # calls to make, not that the rollout is over (see
+        # `PrimeAgentHarnessConfig.max_relaunches`). Relaunch on the *resume*
+        # argv/prompt as long as the toolset-side referee says the character is
+        # alive and the call budget isn't exhausted, up to the configured cap.
+        resume_argv = argv[:-1] + [_RESUME_PROMPT]
+        relaunches = 0
+        while (
+            result.exit_code == 0
+            and relaunches < self.config.max_relaunches
+            and self._episode_live(trace)
+        ):
+            relaunches += 1
+            logger.info(
+                "prime-agent (trace %s) exited 0 with the game still live "
+                "(skill_calls=%s terminated=%s budget_exhausted=%s); "
+                "relaunching (%s/%s)",
+                getattr(trace, "id", "?"),
+                getattr(trace.state, "skill_calls", "?"),
+                getattr(trace.state, "terminated", "?"),
+                getattr(trace.state, "budget_exhausted", "?"),
+                relaunches,
+                self.config.max_relaunches,
+            )
+            result = await self._run_once(
+                runtime, resume_argv, env, agent_dir, attempt=relaunches
+            )
+        if trace is not None and hasattr(trace, "record_metric"):
+            # Recorded every rollout, including 0, so a run that never needed
+            # to resume is as visible in the aggregate as one that needed all 5.
+            trace.record_metric("prime_agent_relaunches", float(relaunches))
+        return result
+
+    def _episode_live(self, trace) -> bool:
+        """Whether the game is still worth relaunching into.
+
+        `trace.state` is `NetHackState` (`nethack_v1.py`), synced live over the
+        interception `/state` channel by the MCP tool server as it executes
+        skill calls -- it reflects the CURRENT toolset-side truth even though
+        the CLI process that was just driving it has already exited. `terminated`
+        is engine-side game-over (death / ascension / step cap); `budget_exhausted`
+        is the toolset's own `max_skill_calls` referee, which binds every arm
+        including a CLI agent whose internal loop this harness does not control.
+        Missing state (any taskset other than `nethack_v1`, or a bare test
+        double) is treated as "not live" -- this harness should never spin on
+        state it cannot interpret.
+        """
+        state = getattr(trace, "state", None) if trace is not None else None
+        if state is None:
+            return False
+        return not bool(getattr(state, "terminated", True)) and not bool(
+            getattr(state, "budget_exhausted", True)
+        )
+
+    async def _run_once(
+        self,
+        runtime: Runtime,
+        argv: list[str],
+        env: dict[str, str],
+        agent_dir: str,
+        *,
+        attempt: int,
+    ) -> ProgramResult:
+        """Run one Prime Agent process and (best-effort) persist its streams.
+
+        `attempt=0` keeps the original `program.{stdout,stderr}.txt` names (the
+        contract `test_the_cli_streams_are_persisted_for_the_next_silent_exit`
+        pins); a relaunch writes to `.relaunchN.txt` instead of overwriting the
+        prior attempt's evidence, since diagnosing why an earlier attempt exited
+        early is exactly what `capture_output` exists for.
+        """
         result = await runtime.run_program(argv, env)
         if self.config.capture_output:
+            suffix = "" if attempt == 0 else f".relaunch{attempt}"
             # Best effort: a diagnostics write must never fail a scored rollout.
             for name, stream in (("stdout", result.stdout), ("stderr", result.stderr)):
                 try:
                     await runtime.write(
-                        f"{agent_dir}/program.{name}.txt", (stream or "").encode()
+                        f"{agent_dir}/program.{name}{suffix}.txt", (stream or "").encode()
                     )
                 except Exception:  # noqa: BLE001
-                    logger.warning("could not persist prime-agent %s", name)
+                    logger.warning(
+                        "could not persist prime-agent %s (attempt %s)", name, attempt
+                    )
         return result
