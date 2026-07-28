@@ -81,7 +81,9 @@ _PROMPT_RANGED = """- **Ranged / approaching threats.** Kill dangerous monsters 
   `throw(item=..., direction=...)` (daggers, darts, rocks, spears) instead of
   letting them reach you. Hit it before it hits you."""
 
-_PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL."""
+_PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL. Keep acting
+every turn — the episode ends only when your character dies or you run out of
+calls, never because you stopped, summarized, or declared the run finished."""
 
 # (required tools, text). A block is emitted only when every tool it names is
 # in the published set, so the advertised surface can never exceed the real one.
@@ -161,8 +163,18 @@ creature. `@` hides the tile under you — read UNDER PLAYER."""
 # bullets and "Your goal is to get as far as possible in the game." is its
 # closing line. This replaces our `pin_objective`/JOURNAL machinery entirely
 # for the minimal prompt — no per-tier description, no milestone list.
+#
+# CLI-harness eval: `stop_condition = "agent_completed"` only means the CLI
+# process exited 0 with no `@stop` firing mid-rollout — under `--print` mode
+# that happens the moment the model stops emitting tool calls, whether or not
+# the character is still alive, costing 15-25% of measured rollouts. One
+# sentence, not a section (see the module-level note above on why the prompt
+# stays BALROG-minimal): tell the agent explicitly that ending its turn is not
+# how the episode ends.
 _PROMPT_TAIL_MINIMAL = """Explore the environment to find the stairs down to the next level.
-Your goal is to get as far as possible in the game."""
+Your goal is to get as far as possible in the game. Keep acting every turn —
+the episode ends only when your character dies or you run out of calls, never
+because you stopped, summarized, or declared the run finished."""
 
 _PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
     ((), _PROMPT_HEAD_MINIMAL),
@@ -180,6 +192,19 @@ _PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
 # the published set. Adding a skill without a blurb is fine — it simply does not
 # appear; adding a blurb for a skill nobody publishes is a no-op.
 _SKILL_BLURBS: tuple[tuple[str, str], ...] = (
+    # Listed FIRST because it is the one capability this engine has that stock
+    # NetHack does not, and an agent that does not know undo exists will never
+    # ask for it. The first `rollback` ablation published the tool correctly but
+    # had no blurb here, so the agent called it ZERO times across 5 rollouts --
+    # that measured tool adoption, not whether undo helps. (Same failure mode as
+    # the journal tools, unused across 15 rollouts, and as the balrog80 arm.)
+    ("rollback",
+     "**UNDO — this game supports it**: `rollback(n)` rewinds the last n turns, "
+     "putting the game back exactly as it was. NetHack is normally "
+     "irreversible; here it is not. Use it as soon as a move turns out badly: "
+     "you walked into a fight you are losing, stepped on a trap, ate something "
+     "that made you ill, or wasted turns in a dead end. If you are about to "
+     "die, roll back and choose differently. Costs one turn and no game time."),
     ("explore_and_descend",
      "**PRIMARY — dive**: `explore_and_descend` — explore the level + descend a "
      "floor, then returns to you."),
@@ -208,6 +233,72 @@ _SKILL_BLURBS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: The tool names actually published to the agent this run. Captured by
+#: `render_system_prompt` (the one place that already knows the resolved set)
+#: and consumed by `_fix_hint_vocabulary`.
+_PUBLISHED_TOOLS: set = set()
+
+#: Canonical hint vocabulary -> the tool that is actually bound. The HINT text
+#: was written against an older skill set and never reconciled with what
+#: `netplay_true` publishes. Measured across 8 cells: 1,722 hints recommended
+#: `search` and 260 `engrave_elbereth` -- NEITHER IS BOUND -- plus 592 `descend`
+#: (bound as np_down), 484 `attack(direction=..)` and 371 `kick(direction=..)`
+#: (both bound only as coordinate calls). ~3,058 dead recommendations, and the
+#: agent dutifully tried to follow them.
+#: SAFE renames: same call signature, different bound name. Renaming these is
+#: purely cosmetic and always correct.
+_HINT_TOOL_ALIASES: tuple[tuple[str, str], ...] = (
+    ("find_and_descend", "np_down"),
+    ("descend", "np_down"),
+    ("rest", "np_rest"),
+    ("pray", "np_pray"),
+    ("eat", "np_eat"),
+    ("pickup", "np_pickup"),
+    ("move_to", "np_move_to"),
+    ("look", "np_look"),
+)
+
+#: Capabilities the HINT text references that CANNOT be safely renamed, because
+#: either nothing is bound for them or the bound tool takes different arguments:
+#:   search / engrave_elbereth -> nothing bound at all under netplay_true
+#:   attack(direction=..)      -> only np_melee_attack(x, y) exists
+#:   kick(direction=..)        -> only np_kick(x, y) exists
+#: Renaming `attack` to `np_melee_attack` would keep the `direction=` argument
+#: and produce a call that fails on every invocation, which is worse than
+#: silence. So when the canonical tool is unbound we DELETE the advice.
+#: Measured dead recommendations across 8 cells: search 1,722, descend 592,
+#: attack 484, kick 371, engrave_elbereth 260.
+_HINT_UNSAFE: tuple[str, ...] = ("search", "engrave_elbereth", "attack", "kick")
+
+
+def _fix_hint_vocabulary(hint: str) -> str:
+    """Rewrite a HINT so it only ever names a tool the agent can actually call.
+
+    Safe-renames where the signature matches; deletes the sentence entirely
+    where the capability is unbound or takes different arguments. Deleting a
+    whole sentence (rather than the token) keeps the hint grammatical -- an
+    earlier version left fragments like "Try a different frontier, or for a
+    hidden passage."
+    """
+    if not hint or not _PUBLISHED_TOOLS:
+        return hint
+    import re as _re
+    for canonical, bound in _HINT_TOOL_ALIASES:
+        if canonical in _PUBLISHED_TOOLS:
+            continue
+        if bound in _PUBLISHED_TOOLS:
+            hint = _re.sub(rf"`{canonical}\b", f"`{bound}", hint)
+            hint = _re.sub(rf"\b{canonical}\(", f"{bound}(", hint)
+    for canonical in _HINT_UNSAFE:
+        if canonical in _PUBLISHED_TOOLS:
+            continue
+        # Drop any SENTENCE that mentions the unbound capability.
+        kept = [seg for seg in _re.split(r"(?<=[.!])\s+", hint)
+                if not _re.search(rf"`?\b{canonical}\b`?", seg)]
+        hint = " ".join(kept)
+    return _re.sub(r"\s{2,}", " ", hint).strip()
+
+
 def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     """Assemble the system prompt for a specific published tool set.
 
@@ -223,6 +314,9 @@ def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     pre-Task-18 prompt (`SYSTEM_PROMPT_VERBOSE`), so the A/B is this one flag,
     not a `git revert`.
     """
+    global _PUBLISHED_TOOLS
+    if published_tools is not None:
+        _PUBLISHED_TOOLS = set(published_tools)
     if published_tools is None:
         from nethack_harness.tools.skills import registry as _registry
 
@@ -404,8 +498,23 @@ def _format_obs_balrog(structured, journal, state, journal_max_chars: int) -> st
     lines.append("")
     if structured.inventory:
         lines.append("=== INVENTORY ===")
+        # Corpses carry no visible age in NetHack, and rot is what kills the
+        # agent in ~18% of deaths. Reconstruct it from the kill log.
+        _gt = None
+        try:
+            _gt = (getattr(structured, "status", None) or {}).get("time")
+            from nethack_harness.prompt.corpse_age import note_kills, annotate_corpse
+            note_kills(state, getattr(structured, "messages", None) or [], _gt)
+        except Exception:
+            annotate_corpse = None
         for item in structured.inventory:
-            lines.append(f"  {item.letter}: {item.description}")
+            desc = item.description
+            if annotate_corpse is not None:
+                try:
+                    desc = annotate_corpse(desc, state, _gt)
+                except Exception:
+                    pass
+            lines.append(f"  {item.letter}: {desc}")
         lines.append("")
     under = getattr(structured, "under_player", None)
     if under:
@@ -993,6 +1102,7 @@ def format_observation_as_chat(
     journal_max_chars: int = 2000,
     include_map: bool = True,
     include_local: bool = True,
+    sparse_entities: bool = False,
 ) -> str:
     """Render a StructuredObservation as a text block for the user message.
 
@@ -1046,7 +1156,15 @@ def format_observation_as_chat(
         lines.extend(_e1_frontiers_block(state))
         lines.extend(_e1_exploration_block(state, structured))
         lines.extend(_e1_spatial_belief_block(state, structured))
-    if include_map:
+    if include_map and sparse_entities:
+        # Entity-only map: the ASCII grid is NOT rendered at all. The whole
+        # point is to drop terrain, so falling through to the grid below would
+        # make this the most expensive encoding rather than the cheapest.
+        from nethack_harness.prompt.sparse_map import sparse_entity_map
+        lines.append("=== MAP (entities only; terrain omitted) ===")
+        lines.append(sparse_entity_map(structured, state))
+        lines.append("")
+    elif include_map:
         lines.append("=== MAP ===")
         map_view = _render_ascii_map(structured, state)
         # Wave-3 Track C v2 (variant E2): paint '?' over truly-unseen tiles
@@ -1103,8 +1221,26 @@ def format_observation_as_chat(
             lines.append("=== INVENTORY (unchanged) ===")
         else:
             lines.append("=== INVENTORY ===")
+            # Corpse rot is invisible in NetHack and kills the agent in ~18% of
+            # deaths, so annotate age here. NOTE: this is the block
+            # `format_observation_as_chat` actually uses -- the near-identical
+            # one earlier in this file belongs to a different render path, and
+            # patching only that one left the feature silently dead.
+            _gt2 = (getattr(structured, "status", None) or {}).get("time")
+            _ann = None
+            try:
+                from nethack_harness.prompt.corpse_age import note_kills, annotate_corpse as _ann
+                note_kills(state, getattr(structured, "messages", None) or [], _gt2)
+            except Exception:
+                _ann = None
             for item in structured.inventory:
-                lines.append(f"  {item.letter}: {item.description}")
+                _d = item.description
+                if _ann is not None:
+                    try:
+                        _d = _ann(_d, state, _gt2)
+                    except Exception:
+                        pass
+                lines.append(f"  {item.letter}: {_d}")
         if state is not None:
             state["_inv_fingerprint"] = cur_fp
         lines.append("")
@@ -1122,7 +1258,8 @@ def format_observation_as_chat(
             # a strictly additive signal worth ~30 tokens.
             order = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
             adj_line = " ".join(f"{d}={adj.get(d, '?')}" for d in order)
-            lines.append(f"=== ADJACENT === {adj_line}")
+            if not sparse_entities:
+                lines.append(f"=== ADJACENT === {adj_line}")
             lines.append("")
         # NEXT-ACTION HINT: the model kept missing the moment to descend or
         # attack adjacent hostiles. If on stairs down, say so. Else if stairs
@@ -1358,6 +1495,8 @@ def format_observation_as_chat(
                 if exit_hint_target is not None:
                     _mark_exit_tried(state, *exit_hint_target)
         if hint and not self_dispatch:
+            hint = _fix_hint_vocabulary(hint)
+        if hint and not self_dispatch:
             lines.append(f"=== HINT === {hint}")
             lines.append("")
     # Hostiles-in-sight + VISIBLE FEATURES: render in BOTH compact and
@@ -1380,13 +1519,53 @@ def format_observation_as_chat(
             if "_seen_stairs_down" in state:
                 _remember_stairs_down(state, structured, feats)
             features = format_features(feats)
+            # Statues belong HERE, in the features area -- not on the map.
+            # A statue draws the monster's letter, and that glyph is the game's
+            # own output: rewriting it would make our ASCII/JSON map an
+            # unfaithful render of the engine, which is the one thing the map
+            # must never be. But nothing else in the observation mentions
+            # statues either (they are excluded from `glyph_is_monster`, from
+            # the NetPlay tracker, and from the feature scan), so the agent
+            # attacks them and gets "There is no monster at (x,y)" at zero
+            # game-turn cost. Naming them in the features list is derived
+            # knowledge in the place derived knowledge goes.
+            try:
+                from nethack_harness.prompt.features import statues as _statues
+                features = list(features) + _statues(state["raw_obs"])
+            except Exception:
+                pass
             if features:
-                lines.append(f"=== VISIBLE FEATURES === {'; '.join(features)}")
-                lines.append("")
+                if not sparse_entities:
+                    lines.append(f"=== VISIBLE FEATURES === {'; '.join(features)}")
+                    lines.append("")
             hostiles = monsters_in_sight(state["raw_obs"])
-            if hostiles:
+            if hostiles and not sparse_entities:
                 lines.append(f"=== VISIBLE MONSTERS === {'; '.join(hostiles)}")
                 lines.append("")
+            # The "unseen" arm of the seen-vs-remembered axis. OPT-IN per
+            # variant so the pair differs in exactly this block and nothing
+            # else. See features.remembered_monsters for why the earlier
+            # always-on version was withdrawn.
+            if state.get("_remember_monsters") and not sparse_entities:
+                try:
+                    from nethack_harness.prompt.features import remembered_monsters
+                    _st = (structured.status or {})
+                    _rm = remembered_monsters(state, state["raw_obs"],
+                                              _st.get("time"), _st.get("depth"))
+                    if _rm:
+                        lines.append(f"=== REMEMBERED MONSTERS (seen earlier, not visible now) === {'; '.join(_rm)}")
+                        lines.append("")
+                except Exception:
+                    pass
+            # (A `REMEMBERED MONSTERS` block lived here. Removed: it was built on
+            # the theory that the char plane retains monsters the glyph plane has
+            # dropped. A 7,500-step audit found ZERO such cells -- chars and glyphs
+            # are two views of one NLE buffer and cannot drift. The block had no
+            # death invalidation (it advertised a kobold 22 turns after the agent
+            # killed it) and counted LLM turns while STATUS reports game turns,
+            # ~15x apart. It manufactured phantom targets rather than preventing
+            # them. The real cause is statues / the `I` marker; fix those.
+
         except Exception:
             pass
     if structured.messages:

@@ -251,6 +251,105 @@ def reset_agent_cache() -> None:
 # Adapter: NetPlay's Iterator[Step] protocol -> our SkillResult protocol.
 # ---------------------------------------------------------------------------
 
+
+def _spoiling_now(core_env):
+    """Carried corpses within the urgent window, or [] if none/unknown.
+
+    Deliberately cheap and total: any failure means "nothing urgent", because a
+    bug here must never be able to abort a skill that was working.
+    """
+    try:
+        from nethack_core.observations import shape as _shape
+        from nethack_harness.prompt.corpse_age import urgent_corpses
+        raw = _raw_view(core_env)
+        if raw is None:
+            return []
+        so = _shape(raw, getattr(core_env, "_character", None))
+        gt = (so.status or {}).get("time")
+        return urgent_corpses(so.inventory, core_env, gt)
+    except Exception:
+        return []
+
+
+class _RawView:
+    """Adapter over `core_env.last_observation`, which is a LIST.
+
+    `NetHackCoreEnv.last_observation` returns the raw observation TUPLE indexed
+    by `observation_keys`, not a CoreObservation. Anything expecting `.chars` /
+    `.glyphs` / `.blstats` silently sees `None` and returns empty -- which is
+    how the pet guard came to no-op while reporting success, letting
+    `melee_attack` kill the pet it was written to protect.
+    """
+
+    __slots__ = ("chars", "glyphs", "blstats")
+
+    def __init__(self, chars, glyphs, blstats):
+        self.chars, self.glyphs, self.blstats = chars, glyphs, blstats
+
+
+def _raw_view(core_env):
+    """Best-effort CoreObservation-shaped view; None if unavailable."""
+    raw = getattr(core_env, "last_observation", None)
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple)):
+        return raw                      # already a CoreObservation
+    try:
+        ks = list(core_env.observation_keys)
+        return _RawView(raw[ks.index("chars")], raw[ks.index("glyphs")],
+                        raw[ks.index("blstats")])
+    except Exception:
+        return None
+
+
+#: Non-hostiles that `melee_attack` must never be pointed at. Pets are detected
+#: from the glyph; the rest are recognised by name, because NLE exposes no
+#: peaceful flag and NetHack only reveals peacefulness through the "Really
+#: attack?" prompt -- which is exactly the prompt `melee_attack` bypasses.
+_NEVER_ATTACK_NAMES = (
+    "shopkeeper", "watchman", "watch captain", "guard", "priest", "priestess",
+    "aligned priest", "nurse", "oracle", "vault guard", "quest",
+)
+
+
+def _refuse_attack(core_env, kwargs):
+    """Return a refusal SkillResult if the target must not be force-fought.
+
+    WHY. `vendor/.../skills.py:389` issues `Command.FIGHT` then a direction.
+    FIGHT deliberately skips NetHack's `Really attack? [yn](n)` confirmation --
+    and that confirmation is also where OUR peaceful safety net lives
+    (`observations.py::_YN_NO_PATTERNS` matches "really attack" precisely to
+    protect pets). So the skill punches straight through both guards.
+
+    Measured live: it killed the pet the observation itself labels
+    `[PET - don't attack]`, and killed a shopkeeper, whose retaliation killed
+    the character outright. Blocking here is the only place we can, short of
+    editing vendored code.
+    """
+    try:
+        tx, ty = int(kwargs.get("x")), int(kwargs.get("y"))
+    except Exception:
+        return None
+    try:
+        from nethack_harness.prompt.features import visible_monsters
+        for m in visible_monsters(_raw_view(core_env)):
+            if (m.x, m.y) != (tx, ty):
+                continue
+            if m.is_pet:
+                return SkillResult(actions=[], feedback=(
+                    f"REFUSED: ({tx},{ty}) is your pet {m.name}. Attacking it "
+                    f"would kill it and anger your god. Walk around it instead."))
+            low = (m.name or "").lower()
+            if any(n in low for n in _NEVER_ATTACK_NAMES):
+                return SkillResult(actions=[], feedback=(
+                    f"REFUSED: {m.name} at ({tx},{ty}) is peaceful. Attacking it "
+                    f"makes it and its allies hostile and is usually fatal. "
+                    f"Leave it alone."))
+    except Exception:
+        return None
+    return None
+
+
 def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillResult:
     """Drive one NetPlay skill to completion against the live engine.
 
@@ -275,6 +374,11 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     # instance patch is removed in `finally`); `wrapped.step` is `NetPlayEngineEnv.
     # step`, which `agent.step()` (agent_base.py:173) calls for every real engine
     # step a skill takes.
+    if getattr(skill, "name", "") == "melee_attack":
+        _refusal = _refuse_attack(core_env, kwargs)
+        if _refusal is not None:
+            return _refusal
+
     step_observations: list = []
     original_step = wrapped.step
 
@@ -294,12 +398,110 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                 thoughts.append(str(step.thoughts))
             if step.executed_action() and step.step_data.done:
                 break
+            # --- spoiling-food interrupt ---------------------------------
+            # Closed-loop skills run to completion regardless of what happens
+            # inside them; `np_explore_level` alone burns up to 100 game turns
+            # in ONE agent turn. A corpse is only safe for ~30 turns after the
+            # kill, so a single explore call can outlast the entire edible
+            # window -- the agent leaves carrying food and returns carrying
+            # poison. That is the measured pathway for ~18% of deaths, and no
+            # amount of labelling fixes it if the agent is never given the turn
+            # in which to act. So break the macro while the food is still food.
+            _urgent = _spoiling_now(core_env)
+            if _urgent:
+                thoughts.append(
+                    "[INTERRUPTED: " + "; ".join(_urgent) +
+                    ". Stopped early so you can eat before it spoils.]")
+                break
     except Exception as e:  # a skill raising must not kill the rollout
         thoughts.append(f"Skill raised {type(e).__name__}: {e}")
     finally:
         wrapped.step = original_step
 
+    # Harvest kills from the INTERMEDIATE observations. `shape()` keeps only the
+    # last message, so a 100-step macro surfaces one line and `You kill the X!`
+    # is usually lost -- which is why the corpse-age kill log missed 25% of
+    # kills. These observations already exist (`step_observations`); we read
+    # them for the log ONLY. Nothing here reaches the model: surfacing a
+    # macro's whole message stream would flood the observation, which is the
+    # opposite of what the encoding work is for.
+    try:
+        from nethack_core.observations import shape as _shape
+        from nethack_harness.prompt.corpse_age import note_kills
+        _log_state = core_env
+        for _o in step_observations:
+            try:
+                _so = _shape(_o, getattr(core_env, "_character", None))
+                note_kills({"env": core_env}, _so.messages or [],
+                           (_so.status or {}).get("time"))
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     feedback = " ".join(t for t in thoughts if t).strip() or "No effect."
+
+    # Report what the GAME said, not just that the skill returned.
+    # `create_position_command` / `create_inventory_command` yield
+    # `Step.completed()` unconditionally without reading the result, so a kick
+    # that bounced and a kick that smashed the door open produce the identical
+    # string `Skill 'kick 43 5' completed`. NetHack's own message is the only
+    # thing that distinguishes them, and it is right there in the final
+    # observation -- appending it costs nothing and turns an unfalsifiable
+    # "completed" into a fact the agent can act on.
+    try:
+        from nethack_core.observations import shape as _shp
+        _rv = _raw_view(core_env)
+        _last = None
+        if step_observations:
+            _last = step_observations[-1]
+        elif _rv is not None:
+            _last = getattr(core_env, "_last_observation", None)
+        if _last is not None:
+            _msgs = [m for m in (_shp(_last, getattr(core_env, "_character", None)).messages or []) if m]
+            if _msgs and _msgs[-1] not in feedback:
+                feedback = f"{feedback} GAME: {_msgs[-1]}".strip()
+    except Exception:
+        pass
+
+    # Two cleanups on the vendored event text before the agent sees it.
+    #
+    # (a) numpy scalars repr as `np.int64(2)` under numpy 2.x, and the event
+    #     formats tuples of blstats values straight into the message -- so the
+    #     agent read `Changed dungeon level from (np.int64(0), np.int64(2))`.
+    #
+    # (b) that tuple is `(dnum, dlevel)` -- the DUNGEON BRANCH id and the level
+    #     within it (winrl.cc:1088-1089, from `u.uz`). The branch is not a seed;
+    #     it distinguishes the Dungeons of Doom from the Gnomish Mines, Sokoban
+    #     and so on (src/dat/dungeon.def). Almost always it is unchanged, and
+    #     printing it as half of an unexplained pair just obscured the number
+    #     that matters. Render the level plainly, and mention the branch only on
+    #     the rare turn it actually changes.
+    try:
+        import re as _re
+        feedback = _re.sub(r"np\.(?:int|uint|float)\d+\(([-\d.]+)\)", r"\1", feedback)
+
+        def _lvl(m):
+            d0, l0, d1, l1 = (int(m.group(i)) for i in (1, 2, 3, 4))
+            if d0 == d1:
+                return f"Changed dungeon level from {l0} to {l1}"
+            return (f"Changed dungeon level from {l0} to {l1} "
+                    f"(and entered a different dungeon branch, {d0} -> {d1})")
+
+        feedback = _re.sub(
+            r"Changed dungeon level from \((\d+),\s*(\d+)\) to \((\d+),\s*(\d+)\)",
+            _lvl, feedback)
+    except Exception:
+        pass
+
+    # NOTE: a `_fight_fallback` used to sit here, silently converting the
+    # "There is no monster at (x,y)" failure into an `F<dir>` attack. It is
+    # DELIBERATELY REMOVED. It fired 205 times in a 399-turn rollout, which
+    # meant the traces no longer showed the underlying defect at all -- the
+    # renderer drawing a monster glyph the tracker does not hold. Masking a bug
+    # in the layer above the one that causes it makes the traces undiagnosable.
+    # The failure is left raw; the fix belongs in the renderer.
+
     return SkillResult(
         actions=[],
         feedback=feedback,
@@ -310,6 +512,8 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
         pre_truncated=wrapped.truncated,
         pre_visible_obs=step_observations,
     )
+
+
 
 
 _TYPE_NAMES = {"string": "string", "integer": "integer", "bool": "boolean"}

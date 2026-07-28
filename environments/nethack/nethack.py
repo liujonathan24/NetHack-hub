@@ -193,6 +193,7 @@ from nethack_harness.prompt.rendering import (
     _paint_frontiers_on_map,
     format_observation_as_chat,
 )
+from nethack_harness.prompt.interactive_state import detect_blocking_ui
 from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
@@ -376,6 +377,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # primitive into the effective action surface and confounding
         # cross-encoding comparisons. None/empty disables the gate (back-compat).
         allowed_skill_names: Optional[set] = None,
+        no_progress_timeout: int = 10_000,
         # Memory-ablation knob (sub-experiment 1c). When False, the tier
         # description is NOT pre-pinned as the journal objective at setup, so a
         # rollout with journal tools excluded and belief_state_interval=0 keeps
@@ -402,6 +404,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
         self._setup_character = setup_character
+        self._no_progress_timeout = int(no_progress_timeout)
         self._allowed_skill_names = set(allowed_skill_names or ())
         # BALROG's 80-command surface (tools/balrog_actions.py) makes NetHack's
         # own prompts part of the agent's job: `bal_eat` opens "What do you want
@@ -539,6 +542,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 tune=self._setup_tune,
                 modify=self._setup_modify,
                 level_blob=self._setup_level_blob,
+                # BALROG's `no_progress_timeout: 150` -- 150 consecutive env
+                # steps without the in-game turn counter advancing aborts the
+                # episode. It is the ONLY early stop in their protocol (their
+                # step cap is 100k), so matching it is what makes an
+                # uncapped-ish run affordable: a stalled agent is cut off
+                # instead of grinding to the cap. Default 10_000 = effectively
+                # off, preserving every existing arm byte-for-byte.
+                no_progress_timeout=self._no_progress_timeout,
             )
         env.seed(core=seed, disp=seed)
         # NB: bootstrap_character() is currently a stub; once wired up it
@@ -759,6 +770,27 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         content = await self._apply_tool_call(state, skill_name, skill_args)
         return [vf.UserMessage(role="user", content=content)]
 
+    def _render_obs_text(self, state: vf.State, journal=None) -> str:
+        """`spec.turn_template`, prefixed with a blocking-UI warning when one applies.
+
+        Every per-turn render goes through here. The `=== MAP ===` block is
+        built from the glyph plane (`prompt/ascii_map.py`), which has no
+        representation for an open menu or prompt — so without this prefix an
+        agent that opens the inventory sees an unchanged, normal-looking map
+        while the game clock is frozen, and repeats the identical observation
+        forever. Measured: 3 of 5 `b80_b0` seeds burned 2,499 calls each at
+        game time 1 this way. See `prompt/interactive_state.py`.
+        """
+        obs_text = self.spec.turn_template(
+            state["structured_obs"],
+            state["journal"] if journal is None else journal,
+            state,
+            compact=self.compact_obs,
+            journal_max_chars=self.journal_render_max_chars,
+        )
+        warning = detect_blocking_ui(state.get("raw_obs"))
+        return f"{warning}\n{obs_text}" if warning else obs_text
+
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
         """Execute one skill against the engine and return the rendered observation.
 
@@ -786,6 +818,33 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # `state["died"]` is set (by the zero-HP check or either terminal
         # detector below), every further call is a no-op against the engine:
         # no `env.step`, no turn-counter advance, no reward.
+        # EXCEPT `rollback`. The system prompt's headline affordance is "if you
+        # are about to die, roll back and choose differently" -- and this gate
+        # sits BEFORE skill dispatch, so death was the one moment rollback could
+        # not be used. Observed live: post-death `rollback(3)` returned "no
+        # further actions are possible" without touching the snapshot stack.
+        # Undoing into a live state clears `died` and the run genuinely resumes.
+        if state.get("died") and skill_name == "rollback":
+            _env = state["env"]          # `env` is not bound this early in the fn
+            _res = skill_registry.call("rollback", _env, state["structured_obs"], **skill_args)
+            for _a in (_res.actions or []):
+                try:
+                    _o, _r, _t, _tr, _i = _env.step(_a)
+                    state["raw_obs"] = _o
+                except Exception:
+                    break
+            state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
+            if (state["structured_obs"].status or {}).get("hitpoints", 0) > 0:
+                state["died"] = False
+                state["terminated"] = False
+            state["_stuck_n"] = 0
+            content = self.spec.turn_template(
+                state["structured_obs"], state["journal"], state,
+                compact=self.compact_obs,
+                journal_max_chars=self.journal_render_max_chars,
+            )
+            return compose_user_content(content, [f"[{_res.feedback}]"])
+
         if state.get("died"):
             content = self.spec.turn_template(
                 state["structured_obs"], state["journal"], state,
@@ -814,11 +873,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # compass tools ARE in the exposed set). No NLE step is consumed.
         if self._allowed_skill_names and skill_name not in self._allowed_skill_names:
             avail = ", ".join(sorted(self._allowed_skill_names))
-            obs_text = self.spec.turn_template(
-                state["structured_obs"], state["journal"], state,
-                compact=self.compact_obs,
-                journal_max_chars=self.journal_render_max_chars,
-            )
+            obs_text = self._render_obs_text(state)
             content = compose_user_content(
                 obs_text,
                 [f"[Tool {skill_name!r} is not available. Call one of: {avail}]"],
@@ -891,6 +946,21 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 skill_name, env, state["structured_obs"], **skill_args
             )
 
+        # ---- stuck-call breaker: RECORD ONLY --------------------------
+        # The decision cannot be made here. At this point this turn's actions
+        # have not run, so the only clock available is last turn's -- comparing
+        # it against a value also written last turn is trivially equal, which
+        # silently degrades the check back to pure call identity. That is
+        # exactly the bug that made this fire on the kick that smashed a door
+        # open (dtime 96) and on the call that found the stairs. So capture the
+        # signature and the pre-action clock now, and judge after the engine has
+        # actually stepped (see the post-step block below).
+        state["_sig_now"] = (skill_name, repr(sorted(skill_args.items())))
+        try:
+            state["_gt_before"] = (state["structured_obs"].status or {}).get("time")
+        except Exception:
+            state["_gt_before"] = None
+
         # Sub-experiment 1d (delayed-map / DM variants): request_map and reveal
         # are info-only skills (empty actions) that force the FULL map back into
         # this turn's rendered observation. Skills can't reach `state`, so the
@@ -905,11 +975,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             journal: Journal = state["journal"]
             feedback = result.journal_op(journal)
             state["scout_delta"] = 0  # no exploration happened
-            obs_text = self.spec.turn_template(
-                state["structured_obs"], journal, state,
-                compact=self.compact_obs,
-                journal_max_chars=self.journal_render_max_chars,
-            )
+            obs_text = self._render_obs_text(state, journal)
             content = compose_user_content(obs_text, [f"[{feedback}]"] if feedback else [])
             return content
 
@@ -1060,8 +1126,50 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             if terminated or truncated:
                 break
         if dismissed:
+            # Those ESC/CR/y/n presses went through `env.step` directly, not
+            # through `agent.step`, so the NetPlay tracker never saw them and is
+            # now stale -- the measured cause of map / VISIBLE MONSTERS /
+            # tracker three-way disagreement and spurious "no monster at (x,y)".
+            try:
+                from nethack_harness.tools.netplay_true import reset_agent_cache
+                reset_agent_cache()
+            except Exception:
+                pass
             halt_reason = (halt_reason or "") + (f" menu auto-dismissed x{dismissed}" if not halt_reason else f" / menu auto-dismissed x{dismissed}")
             halt_reason = halt_reason.lstrip()
+        # Snapshot the post-turn state so `rollback(n)` has somewhere to go.
+        # Only when the tool is actually published, because each snapshot is a
+        # full engine heap image -- every other arm must not pay for a feature
+        # it cannot use. Taken AFTER the menu auto-dismiss loop so a restored
+        # frame is a clean, actionable state rather than a half-open menu.
+        if "rollback" in self._allowed_skill_names and not (terminated or truncated):
+            from nethack_harness.tools.skills import push_rollback_snapshot
+            try:
+                push_rollback_snapshot(env, state.get("turn_count", 0))
+            except Exception:
+                pass  # never let snapshotting break a rollout
+        # ---- stuck-call breaker: JUDGE ---------------------------------
+        # Now the engine HAS stepped, so `gt_after` vs `gt_before` is a real
+        # measurement of whether this turn moved the game at all. Repeating
+        # `explore_level` is correct NetHack play and must never be flagged on
+        # its own; what is worth flagging is a call that repeats AND freezes the
+        # clock. Warning goes on `halt_reason`, which reaches the next
+        # observation.
+        try:
+            _gt_after = (state["structured_obs"].status or {}).get("time")
+            _same_call = state.get("_sig_prev") == state.get("_sig_now")
+            _frozen = (_gt_after is not None
+                       and _gt_after == state.get("_gt_before")
+                       and _same_call)
+            state["_stuck_n"] = int(state.get("_stuck_n", 0)) + 1 if _frozen else 0
+            state["_sig_prev"] = state.get("_sig_now")
+            if int(state.get("_stuck_n", 0)) >= 2:
+                _n = int(state["_stuck_n"]) + 1
+                halt_reason = ((halt_reason or "") +
+                    f" [STUCK: this exact call has run {_n} times and the game "
+                    f"clock has not advanced once. Do something DIFFERENT.]").strip()
+        except Exception:
+            pass
         state["last_reward"] = total_reward
         state["terminated"] = terminated or truncated
         # Refiner: on terminal, persist the refined components for the
@@ -1338,11 +1446,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
 
         # Build the per-turn user message from the spec's turn template.
-        obs_text = self.spec.turn_template(
-            state["structured_obs"], state["journal"], state,
-            compact=self.compact_obs,
-            journal_max_chars=self.journal_render_max_chars,
-        )
+        obs_text = self._render_obs_text(state)
         prefix_parts = []
         # Per-turn hooks declared by the spec (P self-refinement directive; CH
         # refiner + sub-agent triggers). Each mutates prefix_parts/state in
@@ -1829,10 +1933,22 @@ def load_environment(
     from nethack_harness.prompt import rendering as _rendering
     if interface == "skill" and spec.system_prompt == _base_system_prompt:
         import dataclasses as _dc
-        spec = _dc.replace(
-            spec,
-            system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
-        )
+        # BALROG's raw-command surface gets BALROG's OWN instruction prompt.
+        # `_render_system_prompt` builds its cheat-sheet from `_SKILL_BLURBS`,
+        # which has no `bal_*` entries, so this arm was silently shipping the
+        # macro-skill prompt -- which never says descent needs `down` while
+        # standing on the stairs, nor that `travel` takes a `>`/`<` follow-up.
+        # The agent called `bal_down` once in 12,446 turns and scored a flat
+        # 0.00%. Comparing against BALROG's 3.96 on this surface only means
+        # something if the agent is briefed the way theirs is.
+        if any(n.startswith("bal_") for n in _allowed_skill_names):
+            from nethack_harness.tools.balrog_actions import balrog_instruction_prompt
+            spec = _dc.replace(spec, system_prompt=balrog_instruction_prompt())
+        else:
+            spec = _dc.replace(
+                spec,
+                system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
+            )
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,
@@ -1877,6 +1993,7 @@ def load_environment(
         setup_level_blob=level_blob,
         setup_character=character,
         allowed_skill_names=_allowed_skill_names,
+        no_progress_timeout=int(kwargs.pop('no_progress_timeout', 10_000)),
         pin_objective_on_setup=pin_objective_on_setup,
         self_dispatch=self_dispatch,
         **kwargs,

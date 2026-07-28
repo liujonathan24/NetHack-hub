@@ -50,11 +50,8 @@ dat/
 # subdirectory it lands in.
 /outputs/**/*.log
 
-# Per-turn rollout traces from ANY eval subtree, not just cli_harness_eval.
-# `outputs/encoding_eval/**/traces.jsonl` grew to 70+ MB apiece and, together
-# with a 255 MB `outputs/cli_harness_eval/run1/control.log`, made this branch
-# unpushable (GitHub hard-fails blobs over 100 MB). Both were purged from
-# history; keep them out. Aggregated artifacts a run produces next to them
-# (table.md, summary.json, results.jsonl, metrics) are unaffected.
-traces.jsonl
-/outputs/**/turns/
+# Core dumps. A 577MB core landed in the worktree during the hang
+# investigation; large blobs like this are what previously made the branch
+# unpushable (GitHub hard-fails over 100MB).
+core.*
+vgcore.*
