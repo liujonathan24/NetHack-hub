@@ -988,7 +988,12 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # No journal/wiki tools here. BALROG gives its agent none, and adding
         # them would confound exactly the memory axis 1c measures.
         from nethack_harness.tools import balrog_actions as _bal
-        keep = set(_bal.BALROG_TOOL_NAMES)
+        # The 80 documented commands PLUS `bal_a`..`bal_z`. BALROG documents 80
+        # but its valid action space is 248 strings including the bare letters,
+        # which is how their agent answers item prompts ("What do you want to
+        # eat? [dgh...]" -> "d"). Without them a tool-calling agent cannot
+        # answer such a prompt at all, so eat/quaff/read/wield are dead.
+        keep = set(_bal.BALROG_TOOL_NAMES) | set(_bal.BALROG_MENU_LETTERS)
         out = []
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
@@ -1037,6 +1042,12 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # tools.balrog_actions registers them globally, and they are an
         # alternative ACTION SURFACE, not extra tools.
         if name.startswith(_BALROG_PREFIX):
+            continue
+        # `rollback` is an opt-in CAPABILITY (engine snapshot/restore), not a
+        # default tool. It is registered globally the moment tools.skills is
+        # imported, so without this it would silently appear in every 'full'
+        # arm already run and change their action surface.
+        if name == "rollback":
             continue
         params = schema.get("parameters", {}) or {}
         out.append(_make_skill_adapter(name, schema.get("description", ""), params))

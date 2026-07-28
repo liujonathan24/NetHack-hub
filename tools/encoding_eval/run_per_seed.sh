@@ -79,6 +79,18 @@ declare -A EXTRA=(
   # so they are added explicitly to these two and to neither of the others.
   [b80_journal]='{"skill_set":"balrog80,add_note,recall,pin_objective","belief_state_interval":0,"summarize_and_reset":false}'
   [b80_belief]='{"skill_set":"balrog80,add_note,recall,pin_objective","belief_state_interval":25,"sub_lm_model":"google/gemini-3-flash-preview"}'
+  # ---- model-strength arms: our best 4 configs on stronger models ----
+  # Identical to the netplay_true cells that produced 3.58 / 3.49 / 3.22 /
+  # 3.21 with gemini-3-flash. ONLY the model changes, so any delta is model
+  # strength and not encoding, action surface, or memory policy.
+  [m_f36_bbox_fixed]='{"skill_set":"netplay_true,reveal","belief_state_interval":25}'
+  [m_f36_b0]='{"belief_state_interval":25}'
+  [m_f36_journal]='{"belief_state_interval":0,"summarize_and_reset":false}'
+  [m_f36_bboxjson]='{"skill_set":"netplay_true,reveal","belief_state_interval":25}'
+  [m_p31_bbox_fixed]='{"skill_set":"netplay_true,reveal","belief_state_interval":25}'
+  [m_p31_b0]='{"belief_state_interval":25}'
+  [m_p31_journal]='{"belief_state_interval":0,"summarize_and_reset":false}'
+  [m_p31_bboxjson]='{"skill_set":"netplay_true,reveal","belief_state_interval":25}'
 
 )
 declare -A VARIANT=(
@@ -89,7 +101,29 @@ declare -A VARIANT=(
   [toon_fixed]=TOON [toon_minimal]=TOON
   [b80_bbox]=BBOX [b80_b0]=B0 [b80_bbox_json]=BBOX_JSON
   [b80_journal]=B0 [b80_belief]=B0
+  [m_f36_bbox_fixed]=BBOX
+  [m_f36_b0]=B0
+  [m_f36_journal]=B0
+  [m_f36_bboxjson]=BBOX_JSON
+  [m_p31_bbox_fixed]=BBOX
+  [m_p31_b0]=B0
+  [m_p31_journal]=B0
+  [m_p31_bboxjson]=BBOX_JSON
 )
+
+# Per-cell model override (empty/absent => the base config's
+# google/gemini-3-flash-preview). Only the model-strength arms set this.
+declare -A MODEL_OF=(
+  [m_f36_bbox_fixed]='google/gemini-3.6-flash'
+  [m_f36_b0]='google/gemini-3.6-flash'
+  [m_f36_journal]='google/gemini-3.6-flash'
+  [m_f36_bboxjson]='google/gemini-3.6-flash'
+  [m_p31_bbox_fixed]='google/gemini-3.1-pro-preview'
+  [m_p31_b0]='google/gemini-3.1-pro-preview'
+  [m_p31_journal]='google/gemini-3.1-pro-preview'
+  [m_p31_bboxjson]='google/gemini-3.1-pro-preview'
+)
+
 
 MAX_PARALLEL="${MAX_PARALLEL:-3}"
 running=0
@@ -133,7 +167,7 @@ d['n_examples'] = 1
 d['trace_dir'] = sys.argv[3]
 print(json.dumps(d))" "$base" "$s" "${OUT_ABS}/turns")"
     echo "[ps] starting ${cell} seed ${s} [${running}/${MAX_PARALLEL} busy]"
-    EXTRA_ARGS="$merged" "$LAUNCH" "${VARIANT[$cell]}" "${OUT_ABS}/s${s}" "$MAX_TURNS" 1 \
+    MODEL="${MODEL_OF[$cell]:-}" EXTRA_ARGS="$merged" "$LAUNCH" "${VARIANT[$cell]}" "${OUT_ABS}/s${s}" "$MAX_TURNS" 1 \
       >"${RUN_ROOT}/${cell}.s${s}.log" 2>&1 &
     PID_OF["${cell}/s${s}"]=$!
     running=$((running + 1))

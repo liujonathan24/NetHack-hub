@@ -172,3 +172,81 @@ def register_all() -> list[str]:
 
 #: The 80 registered tool names, in BALROG's own order.
 BALROG_TOOL_NAMES: list[str] = register_all()
+
+
+def register_menu_letters() -> list[str]:
+    """Register `bal_a`..`bal_z` -- the item-selection keys.
+
+    BALROG documents 80 actions but its *valid* action space is 248 strings:
+    the 86 USEFUL_ACTIONS names plus `a-z`, `A-Z` and `0-99`
+    (balrog/environments/nle/base.py). The bare letters are how their agent
+    answers NetHack's own item prompts -- their tips block says so explicitly:
+    "What do you want to eat? [dgh or ?*]" -> answer "d", "g" or "h".
+
+    Our agent acts by calling tools, so without these it simply CANNOT answer an
+    item prompt except by the accident of a letter coinciding with a command
+    byte (`h/j/k/l/y/u/b/n` are compass keys, `i` is inventory). That makes
+    eat/quaff/read/wield/wear unusable on the raw surface -- a functional gap,
+    not a stylistic one.
+    """
+    names = []
+    for ch in "abcdefghijklmnopqrstuvwxyz":
+        tool = TOOL_PREFIX + ch
+        if tool in BALROG_TOOL_NAMES:
+            continue
+        registry.register(
+            tool, {"description": f"answer a menu/item prompt with '{ch}'", "parameters": {}}
+        )(_make_action_skill(ord(ch), ch))
+        names.append(tool)
+    return names
+
+
+#: Menu-answer letters, registered alongside the 80.
+BALROG_MENU_LETTERS: list[str] = register_menu_letters()
+
+
+def balrog_instruction_prompt() -> str:
+    """BALROG's own NLE system prompt, verbatim except for the action names.
+
+    Reproduced from `get_instruction_prompt()` in their
+    `balrog/environments/nle/__init__.py`: the full action list with each
+    description, their tips block, then "PLAY!".
+
+    THE ONE DEVIATION is the action names: BALROG's agent emits bare strings
+    (`north`), ours calls tools (`bal_north`). Listing the bare names would
+    describe an action set the model cannot actually invoke. The mapping is 1:1
+    and every description is theirs, so the semantics are unchanged.
+
+    Why this exists: the first `balrog80` sweep published the 80 tools but kept
+    OUR system prompt, which is written for the closed-loop macro skills and
+    never explains that descent needs `down` *while standing on the stairs*, nor
+    that `travel` wants a `>`/`<` follow-up. Across 12,446 turns the agent
+    called `bal_down` ONCE and spent 24.8% of its actions on `bal_search`,
+    ending every episode on Dlvl 1 for a flat 0.00%. That measured a missing
+    prompt, not the action space -- BALROG scores 3.96 on this same surface.
+    """
+    action_strings = ",\n".join(
+        f"{TOOL_PREFIX}{name.replace(' ', '_')}: {desc}"
+        for name, (_key, desc) in BALROG_ACTIONS.items()
+    )
+    return f"""
+You are an agent playing NetHack. The following are the possible actions you can take in the game, followed by a short description of each action:
+
+{action_strings}.
+
+Tips:
+- When the message asks for a completion, such as: "What do you want to eat? [d or ?*]", you should respond with a single character corresponding to the item you want to eat/use.
+    - For example, "What do you want to eat? [dgh or ?*]" -> Possible answers are "d", "g", or "h" to eat the associated food.
+- When the message asks for a direction, such as: "In what direction?" you should respond with a direction.
+- When the message has --More-- at the end, your next action should be "more" to see the rest of the message.
+- Explore the environment to find the stairs down to the next level.
+- Always carefully read the last message to understand the current state of the game and decide your next action accordingly.
+- If you keep moving in the same direction, you will eventually hit a wall and stop moving. Your message might be: "It's solid stone", or "It's a wall". Change your action to move in another direction to continue exploring the environment.
+- Read the language observation carefully and look at ascii map or image observation provided to decide the next action to take and where to move next.
+- You can attack monsters by moving into them.
+
+In a moment I will present a history of actions and observations from the game.
+Your goal is to get as far as possible in the game.
+
+PLAY!
+""".strip()

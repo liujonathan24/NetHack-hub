@@ -18,7 +18,7 @@ set -euo pipefail
 # no `obs_mode` parameter on `load_environment` (that field lives on the v1
 # taskset config), so passing one would land in **kwargs and be silently
 # ignored, producing a cell identical to its baseline.
-KNOWN="B0 B1 JSON TOON IMG_TTY IMG B B_ASCII B_JSON DM_B_ASCII N R DM DM_JSON BBOX GLYPHBOX NETPLAY E1 E2 ND FD CH P G"
+KNOWN="SPARSE_MEM BBOX_MEM SPARSE SPARSE_ONDEMAND BBOX_GUIDE_LEAD BBOX_GUIDE_LAG B0_GUIDE_LEAD B0_GUIDE_LAG B0 B1 JSON TOON IMG_TTY IMG B B_ASCII B_JSON DM_B_ASCII BBOX_JSON N R DM DM_JSON BBOX GLYPHBOX NETPLAY E1 E2 ND FD CH P G"
 
 usage() {
   echo "usage: launch_encoding_cell.sh <VARIANT> <OUTDIR> [MAX_TURNS] [N]" >&2
@@ -81,7 +81,19 @@ echo "[cell] variant=${VARIANT} max_turns=${MAX_TURNS} n=${N}"
 echo "[cell] out=${OUT_ABS}"
 echo "[cell] args=${ARGS_JSON}"
 
+# Optional per-cell model override. The base config pins
+# google/gemini-3-flash-preview as a FIXED factor for the encoding sweep, so the
+# model-strength arms need it settable without forking the config -- a second
+# toml would drift from the base and silently reintroduce exactly the confounds
+# the single-base design exists to prevent.
+MODEL_ARGS=()
+if [ -n "${MODEL:-}" ]; then
+  MODEL_ARGS=(--model "${MODEL}")
+  echo "[cell] model=${MODEL} (override)"
+fi
+
 exec "$EVAL_BIN" @ tools/encoding_eval/configs/encoding_base.toml \
   --num_tasks "${N}" \
   --output_dir "${OUT_ABS}" \
+  "${MODEL_ARGS[@]}" \
   --args "${ARGS_JSON}"

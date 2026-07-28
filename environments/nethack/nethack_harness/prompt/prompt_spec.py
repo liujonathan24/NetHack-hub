@@ -253,7 +253,7 @@ def _structured_map_template(fmt):
                 model, detail=detail, chars=raw.chars, cell_masks=cell_masks,
             )
         else:
-            map_text = toon_encode(model, detail=detail)
+            map_text = toon_encode(model, detail=detail, compact=compact)
         status = format_observation_as_chat(
             structured, journal, state, compact=compact,
             journal_max_chars=journal_max_chars,
@@ -421,6 +421,53 @@ def _bbox_template(structured, journal, state, *, compact, journal_max_chars):
         journal_max_chars=journal_max_chars, include_map=False,
     )
     return _splice_placeholder(text, _BBOX_MAP_PLACEHOLDER)
+
+
+def _sparse_template(structured, journal, state, *, compact, journal_max_chars):
+    """SPARSE: entity-only map, always shown. No terrain, no duplicate sections."""
+    return format_observation_as_chat(
+        structured, journal, state, compact=compact,
+        journal_max_chars=journal_max_chars, include_map=True, sparse_entities=True,
+    )
+
+
+def _sparse_ondemand_template(structured, journal, state, *, compact, journal_max_chars):
+    """SPARSE_ONDEMAND: the entity list is WITHHELD until `reveal` is called.
+
+    This is the first configuration in which the delivery-timing axis is real.
+    `BBOX` withheld the ASCII grid but kept publishing stair/door/item
+    coordinates through VISIBLE FEATURES on ~100% of turns, so `reveal` was
+    competing with a free feed and fired on 2.1% of turns. Here every entity
+    lives under MAP, so withholding MAP withholds all of it.
+    """
+    text = format_observation_as_chat(
+        structured, journal, state, compact=compact,
+        journal_max_chars=journal_max_chars, include_map=False, sparse_entities=True,
+    )
+    return _splice_placeholder(text, _BBOX_MAP_PLACEHOLDER)
+
+
+def _guided(base_template, mode="lead"):
+    """Wrap a turn template so each observation opens with the objective hint.
+
+    The hint is derived from BALROG's own achievements table (see
+    objective_hint.py): it names which of depth / experience is currently
+    BINDING the max() score, what the next checkpoint on each axis is worth, and
+    which to pursue. Everything else in the observation is byte-identical to the
+    wrapped variant, so `X` vs `X_GUIDE` isolates the hint alone.
+    """
+
+    def _t(structured, journal, state, *, compact, journal_max_chars):
+        from nethack_harness.prompt.objective_hint import objective_hint
+        body = base_template(structured, journal, state,
+                             compact=compact, journal_max_chars=journal_max_chars)
+        try:
+            return f"{objective_hint(structured, state, mode=mode)}\n\n{body}"
+        except Exception:
+            # A hint must never be able to break a rollout.
+            return body
+
+    return _t
 
 
 def _splice_placeholder(text: str, placeholder: str) -> str:
@@ -622,6 +669,41 @@ def _build_registry(system_prompt: str) -> dict:
         # reveal(x1,y1,x2,y2), which returns an ASCII crop as tool feedback.
         "BBOX": canonical("BBOX", turn_template=_bbox_template,
                           obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # Entity-only map: terrain dropped, and ADJACENT / VISIBLE FEATURES /
+        # VISIBLE MONSTERS folded into it so there is exactly one place state
+        # lives. SPARSE always shows it; SPARSE_ONDEMAND withholds it behind
+        # `reveal`, which is the first honest test of delivery timing.
+        "SPARSE": canonical("SPARSE", turn_template=_sparse_template),
+        # seen-vs-remembered axis: identical to their partners except that the
+        # `_remember_monsters` flag adds lapsed sightings (species, last
+        # position, age in game turns, dropped on kill and on descent).
+        "SPARSE_MEM": canonical("SPARSE_MEM", turn_template=_sparse_template,
+                                obs=ObsSpec(setup_flags={"_remember_monsters": True})),
+        "BBOX_MEM": canonical("BBOX_MEM", turn_template=_bbox_template,
+                              obs=ObsSpec(setup_flags={"_bbox_map": True,
+                                                       "_remember_monsters": True})),
+        "SPARSE_ONDEMAND": canonical("SPARSE_ONDEMAND",
+                                     turn_template=_sparse_ondemand_template,
+                                     obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # Adaptive objective hint (see objective_hint.py). BALROG progression is
+        # max(depth_value, xp_value), so effort on the trailing axis scores
+        # nothing until it overtakes -- these arms tell the agent which axis is
+        # actually binding and what the next checkpoint is worth. Paired 1:1
+        # with the un-hinted variants for a clean ablation.
+        # LEAD = exploit: push the axis already binding the max().
+        # LAG  = explore: push the trailing axis. Scores nothing now, but
+        # experience is survival currency and death ends accumulation, so it may
+        # raise the eventual max. 2x2 against the two best encodings.
+        "BBOX_GUIDE_LEAD": canonical("BBOX_GUIDE_LEAD",
+                                     turn_template=_guided(_bbox_template, "lead"),
+                                     obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        "BBOX_GUIDE_LAG": canonical("BBOX_GUIDE_LAG",
+                                    turn_template=_guided(_bbox_template, "lag"),
+                                    obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        "B0_GUIDE_LEAD": canonical("B0_GUIDE_LEAD",
+                                   turn_template=_guided(_canonical_template, "lead")),
+        "B0_GUIDE_LAG": canonical("B0_GUIDE_LAG",
+                                  turn_template=_guided(_canonical_template, "lag")),
         # JSON body (player + entities, structured and addressable) with the
         # per-tile `cells` array WITHHELD; the agent pulls map regions via
         # reveal(x1,y1,x2,y2). Measured motivation: JSON inline costs ~3,400

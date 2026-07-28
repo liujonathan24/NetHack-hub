@@ -2189,3 +2189,122 @@ def request_map(env: NetHackCoreEnv, obs: StructuredObservation) -> SkillResult:
     # actions so no NLE step is taken.
     return SkillResult(actions=[], feedback="Refreshing the full map this turn.",
                        interrupted=True)
+
+
+# ---------- rollback (engine snapshot/restore) ----------
+#
+# Our fork exposes nle_fr_snapshot/restore, which stock NLE does not. That makes
+# a genuinely different action available to the agent: undo the last n turns and
+# try something else. NetHack is brutally irreversible -- one bad melee, one
+# stepped-on trap, one starved turn ends a run -- so the interesting question is
+# whether an LLM can use cheap undo to convert fatal mistakes into survivable
+# ones.
+#
+# Mechanics, measured against a live engine:
+#   * `restore(handle)` does NOT immediately surface the restored frame; the
+#     returned observation still shows the pre-restore step. The restored state
+#     appears after the next step().
+#   * Materializing with ESC (27) leaves the in-game clock UNCHANGED (verified:
+#     snapshot at time=1, 5 moves to time=4, restore+ESC -> time=1), whereas
+#     `wait` would advance it to 2. So ESC is the correct materializer: the
+#     rollback costs one LLM turn but zero game time.
+
+#: How many per-turn snapshots to retain. Each is a full engine heap image, so
+#: this is a memory/None tradeoff, not a free parameter.
+ROLLBACK_RING = 16
+
+
+def _rollback_ring(env) -> list:
+    ring = getattr(env, "_rollback_ring", None)
+    if ring is None:
+        ring = []
+        env._rollback_ring = ring
+    return ring
+
+
+def push_rollback_snapshot(env, turn: int) -> None:
+    """Capture the post-turn state. Called by env_response, not by the agent."""
+    eng = getattr(env, "_engine", None)
+    if eng is None:
+        return
+    ring = _rollback_ring(env)
+    try:
+        ring.append((int(turn), eng.snapshot()))
+    except Exception:
+        return
+    while len(ring) > ROLLBACK_RING:
+        _t, h = ring.pop(0)
+        try:
+            eng.free_snapshot(h)
+        except Exception:
+            pass
+
+
+@registry.register("rollback", {
+    "description": (
+        "Undo the last n turns, returning the game to the state it was in "
+        "before them. Use after a mistake -- walking into a losing fight, "
+        "triggering a trap, wasting turns in a dead end. Costs one turn and no "
+        "game time. n must be between 1 and 15."
+    ),
+    "parameters": {
+        "n": {"type": "integer", "description": "How many turns to undo.",
+              "default": 1},
+    },
+})
+def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> SkillResult:
+    """Restore the snapshot from `n` turns ago; ESC materializes the frame."""
+    eng = getattr(env, "_engine", None)
+    ring = _rollback_ring(env)
+    if eng is None or not ring:
+        return SkillResult(actions=[], feedback="rollback unavailable: no snapshots recorded yet.")
+    try:
+        n = int(n)
+    except Exception:
+        n = 1
+    n = max(1, n)
+    # Snapshots are pushed AFTER each turn, so ring[-1] IS the current state.
+    # Undoing n turns therefore lands on ring[-1-n], and the deepest legal n is
+    # len(ring)-1, not len(ring). An off-by-one here would make rollback(1) a
+    # silent no-op that still costs the agent a turn.
+    max_n = len(ring) - 1
+    if max_n < 1:
+        return SkillResult(actions=[], feedback="rollback unavailable: no earlier turn recorded yet.")
+    if n > max_n:
+        return SkillResult(
+            actions=[],
+            feedback=(f"cannot roll back {n} turns; only {max_n} earlier turn(s) are "
+                      f"retained. Try n<={max_n}."),
+        )
+    idx = len(ring) - 1 - n
+    turn_no, handle = ring[idx]
+    try:
+        eng.restore(handle)
+    except Exception as exc:
+        return SkillResult(actions=[], feedback=f"rollback failed: {exc}")
+    # Everything AFTER the restored point is now an unreachable future. The
+    # restored entry itself is KEPT, because the ring's invariant is
+    # "ring[-1] is the current state" -- dropping it would leave the current
+    # state unrepresented and make the next rollback(1) silently jump two turns.
+    for _t, h in ring[idx + 1:]:
+        try:
+            eng.free_snapshot(h)
+        except Exception:
+            pass
+    del ring[idx + 1:]
+    # Drop the cached NetPlay agent. Its level/monster tracker is only updated
+    # inside `agent.step()`, so after a restore it still describes the future we
+    # just undid -- observed live as `Teleported from (24,10) to (25,8)` and as
+    # three-way disagreement between the map, VISIBLE MONSTERS and the tracker.
+    # Emptying it forces a clean re-init against the restored state.
+    try:
+        from nethack_harness.tools.netplay_true import reset_agent_cache
+        reset_agent_cache()
+    except Exception:
+        pass
+    # ESC surfaces the restored frame without advancing the clock.
+    return SkillResult(
+        actions=[27],
+        feedback=(f"rolled back {n} turn(s) to the state after turn {turn_no}. "
+                  "The moves you just made have been undone; choose differently."),
+    )
