@@ -207,6 +207,35 @@ def _balrog_plus_map_template(fmt):
     return _render
 
 
+def _nle_language_template():
+    """BALROG's observation as produced by the package BALROG actually uses.
+
+    `_balrog_plus_map_template` above is OUR reconstruction of their scene text,
+    written from their published run CSVs. This one calls ngoodger's
+    `nle-language-wrapper` C++ converter directly -- the same code path their
+    agent saw -- so an `NLE_LANG` cell can claim observation parity literally
+    instead of by approximation. Verified against a live fork game: the
+    converter's spatial claims land on the right tiles (gold `$` adjacent
+    southeast, pet `d` adjacent northwest, grid bug `x` westnorthwest), so its
+    stock-NLE glyph tables agree with the fork's glyph numbering.
+
+    Deliberately NO map block and no JOURNAL: the wrapper's five text channels
+    *are* the observation in BALROG's setup, and appending our grid would
+    recreate B_ASCII rather than reproduce theirs.
+
+    Raises rather than falling back if the converter is unavailable -- a cell
+    that silently rendered a different observation would be an invalid
+    experiment, not a degraded one (see `prompt/nle_language.py`).
+    """
+
+    def _render(structured, journal, state, *, compact, journal_max_chars):
+        from nethack_harness.prompt.nle_language import render_language_view
+
+        return render_language_view(state["raw_obs"]) + "\n"
+
+    return _render
+
+
 def _structured_map_template(fmt):
     """Per-turn template emitting a structured-text map (JSON or TOON).
 
@@ -619,6 +648,10 @@ def _build_registry(system_prompt: str) -> dict:
         # These two cells do: description + map, over ASCII and over JSON.
         "B_ASCII": canonical("B_ASCII", turn_template=_balrog_plus_map_template("ascii")),
         "B_JSON": canonical("B_JSON", turn_template=_balrog_plus_map_template("json")),
+        # The real `nle-language-wrapper` text — the observation BALROG's own
+        # agent consumed, not our reconstruction of it. Pair with
+        # skill_set="balrog80" for a literal action+observation replication.
+        "NLE_LANG": canonical("NLE_LANG", turn_template=_nle_language_template()),
         # Glyphbox: canonical render, paired with interface=code by the caller.
         "G": canonical("G", turn_template=_formatter_template(_format_obs_glyphbox)),
         # Experiment 1 baseline encodings — FAITHFUL ports of the prior
