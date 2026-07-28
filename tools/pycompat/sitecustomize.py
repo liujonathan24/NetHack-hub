@@ -60,3 +60,80 @@ try:
 except Exception:
     # A compatibility shim must never prevent the interpreter from starting.
     pass
+
+
+def _recover_gemini_text_tool_calls():
+    """Gemini sometimes emits a tool call as TEXT; recover it into a real one.
+
+    Measured failure (p1, gemini-3-flash-preview, all three observations). The
+    final assistant message of every Claude Code rollout carried no structured
+    tool call and this content instead::
+
+        call:default_api:mcp__nethack__bal_south{}
+        call:default_api:mcp__nethack__bal_southwest{}
+        call:default_api:mcp__nethack__bal_far_east{}
+
+    `default_api:` is Gemini's own function-calling text convention leaking
+    through the OpenAI/Anthropic-compatible endpoint. The intended action was
+    valid every time -- it just arrived in the content field, so `stop_reason`
+    was `end_turn` rather than `tool_use`.
+
+    Why that is fatal for exactly one arm: Claude Code's `--print` mode exits
+    the instant a turn arrives with no tool call, the process returns 0, and
+    verifiers records `stop_condition="agent_completed"` (v1/harness.py:118).
+    Prime Agent does not treat a tool-call-free turn as terminal -- measured:
+    `b_ascii_flash/prime_agent` hit the SAME quirk once and still ran 1,440
+    calls to a natural death at dlvl 4, while `b_ascii_flash/claude_code` died
+    at 200. So this is not a model/harness incompatibility, it is one narrow
+    interaction with a well-defined trigger.
+
+    Correlation across every claude_code rollout on disk: 12/12 Gemini rollouts
+    that ended `agent_completed` contain this string; 0 of 25 GLM rollouts do.
+
+    Recovering in place rather than re-requesting: the model's intent is
+    unambiguous and already present, and the malformed shape is a systematic
+    serialization habit rather than a random glitch, so a re-request would
+    likely reproduce it while costing another full-context call. If the text
+    does NOT parse we leave the response untouched, so the failure mode is the
+    status quo, never a fabricated action.
+    """
+    import json
+    import re
+
+    from verifiers.v1.dialects import anthropic as _anth
+    from verifiers.v1.types import ToolCall
+
+    pattern = re.compile(
+        r"call:\s*default_api\s*:\s*([A-Za-z0-9_]+)\s*(\{.*?\})\s*$", re.S
+    )
+    original = _anth.response_from_wire
+
+    def patched(message):
+        response = original(message)
+        if response.message.tool_calls:
+            return response
+        text = response.message.content
+        if not isinstance(text, str) or "default_api" not in text:
+            return response
+        match = pattern.search(text.strip())
+        if not match:
+            return response
+        try:
+            arguments = json.dumps(json.loads(match.group(2)))
+        except ValueError:
+            return response
+        response.message.tool_calls = [
+            ToolCall(id="recovered_default_api", name=match.group(1), arguments=arguments)
+        ]
+        response.message.content = None
+        response.finish_reason = "tool_calls"
+        return response
+
+    _anth.response_from_wire = patched
+
+
+try:
+    _recover_gemini_text_tool_calls()
+except Exception:
+    # A compatibility shim must never prevent the interpreter from starting.
+    pass

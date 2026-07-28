@@ -89,7 +89,20 @@ mkdir -p "${OUTDIR}"
 TRACE_DIR="$(cd "${OUTDIR}" && mkdir -p turns && cd turns && pwd)"
 OUT_ABS="$(cd "${OUTDIR}" && pwd)"
 
-export PYTHONPATH="${ENG}:${REPO}:${REPO}/environments/nethack${PYTHONPATH:+:${PYTHONPATH}}"
+# tools/pycompat FIRST: its sitecustomize.py is imported at interpreter start in
+# this process and every worker/tool-server subprocess, and carries two vendor
+# quirk fixes the CLI arms cannot run correctly without --
+#   * `service_tier: "provisioned"` from Prime, which no released OpenAI SDK
+#     accepts, killing rollouts mid-run with a pydantic ValidationError;
+#   * Gemini emitting a tool call as TEXT (`call:default_api:...{}`), which
+#     leaves the turn with no structured tool call. Claude Code's --print mode
+#     exits on such a turn, so ONE bad emission ends the rollout as
+#     `agent_completed` (measured: 12/12 Gemini claude_code rollouts that ended
+#     that way carry the string; 0/25 GLM ones do).
+# This line previously omitted pycompat, so neither fix reached the CLI arms --
+# `launch_encoding_cell.sh` has always had it, which is why only the encoding
+# sweep was protected.
+export PYTHONPATH="${REPO}/tools/pycompat:${ENG}:${REPO}:${REPO}/environments/nethack${PYTHONPATH:+:${PYTHONPATH}}"
 
 if [ "$ARM" = "control" ]; then
   # `[args]` is an untyped free-form dict (verifiers v1 EnvConfig.args: dict
