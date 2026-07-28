@@ -38,7 +38,12 @@ set -euo pipefail
 # process (v1/mcp/launch.py). Override if this checkout lives elsewhere.
 ENG="${ENG:-/scratch/gpfs/ZHUANGL/jl0796/NetHackHarness}"
 
-KNOWN_ARMS="control claude_code prime_agent"
+KNOWN_ARMS="control claude_code prime_agent claude_code_b80 prime_agent_b80"
+# The *_b80 arms are the same two CLI harnesses on BALROG's 80-keystroke
+# surface (skill_set=balrog80) instead of netplay_true. Separate configs
+# rather than a SKILL_SET env override, because the action surface is the
+# thing under test in those cells and must not be settable from a shell
+# variable that a future sweep could forget to pass.
 
 usage() {
   echo "usage: launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]" >&2
@@ -111,7 +116,33 @@ if [ -n "${MODEL:-}" ]; then
   OVERRIDES+=(--model "${MODEL}")
 fi
 
-echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} max_calls=${MAX_CALLS} n=${N} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
+# VARIANT overrides the observation encoding. Same contract as MODEL: it is a
+# FIXED FACTOR across arms within one cell, so set it once for the sweep. The
+# `[args]`/`[taskset]` split applies here too -- the control arm's variant is a
+# `load_environment` kwarg, the CLI arms' is a taskset field.
+if [ -n "${VARIANT:-}" ]; then
+  if [ "${ARM}" = "control" ]; then
+    ARGS_JSON=$(printf '{"max_turns": %s, "trace_dir": %s, "variant": %s}' \
+      "${MAX_CALLS}" \
+      "$(printf '%s' "${TRACE_DIR}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" \
+      "$(printf '%s' "${VARIANT}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")
+    OVERRIDES=(--args "${ARGS_JSON}")
+  else
+    OVERRIDES+=(--taskset.variant "${VARIANT}")
+  fi
+fi
+
+# ROLLOUT_TIMEOUT raises the per-rollout wall-clock cap. The default 7200s (2h)
+# is what actually ended live games in the b80 cells -- two of five seeds
+# stopped at `harness_timeout` while the 1200-call budget never bound -- so any
+# long-horizon cell MUST raise it alongside MAX_CALLS or it silently measures
+# the clock instead of the agent. At the measured ~5.3s/call median, 10k calls
+# needs ~15h; 108000 (30h) leaves headroom for the latency tail.
+if [ -n "${ROLLOUT_TIMEOUT:-}" ]; then
+  OVERRIDES+=(--timeout.rollout "${ROLLOUT_TIMEOUT}")
+fi
+
+echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
 exec "${EVAL_BIN}" @ "${CFG}" \
   --num_tasks "${N}" \

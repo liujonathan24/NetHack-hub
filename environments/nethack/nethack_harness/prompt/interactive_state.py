@@ -52,6 +52,8 @@ one call, whereas a false negative costs the entire rollout.
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 # Prompt text NetHack writes to tty row 0 while blocking for input, for the
@@ -109,6 +111,78 @@ def detect_blocking_ui(raw_obs) -> str | None:
     ]
     if row0:
         lines.append(f"Prompt line: {row0}")
-    lines.append("Dismiss it FIRST — press `esc` (or answer the prompt shown above).")
+
+    answers = _offered_answers(row0)
+    if answers:
+        lines.append(f"ONLY these answers do anything right now: {answers}.")
+        lines.append("Any other key is swallowed and changes nothing.")
+    else:
+        lines.append("Answer the prompt above, or press `esc` to cancel it.")
     lines.append("")
     return "\n".join(lines)
+
+
+# NetHack advertises a prompt's legal replies inline: "What do you want to
+# wield? [- bc or ?*]", "Really attack? [yn] (n)". Everything inside the first
+# bracket group is a key that does something; every other key is discarded.
+_OFFER_RE = re.compile(r"\[([^\]]+)\]")
+
+
+def _offered_answers(row0: str) -> str:
+    """Name the prompt's legal replies as callable tools, not as raw keys.
+
+    Measured need (`p1/nle_lang_glm`, glm-5.2 on the 80-command surface): the
+    agent hit `What do you want to wield? [- bc or ?*]` and called `bal_e`
+    **90 times in 103 turns** — game clock frozen at 15, 91% of calls wasted.
+    `bal_b`, `bal_c` and `bal_minus` were all published and would each have
+    worked. The old wording ("press `esc` (or answer the prompt shown above)")
+    named only the cancel key, leaving the model to infer that the bracket
+    group maps onto tool names. It did not make that leap.
+
+    This is an OBSERVATION change, not an action-surface one: the agent still
+    answers its own prompts, which is deliberate on this surface (see
+    `nethack.py`'s `_balrog_raw_prompts` — auto-dismissing would mean `bal_eat`
+    could never eat). We only stop hiding which of its existing tools apply.
+
+    Ranges are expanded ("[a-c or ?*]" -> a, b, c) because NetHack abbreviates
+    inventory letters that way and the tool names are per-letter.
+    """
+    m = _OFFER_RE.search(row0 or "")
+    if not m:
+        return ""
+    body = m.group(1).replace(" or ", "")
+
+    keys: list[str] = []
+    i = 0
+    while i < len(body):
+        # "a-c" is a closed range of inventory letters, not three literal keys.
+        if i + 2 < len(body) and body[i + 1] == "-" and body[i].isalnum() and body[i + 2].isalnum():
+            for o in range(ord(body[i]), ord(body[i + 2]) + 1):
+                keys.append(chr(o))
+            i += 3
+            continue
+        if not body[i].isspace():
+            keys.append(body[i])
+        i += 1
+
+    named = []
+    for k in keys:
+        if k.isalnum():
+            named.append(f"`bal_{k}`")
+        elif k == "-":
+            named.append("`bal_minus` (the '-' key)")
+        elif k == "*":
+            named.append("'*' to list every item")
+        elif k == "?":
+            named.append("'?' to list valid choices")
+    if not named:
+        return ""
+    named.append("`bal_esc` to cancel")
+    # Dedupe while preserving order; NetHack sometimes repeats a key across the
+    # bracket group and the default hint "[yn] (n)".
+    seen, out = set(), []
+    for n in named:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return ", ".join(out)

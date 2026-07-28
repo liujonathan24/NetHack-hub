@@ -99,3 +99,56 @@ def test_live_engine_inventory_wedge_is_surfaced():
 
     obs, _, _ = env.step(107)
     assert int(obs.blstats[20]) > t0, "the game must move again once dismissed"
+
+
+# --- naming the prompt's legal answers -------------------------------------
+# Detection alone was not enough. Measured in `p1/nle_lang_glm` (glm-5.2,
+# balrog80): the agent hit `What do you want to wield? [- bc or ?*]`, saw the
+# "press esc" warning on every turn, and called `bal_e` 90 times in 103 turns
+# with the clock frozen at 15. `bal_b`/`bal_c`/`bal_minus` were all published.
+# The warning must name which of its EXISTING tools apply.
+
+def test_offered_answers_names_the_published_tools():
+    from nethack_harness.prompt.interactive_state import _offered_answers
+
+    out = _offered_answers("What do you want to wield? [- bc or ?*]")
+    assert "`bal_b`" in out and "`bal_c`" in out
+    assert "`bal_minus`" in out
+    assert "`bal_esc` to cancel" in out
+    # The key the agent actually spammed is NOT offered and must not be named.
+    assert "`bal_e`" not in out
+
+
+def test_inventory_letter_ranges_are_expanded():
+    """NetHack abbreviates "[d-f]"; tool names are per-letter, so a model told
+    only "d-f" has to infer three tools from one token."""
+    from nethack_harness.prompt.interactive_state import _offered_answers
+
+    out = _offered_answers("What do you want to eat? [d-f or ?*]")
+    for letter in "def":
+        assert f"`bal_{letter}`" in out
+    assert "`bal_g`" not in out
+
+
+def test_yn_prompt_offers_both_and_no_more():
+    from nethack_harness.prompt.interactive_state import _offered_answers
+
+    out = _offered_answers("Really attack? [yn] (n)")
+    assert "`bal_y`" in out and "`bal_n`" in out
+    assert out.count("`bal_n`") == 1, "the '(n)' default must not duplicate the entry"
+
+
+def test_no_bracket_group_yields_no_answer_list():
+    from nethack_harness.prompt.interactive_state import _offered_answers
+
+    assert _offered_answers("You kill the newt!") == ""
+    assert _offered_answers("You see here a food ration.--More--") == ""
+
+
+def test_warning_embeds_the_answer_list_when_one_exists():
+    from nethack_harness.prompt.interactive_state import detect_blocking_ui
+
+    out = detect_blocking_ui(_FakeObs(misc=(1, 0, 0), row0="What do you want to read? [de or ?*]"))
+    assert out is not None
+    assert "ONLY these answers do anything right now" in out
+    assert "`bal_d`" in out and "`bal_e`" in out
