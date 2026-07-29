@@ -162,6 +162,22 @@ if [ -n "${SKILL_SET:-}" ]; then
   OVERRIDES+=(--taskset.env_args.skill_set "${SKILL_SET}")
 fi
 
+# MAX_CONCURRENT caps how many of this cell's seeds run at once. The config
+# default is 128, i.e. every seed of a cell starts simultaneously -- so "one cell
+# at a time" is still 5-way concurrency, and running three cells together was
+# 15-16 rollouts sharing one box.
+#
+# That load is not free: the FIRST b0_cli attempt lost ALL FIVE claude_code seeds
+# to MCP tool-server disconnects at 24-55 calls ("Unable to connect", "I have
+# lost connection to the NetHack game environment"), and sparse_cli returned 0/10
+# usable in the same window. Both were launched under 16-way load. The same
+# failure took m3 seed 1 earlier. Lower this when a run must not lose seeds to
+# infrastructure -- the rollouts are long, so the wall-clock cost is real but the
+# alternative is discarding whole cells.
+if [ -n "${MAX_CONCURRENT:-}" ]; then
+  OVERRIDES+=(--max_concurrent "${MAX_CONCURRENT}")
+fi
+
 # ROLLOUT_TIMEOUT raises the per-rollout wall-clock cap. The default 7200s (2h)
 # is what actually ended live games in the b80 cells -- two of five seeds
 # stopped at `harness_timeout` while the 1200-call budget never bound -- so any
