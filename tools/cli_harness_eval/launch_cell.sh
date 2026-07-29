@@ -145,6 +145,23 @@ if [ -n "${VARIANT:-}" ]; then
   fi
 fi
 
+# SKILL_SET overrides the action surface. Normally the surface is pinned in the
+# arm's TOML precisely because it is the thing under test -- but a cell that
+# reproduces an existing baseline arm must be able to match that baseline's
+# surface exactly, and `v3_bbox` uses `netplay_true,reveal,rollback` (33 tools:
+# `reveal` returns an ASCII crop without consuming an NLE step; `rollback`
+# becomes usable after death). Like MODEL and VARIANT this is a FIXED FACTOR
+# across arms in one cell -- set it once for the sweep, never per-arm, or the
+# comparison is measuring the surface instead of the scaffold.
+if [ -n "${SKILL_SET:-}" ]; then
+  if [ "${ARM}" = "control" ]; then
+    echo "launch_cell: SKILL_SET override is for the CLI arms; the control arm" >&2
+    echo "  takes skill_set inside EXTRA_ARGS/[args]. Refusing to guess." >&2
+    exit 2
+  fi
+  OVERRIDES+=(--taskset.env_args.skill_set "${SKILL_SET}")
+fi
+
 # ROLLOUT_TIMEOUT raises the per-rollout wall-clock cap. The default 7200s (2h)
 # is what actually ended live games in the b80 cells -- two of five seeds
 # stopped at `harness_timeout` while the 1200-call budget never bound -- so any
