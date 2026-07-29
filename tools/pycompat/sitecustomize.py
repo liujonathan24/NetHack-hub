@@ -137,3 +137,108 @@ try:
 except Exception:
     # A compatibility shim must never prevent the interpreter from starting.
     pass
+
+
+def _normalize_gemini_wire_tool_calls():
+    """Fix Gemini's `default_api:` leakage in the bytes actually served to the CLI.
+
+    SUPERSEDES the trace-level patch above, which was applied at the wrong layer.
+    `_recover_gemini_text_tool_calls` rewrites the parsed `Response`, but the
+    interception server hands the program `response.raw` -- the native provider
+    body (`server.py:378`, `serve()`). So that patch made the TRACE look correct
+    while Claude Code still received the malformed original and exited. Measured:
+    every p2 rollout recorded exactly one `recovered_default_api` tool call as its
+    final assistant message and died immediately after, at dlvl 1.
+
+    `_completion_response` is the single chokepoint every served turn passes
+    through, so normalizing the wire dict here reaches the program.
+
+    Two distinct malformations, both observed:
+
+      1. TEXT form -- a text block containing
+         `call:default_api:mcp__nethack__bal_south{}`, with `stop_reason:
+         "end_turn"`. Claude Code's --print mode exits on a tool-call-free turn,
+         so one of these ends the rollout.
+      2. PREFIXED NAME -- a real tool_use block whose `name` is
+         `default_api:mcp__nethack__bal_search` (it prefixes Claude Code's own
+         built-ins too: `default_api:Edit`). Claude Code answers
+         `<tool_use_error>No such tool available`.
+
+    Both are Gemini's internal function-calling convention leaking through the
+    Anthropic-compatible endpoint. GLM never emits either (0 of 25 rollouts).
+
+    Anything that does not match is passed through untouched, so the failure mode
+    is the status quo rather than a fabricated action.
+    """
+    import json
+    import re
+
+    from verifiers.v1.interception import server as _server
+
+    text_form = re.compile(
+        r"call:\s*default_api\s*:\s*([A-Za-z0-9_]+)\s*(\{.*?\})\s*$", re.S
+    )
+    counter = {"n": 0}
+
+    def _fix_anthropic(body: dict) -> dict:
+        blocks = body.get("content")
+        if not isinstance(blocks, list):
+            return body
+        changed = False
+        out = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                out.append(block)
+                continue
+            # (2) strip the namespace prefix off a real tool_use block.
+            if block.get("type") == "tool_use":
+                name = block.get("name") or ""
+                if name.startswith("default_api:"):
+                    block = {**block, "name": name.split("default_api:", 1)[1]}
+                    changed = True
+                out.append(block)
+                continue
+            # (1) a tool call emitted as text.
+            if block.get("type") == "text":
+                match = text_form.search((block.get("text") or "").strip())
+                if match:
+                    try:
+                        args = json.loads(match.group(2))
+                    except ValueError:
+                        out.append(block)
+                        continue
+                    counter["n"] += 1
+                    out.append({
+                        "type": "tool_use",
+                        "id": f"vf_recovered_{counter['n']}",
+                        "name": match.group(1),
+                        "input": args,
+                    })
+                    changed = True
+                    continue
+            out.append(block)
+        if not changed:
+            return body
+        body = {**body, "content": out}
+        if any(b.get("type") == "tool_use" for b in out if isinstance(b, dict)):
+            body["stop_reason"] = "tool_use"
+        return body
+
+    original = _server._completion_response
+
+    def patched(completion):
+        if isinstance(completion, dict):
+            try:
+                if "content" in completion:
+                    completion = _fix_anthropic(completion)
+            except Exception:
+                pass  # never let normalization break a served turn
+        return original(completion)
+
+    _server._completion_response = patched
+
+
+try:
+    _normalize_gemini_wire_tool_calls()
+except Exception:
+    pass
