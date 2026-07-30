@@ -81,6 +81,31 @@ _RESUME_PROMPT = (
 # package (`skills.md#python-backed-skills` layout).
 _SKILL_FILES = ("SKILL.md", "pyproject.toml", "src/nethack/__init__.py")
 
+_NO_BATCH_RULE = (
+    "- Do not batch blind sequences of calls. NetHack is turn-based and adversarial;\n"
+    "  the observation after each call is what tells you whether the previous one\n"
+    "  worked.\n"
+)
+
+
+def _strip_no_batch_rule(data: bytes) -> bytes:
+    """Remove the no-batching instruction from SKILL.md (see `allow_batching`).
+
+    Fails loudly rather than silently shipping the unmodified file: a cell that
+    believed batching was enabled but ran the constrained prompt would be a
+    silently invalid experiment, which is exactly the asymmetry this flag exists
+    to remove.
+    """
+    text = data.decode()
+    if _NO_BATCH_RULE not in text:
+        raise RuntimeError(
+            "allow_batching=True but the no-batch rule was not found verbatim in "
+            "SKILL.md -- the file changed and `_NO_BATCH_RULE` is stale. Update it "
+            "rather than running with the instruction still in place."
+        )
+    return text.replace(_NO_BATCH_RULE, "").encode()
+
+
 
 class PrimeAgentHarnessConfig(HarnessConfig):
     binary: str = "prime-agent"
@@ -179,6 +204,31 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     with `path_prepend` applied first -- so an absolute override works for a
     non-PATH install."""
 
+    allow_batching: bool = False
+    """Let Prime Agent issue as many skill calls per turn as it likes.
+
+    `skill/SKILL.md` ships an instruction telling the agent NOT to batch:
+
+        Do not batch blind sequences of calls. NetHack is turn-based and
+        adversarial; the observation after each call is what tells you whether
+        the previous one worked.
+
+    Prime obeys it -- measured 0.80-0.95 skill invocations per `ipython` call
+    across m2, m3 and g2. Claude Code was never given an equivalent rule and
+    batched at 2.31 tool calls per assistant turn on g2 (34 batches of 6, five
+    of 10 on one seed), so it bought ~2.3x the game actions per decision on the
+    same 400-call budget. The arms were therefore never on equal terms, and the
+    asymmetry is ours, not the scaffolds'.
+
+    Setting this True strips the instruction from the materialized SKILL.md, so
+    the agent is free to do whatever it wants per turn. The counterpart
+    experiment constrains Claude Code instead
+    (`taskset.max_parallel_skill_calls = 1`). Run both, or neither -- running
+    one alone re-introduces the asymmetry in the other direction.
+
+    Default False so existing cells are unchanged.
+    """
+
     max_relaunches: int = 5
     """Cap on auto-resume relaunches (`launch` returning `exit_code == 0` while
     the game is neither dead nor budget-exhausted -- see `PrimeAgentHarness.
@@ -257,6 +307,8 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         package = resources.files(__package__) / "skill"
         for name in _SKILL_FILES:
             data = (package / name).read_bytes()
+            if name == "SKILL.md" and self.config.allow_batching:
+                data = _strip_no_batch_rule(data)
             await runtime.write(f"{self._skill_dir}/{name}", data)
 
         if self.config.sandbox:

@@ -193,6 +193,15 @@ if [ -n "${MAX_PARALLEL:-}" ]; then
   OVERRIDES+=(--taskset.max_parallel_skill_calls "${MAX_PARALLEL}")
 fi
 
+# ALLOW_BATCHING=1 strips the "Do not batch blind sequences of calls" rule from
+# the SKILL.md shipped to Prime Agent, letting it issue as many skills per turn
+# as it likes. prime_agent only. The counterpart is MAX_PARALLEL=1, which
+# constrains Claude Code instead -- run both or neither, or the asymmetry just
+# flips direction.
+if [ -n "${ALLOW_BATCHING:-}" ]; then
+  OVERRIDES+=(--harness.allow_batching "${ALLOW_BATCHING}")
+fi
+
 # ROLLOUT_TIMEOUT raises the per-rollout wall-clock cap. The default 7200s (2h)
 # is what actually ended live games in the b80 cells -- two of five seeds
 # stopped at `harness_timeout` while the 1200-call budget never bound -- so any
