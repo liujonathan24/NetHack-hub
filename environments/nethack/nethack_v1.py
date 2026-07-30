@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import time
 import inspect
 import random
 from collections.abc import Callable, Iterable
@@ -113,6 +114,13 @@ class NetHackState(vf.State):
     # Cross-arm referee (see NetHackToolsetConfig.max_skill_calls).
     skill_calls: int = 0
     budget_exhausted: bool = False
+    # Parallel-batch bookkeeping (see NetHackToolsetConfig.max_parallel_skill_calls).
+    # `batch_started_at` is a monotonic timestamp; `batch_count` is how many calls
+    # this batch has already executed. Published so the refusal is auditable in
+    # the trace rather than being invisible harness behaviour.
+    batch_started_at: float = 0.0
+    batch_count: int = 0
+    parallel_refusals: int = 0
     # A CANARY for one specific gate-leak mode, NOT independent evidence that
     # the gate holds. `tool_functions` only wraps adapters the v0 env published,
     # and under skill_set="netplay" no `move` adapter exists — so the increment
@@ -173,6 +181,34 @@ class NetHackToolsetConfig(vf.ToolsetConfig):
     # it binds every harness, including CLI agents whose internal loop we do not
     # control. One call == one v0 LM turn. <= 0 disables the cap.
     max_skill_calls: int = 150
+    # Cap on skills executed per ASSISTANT TURN. 0 = unlimited (a client may batch
+    # as many tool calls as it likes); 1 = one skill per turn.
+    #
+    # Why this exists. The budget above counts CALLS, not decisions, and a client
+    # that batches gets fewer decisions for the same budget. Measured on identical
+    # GLM-5.2/B0/seed-2 runs: the 2026-07-27 cell emitted exactly 1.00 tool calls
+    # per assistant turn on all five seeds and reached the down-stair at ~decision
+    # 250; the 2026-07-30 cell batched (404 tool calls in 175 turns; 34 batches of
+    # 6, five of 10, almost all `press_key 's'`), exhausted the 400-call budget
+    # after 175 decisions, and never left dlvl 1. Same model, same seed, same
+    # dungeon -- the budget silently meant different things.
+    #
+    # The v0 control arm has always had this property (extra parallel tool calls
+    # past the first are dropped), so `1` is what makes a CLI arm comparable to
+    # the control arm and to any pre-batching run.
+    #
+    # Batch detection is a quiescence window, not a turn id: the toolset sees
+    # individual MCP calls and has no view of assistant-turn boundaries. Calls
+    # arriving within `parallel_batch_window_s` of the previous one are treated as
+    # the same batch. This is safe by a wide margin -- batch members arrive within
+    # milliseconds (`_with_state` serializes them and an engine step is ~1ms) while
+    # a genuine next turn costs an LLM round-trip (~5s median measured). The known
+    # false negative: a slow skill (`explore_level` can run seconds) may push a
+    # later batch member outside the window and let it through. That errs toward
+    # the permissive, pre-existing behaviour rather than silently dropping a real
+    # decision.
+    max_parallel_skill_calls: int = 0
+    parallel_batch_window_s: float = 0.5
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob/skill_set, etc.). Kept opaque so
     # the v1 layer never has to track the full v0 kwarg surface.
@@ -213,6 +249,8 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     self_dispatch: bool = True
     obs_mode: str = "push"
     max_skill_calls: int = 150
+    max_parallel_skill_calls: int = 0
+    parallel_batch_window_s: float = 0.5
     env_args: dict = {}
     # Where the tool server runs (colocated = share the harness's runtime).
     colocated: bool = False
@@ -240,6 +278,8 @@ class NetHackTasksetConfig(vf.TasksetConfig):
             self_dispatch=self.self_dispatch,
             obs_mode=self.obs_mode,
             max_skill_calls=self.max_skill_calls,
+            max_parallel_skill_calls=self.max_parallel_skill_calls,
+            parallel_batch_window_s=self.parallel_batch_window_s,
             env_args=dict(self.env_args or {}),
         )
 
@@ -404,10 +444,32 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         name = adapter.__name__
         budget = self.config.max_skill_calls
         obs_mode = self.config.obs_mode
+        max_parallel = self.config.max_parallel_skill_calls
+        batch_window = self.config.parallel_batch_window_s
 
         @functools.wraps(adapter)
         async def _run(**kwargs):
             state = self.state
+            # Parallel-batch cap. Refused calls consume NO budget and never reach
+            # the engine, so the agent keeps the decision it would otherwise have
+            # spent -- the point is to make one budget unit mean one decision, not
+            # to punish batching. Checked before the budget so a refused batch
+            # member cannot also trip the exhaustion terminal.
+            if max_parallel > 0:
+                now = time.monotonic()
+                if now - state.batch_started_at <= batch_window:
+                    state.batch_count += 1
+                else:
+                    state.batch_started_at = now
+                    state.batch_count = 1
+                if state.batch_count > max_parallel:
+                    state.parallel_refusals += 1
+                    self._publish(state)
+                    return (
+                        f"[Only {max_parallel} skill call per turn is executed. "
+                        "This call was dropped -- issue one skill, read the result, "
+                        "then decide the next one.]"
+                    )
             if budget > 0 and state.skill_calls >= budget:
                 state.budget_exhausted = True
                 state.terminated = True
@@ -613,6 +675,7 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
         trace.metrics.update(
             {
                 "skill_calls": float(state.skill_calls),
+                "parallel_refusals": float(state.parallel_refusals),
                 "budget_exhausted": float(state.budget_exhausted),
                 "max_dlvl_reached": float(state.max_dlvl_reached),
                 "descent_count": float(state.descent_count),

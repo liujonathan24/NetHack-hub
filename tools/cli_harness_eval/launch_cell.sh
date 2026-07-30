@@ -178,6 +178,21 @@ if [ -n "${MAX_CONCURRENT:-}" ]; then
   OVERRIDES+=(--max_concurrent "${MAX_CONCURRENT}")
 fi
 
+# MAX_PARALLEL caps skills executed per ASSISTANT TURN (0 = unlimited, 1 = one
+# skill per turn, matching the v0 control arm which has always dropped parallel
+# tool calls past the first).
+#
+# The call budget counts CALLS, not decisions, so a batching client gets fewer
+# decisions for the same budget. Measured on identical GLM-5.2/B0/seed-2 runs:
+# the 2026-07-27 cell emitted exactly 1.00 calls per turn and reached the
+# down-stair around decision 250; the 2026-07-30 cell batched (404 calls in 175
+# turns) and exhausted the same 400-call budget after 175 decisions, never
+# leaving dlvl 1. Set 1 to compare against the control arm or any pre-batching
+# run; leave unset to reproduce the batching behaviour as-run.
+if [ -n "${MAX_PARALLEL:-}" ]; then
+  OVERRIDES+=(--taskset.max_parallel_skill_calls "${MAX_PARALLEL}")
+fi
+
 # ROLLOUT_TIMEOUT raises the per-rollout wall-clock cap. The default 7200s (2h)
 # is what actually ended live games in the b80 cells -- two of five seeds
 # stopped at `harness_timeout` while the 1200-call budget never bound -- so any
