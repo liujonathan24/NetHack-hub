@@ -83,7 +83,15 @@ def test_live_engine_inventory_wedge_is_surfaced():
     reset = env.reset()
     obs = reset[0] if isinstance(reset, tuple) else reset
 
-    assert detect_blocking_ui(obs) is None, "clean reset must not warn"
+    # The reset itself may land on a `--More--` (the welcome banner is one
+    # message on some roles and two on others), which the detector correctly
+    # flags. Clear whatever is pending BEFORE asserting a clean baseline —
+    # otherwise this test passes or fails on the engine's random role.
+    for _ in range(4):
+        if detect_blocking_ui(obs) is None:
+            break
+        obs, _, _ = env.step(27)  # esc
+    assert detect_blocking_ui(obs) is None, "a settled reset must not warn"
     t0 = int(obs.blstats[20])
 
     obs, _, _ = env.step(105)  # 'i' — open inventory

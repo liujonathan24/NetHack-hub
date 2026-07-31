@@ -48,12 +48,18 @@ def test_converter_agrees_with_our_glyph_plane():
 
 
 @pytest.mark.slow
-def test_all_five_channels_are_populated():
+def test_the_load_bearing_channels_are_populated():
+    """`text_cursor` is deliberately NOT asserted: it describes whatever the
+    cursor rests on, and on a reset where the cursor sits on plain floor the
+    wrapper returns "". Asserting it made this test depend on the engine's
+    random starting role/position — it passed as a Valkyrie and failed as a
+    Monk. The other four channels are unconditional."""
     from nethack_harness.prompt.nle_language import language_obs
 
     o = language_obs(_live_obs())
-    for key in ("text_glyphs", "text_blstats", "text_message", "text_inventory", "text_cursor"):
-        assert o.get(key), f"{key} empty — the wrapper should populate every channel on reset"
+    for key in ("text_glyphs", "text_blstats", "text_message", "text_inventory"):
+        assert o.get(key), f"{key} empty — the wrapper should populate it on every reset"
+    assert "text_cursor" in o, "the channel must exist even when its body is empty"
 
 
 @pytest.mark.slow

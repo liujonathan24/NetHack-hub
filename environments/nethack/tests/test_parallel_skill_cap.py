@@ -80,7 +80,7 @@ _skill.__name__ = "np_search"
 def test_batch_past_the_cap_is_refused_and_costs_no_budget():
     ts = _bind()(max_parallel_skill_calls=1, max_skill_calls=100)
     run = ts._executing(_skill)
-    out = [asyncio.get_event_loop().run_until_complete(run()) for _ in range(4)]
+    out = [asyncio.run(run()) for _ in range(4)]
 
     assert out[0] == "ok:np_search", "first call of the batch must execute"
     for later in out[1:]:
@@ -97,11 +97,10 @@ def test_a_new_turn_after_the_window_executes_again():
 
     ts = _bind()(max_parallel_skill_calls=1, parallel_batch_window_s=0.05, max_skill_calls=100)
     run = ts._executing(_skill)
-    loop = asyncio.get_event_loop()
-    assert loop.run_until_complete(run()) == "ok:np_search"
-    assert "dropped" in loop.run_until_complete(run())
+    assert asyncio.run(run()) == "ok:np_search"
+    assert "dropped" in asyncio.run(run())
     _t.sleep(0.08)  # quiescence -> new turn
-    assert loop.run_until_complete(run()) == "ok:np_search"
+    assert asyncio.run(run()) == "ok:np_search"
     assert ts.state.skill_calls == 2
     assert ts.state.parallel_refusals == 1
 
@@ -109,8 +108,7 @@ def test_a_new_turn_after_the_window_executes_again():
 def test_unlimited_mode_executes_every_call():
     ts = _bind()(max_parallel_skill_calls=0, max_skill_calls=100)
     run = ts._executing(_skill)
-    loop = asyncio.get_event_loop()
     for _ in range(5):
-        assert loop.run_until_complete(run()) == "ok:np_search"
+        assert asyncio.run(run()) == "ok:np_search"
     assert ts.state.skill_calls == 5
     assert ts.state.parallel_refusals == 0
