@@ -128,10 +128,7 @@ install_dir = "/tmp/vf-prime-agent"
 # mid-action at 107-130 of 400 skill calls. 1048576 is the value Prime Agent's
 # own bundled catalog carries for `z-ai/glm-5.2`. CHANGE IT WITH `model` ABOVE.
 context_window = 1048576
-# TEMPORARILY DISABLED 2026-07-28 by explicit operator authorization.
-# RESTORE TO `true` as soon as the host permits namespaces again.
-#
-# Normally hides /scratch (this cluster's shared multi-user GPFS filesystem) and
+# Hides /scratch (this cluster's shared multi-user GPFS filesystem) and
 # this repo from the agent's `ipython` tool via a `bwrap` mount-namespace
 # sandbox (configs/README.md §7). The host now sets `max_user_namespaces = 0`,
 # so `bwrap --unshare-user` fails with "Creating new namespace failed: No space
@@ -149,7 +146,7 @@ context_window = 1048576
 # Separately, in m3 seed 1 the agent used this kernel to `pip install nle` and
 # play 200+ unmeasured games when the MCP server crashed -- contained to the
 # workspace at the time BY this sandbox.
-sandbox = false
+sandbox = true
 
 [harness.runtime]
 # Same determination as arm 1: `NEEDS_CONTAINER` is Task-level in the pinned
