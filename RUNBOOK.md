@@ -143,12 +143,75 @@ engine's own `no_progress_timeout` can never fire (`HARNESS_DEFECTS` §3.1). Kil
 any rollout whose newest `turns/<seed>_*.ndjson` has not been written in ~300 s.
 Re-arm it per batch — it exits when the queue drains.
 
+Implemented in **`tools/stall_watchdog.py`**. Arm it by setting one env var on
+either launcher — one watchdog per invocation, so "re-arm per batch" is
+automatic:
+
+```bash
+STALL_WATCHDOG=1 tools/cli_harness_eval/launch_cell.sh prime_agent "$PWD/outputs/run1_pa" 400 5
+STALL_WATCHDOG=1 tools/encoding_eval/launch_encoding_cell.sh BBOX "$PWD/outputs/bbox" 400 5
+```
+
+For anything else, prefix the command:
+
+```bash
+tools/with_stall_watchdog.sh "$PWD/outputs/run1/turns" -- <any command>
+```
+
+Knobs: `STALL_TIMEOUT` (default 300), `STALL_POLL` (15), `STALL_EXTRA_ARGS`
+(e.g. `--dry-run`, `--verbose`). It is **opt-in** so a foreground/interactive run
+is unchanged when the var is unset.
+
+On a stall it kills the PID **and its descendants** (the MCP tool servers,
+otherwise orphaned), moves that PID's turn files to
+`<outdir>/turns.stalled/<utc>_pid<pid>/` — see "Before re-running a seed" — and
+appends a full record (seed, PID, idle seconds, last recorded turn/dlvl/hp/tool
+call) to `<outdir>/turns.stalled/stall_watchdog.jsonl`. Exit code 3 means it
+killed something.
+
+Silence is measured **per PID, not per seed**: one eval process owns every seed
+of a cell, so a seed that merely *finished* stops writing forever and a per-seed
+rule would kill a healthy cell shortly after its first seed completed. Both known
+hangs wedge the whole process, so per-PID catches them and cannot fire while any
+seed is still progressing.
+
 ### Before re-running a seed
 
 Move `turns/<seed>_*.ndjson` aside. `turns/` is shared per cell and grading
 groups by seed prefix, so a killed run's partial NDJSON merges with the relaunch.
 Never glob `turns/*.ndjson` to aggregate — join on the PID in the filename, or
-read `traces.jsonl`.
+read `traces.jsonl`. `tools/eval_metrics.py :: select_turn_files` does this:
+it parses `<seed>_<pid>_<epoch>.ndjson`, keeps one attempt per seed (the
+longest, tie-broken on the later `(epoch, pid)`), drops seeds absent from
+`traces.jsonl`, and returns everything it ignored so the caller can print it.
+Both `tools/cli_harness_eval/aggregate.py` and `tools/encoding_eval/aggregate.py`
+go through it.
+
+The watchdog does this move for you on the rollouts it kills (quarantine dir
+above) — but only for those. A rollout you kill by hand still needs it done by
+hand.
+
+### Golden observation snapshots
+
+`environments/nethack/tests/golden/obs/*.txt` pin the turn-1 observation for a
+small matrix (B0/BBOX × fog/`reveal_map` × compaction, seed 0,
+`Val-hum-neu-fem`). `environments/nethack/tests/test_golden_obs.py` **warns and
+passes** on content drift, printing a line-level diff, and only **fails** when
+the observation is empty, a required section (`MAP`/`STATUS`/`INVENTORY`/
+`MESSAGES`) disappears, or the snapshot file is unreadable. It exists so a
+format change that makes old scores incomparable (`HARNESS_DEFECTS` §4.1)
+announces itself instead of silently rebasing results.
+
+Re-bless after an intentional format change:
+
+```bash
+PYTHONPATH=$PWD/tools/pycompat:$ENG:$PWD:$PWD/environments/nethack \
+  .venv-cli-eval/bin/python environments/nethack/tests/golden/record_obs_snapshots.py
+```
+
+Add `--check` for the blocking form (exit 1 on any drift) — worth running just
+before cutting a sweep, so the sweep's observations are known to match the
+committed record.
 
 ## 7. Test status on this box
 

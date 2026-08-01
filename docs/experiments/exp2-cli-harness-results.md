@@ -219,9 +219,17 @@ MODEL="google/gemini-3-flash-preview" \
    only the failed final attempt: `b0_flash/prime_agent` shows `skill_calls=0` but its turn
    files hold 2,956 calls to dlvl 2.
 3. **`tool_calls` is empty in CLI-arm turn files.** Those arms dispatch over MCP and the
-   env-side record never populates it. Read the trace `nodes` instead. Prime Agent nests
+   env-side record never populates it. Read the trace `nodes` instead — but **only the
+   nodes with `sampled == true`**. `nodes` is a CUMULATIVE PREFIX REPLAY of the
+   conversation, not a list of calls: after `k` turns it holds every prefix `1..k`, so an
+   assistant message that issued one call on turn 3 reappears in the replay of turns
+   4, 5, … . Counting every assistant node over-counts by ~15× and grows quadratically
+   with rollout length (measured on `outputs/trace_probe`: 911 nodes → "455 skills" for a
+   30-call rollout; `np_move_to` reported 292 against an actual 22). The `sampled` nodes
+   reproduce `metrics`' own per-skill referee counters to the call. Prime Agent nests
    real skills inside `ipython` (`await nethack.np_move_to(...)`), so counting the outer
    tool name reports 100% `ipython` and 0% everything else — both wrong.
+   `tools/eval_metrics.py :: executed_call_histogram` is the shared implementation.
 4. **Always use absolute paths in launcher env vars.** A relative `trace_dir` resolves inside
    a rollout's ephemeral workdir and is discarded at teardown. This class of bug appeared
    four separate times.
@@ -234,6 +242,29 @@ MODEL="google/gemini-3-flash-preview" \
 A rollout is degenerate if `stop_condition == "error"`, or `skill_calls < 40`, or
 (`stop_condition == "agent_completed"` and `skill_calls < 80`). Degenerate rollouts are
 excluded from means and reported separately — never silently dropped.
+
+**`skill_calls` does not exist on the v0-legacy path.** When `eval.log` says
+`running Nx1 v0 rollouts … (legacy: nethack)`, v1's `NetHackTask.finalize` never runs, so
+`metrics` carries no `skill_calls` / `max_dlvl_reached` / `died` / `terminated`. A literal
+`metrics['skill_calls']` raises `KeyError`; `metrics.get('skill_calls', 999)` marks every
+rollout non-degenerate. Use `tools/eval_metrics.py :: skill_call_count`, whose fallback
+chain is `metrics.skill_calls` → `metrics.total_tool_calls` (the v0 `ToolEnv` stock
+metric) → summed `metrics.<skill>_calls` → the executed-call histogram → `len(turns)`, and
+which returns `(None, "unavailable")` rather than a sentinel. `degeneracy()` then returns
+`None` — **unknown**, a third answer distinct from "fine".
+
+### Both BALROG numbers, and the pace
+
+Every table emitted by `tools/cli_harness_eval/aggregate.py`,
+`tools/cli_harness_eval/progress.py` and `tools/encoding_eval/aggregate.py` carries
+BALROG's published `max` over the (Dlvl, Xp) achievement axes **and** the `min` over the
+same table, plus an `xp-carried` count (`max > 0 and min == 0`) — a rollout that only
+levelled up otherwise keeps its full headline score (pilot: `reveal` seed 1 is 2.12% max /
+0.00% min at Dlvl 4, XP 1). Never the deprecated `progression_score` proxy. Each table also
+carries the progression SLOPE — depth gained and BALROG-% per **game** turn (`status.time`)
+and per LLM call — because the research question is how fast the agent progresses relative
+to a human, and one LLM call runs a whole pathfinding macro (pilot: `reveal` seed 0 reached
+Dlvl 5 in 388 game turns vs `fog` seed 0's Dlvl 3 in 936, at an identical 100-call cap).
 
 ---
 

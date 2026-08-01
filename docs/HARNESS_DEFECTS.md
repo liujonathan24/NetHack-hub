@@ -124,6 +124,15 @@ never fire. **A stall watchdog is mandatory**: kill any rollout whose newest
 `turns/<seed>_*.ndjson` has not been written in ~300 s. Note the watchdog exits
 when the eval queue drains, so it must be re-armed for each batch.
 
+**Mitigation shipped** (the hangs themselves are still unfixed):
+`tools/stall_watchdog.py`, armed per batch with `STALL_WATCHDOG=1` on either
+launcher or via `tools/with_stall_watchdog.sh`. It kills the PID named in the
+turn filename plus its descendants, quarantines that PID's turn files to
+`turns.stalled/` so the retry cannot merge with them (§4.6), and logs the seed,
+PID, idle time and last recorded turn. Silence is measured per PID rather than
+per seed — one process owns every seed of a cell, so a seed that merely
+*finished* would otherwise look stalled. See `RUNBOOK.md`.
+
 ### 3.2 The spoiling-food interrupt and the standing-on-stairs fallback are inert
 Both are present and both silently do nothing:
 - `_spoiling_now` passes a `_RawView` (chars/glyphs/blstats only) into `shape()`,
@@ -149,6 +158,17 @@ far trace debugging can go.
 ### 3.6 Death is not announced on the turn it happens
 The death turn renders `HP: 0/N` with no death text and a stale HINT; the agent
 learns on the *next* call, when every tool is already gated.
+
+### 3.7 `rendering._PUBLISHED_TOOLS` is a process-global that is never restored
+`load_environment` -> `render_system_prompt(published_tools=...)` writes a
+module-level set, and `_fix_hint_vocabulary` reads it to delete HINT sentences
+naming unbound tools (correct in production: `search` is not bound under
+`netplay_true`). Nothing ever puts it back, so *booting an environment changes
+how every later render in the same process behaves*. Harmless in a real rollout,
+but it makes render-level tests order-dependent: adding a test that boots an env
+truncated the exit hint asserted by `test_hint_actionability`, which passes in
+isolation. `environments/nethack/tests/golden/obs_configs.py` saves and restores
+it as a local workaround; the leak itself is unfixed.
 
 ---
 

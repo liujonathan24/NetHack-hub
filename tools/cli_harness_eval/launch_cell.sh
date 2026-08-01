@@ -253,6 +253,35 @@ if [ -n "${ROLLOUT_TIMEOUT:-}" ]; then
   OVERRIDES+=(--timeout.rollout "${ROLLOUT_TIMEOUT}")
 fi
 
+# --- stall watchdog (opt-in: STALL_WATCHDOG=1) --------------------------------
+# Two unbounded hangs are still open and NEITHER reaches `env.step`, so the
+# engine's `no_progress_timeout` can never fire (HARNESS_DEFECTS §3.1):
+# `np_explore_level` spinning in vendored pathfinding (no return in 600s), and
+# post-death `rollback` + any NetPlay skill deadlocking the adapter (3/3).
+# The only surviving signal is that `turns/<seed>_<pid>_<ts>.ndjson` stops
+# growing, which tools/stall_watchdog.py watches from OUTSIDE the process.
+#
+# Armed HERE rather than once per sweep on purpose: RUNBOOK's documented failure
+# mode is a watchdog that exits when the first batch's queue drains, leaving
+# later batches unguarded. One `launch_cell.sh` invocation == one batch == one
+# watchdog, and `--parent-pid $$` ties its life to the eval process below (the
+# `exec` keeps this PID), so it cannot outlive or under-live the batch.
+#
+# OPT-IN, not mandatory: a foreground/interactive run where someone is watching
+# does not want a background process SIGKILLing it, and an unset env var must
+# leave the launcher behaving exactly as it did before. Set STALL_WATCHDOG=1 for
+# anything unattended.
+if [ -n "${STALL_WATCHDOG:-}" ]; then
+  "$PY_BIN" "${REPO}/tools/stall_watchdog.py" \
+    --turns-dir "${TRACE_DIR}" \
+    --timeout "${STALL_TIMEOUT:-300}" \
+    --poll "${STALL_POLL:-15}" \
+    --parent-pid "$$" \
+    ${STALL_EXTRA_ARGS:-} >>"${OUT_ABS}/stall_watchdog.log" 2>&1 &
+  echo "[launch_cell:watchdog] armed: pid=$! timeout=${STALL_TIMEOUT:-300}s" \
+       "log=${OUT_ABS}/stall_watchdog.log quarantine=${TRACE_DIR}.stalled"
+fi
+
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
 exec "${EVAL_BIN}" @ "${CFG}" \

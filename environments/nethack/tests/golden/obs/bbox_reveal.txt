@@ -1,0 +1,25 @@
+=== JOURNAL ===
+Objective: Descend as deep into the dungeon as you can and survive; ultimately win the game (retrieve the Amulet of Yendor and escape).
+
+=== MAP (hidden; call reveal(x1,y1,x2,y2) to view a region) ===
+
+=== STATUS ===
+HP: 16/16  AC: 6  Dlvl: 1  Turn: 1  XP: 1  $: 0  Pos: (3,6)
+Character: valkyrie (human, neutral)
+
+=== INVENTORY ===
+  b: a +1 long sword (weapon in hand)
+  c: a +0 dagger (alternate weapon; not wielded)
+  d: an uncursed +3 small shield (being worn)
+  e: an uncursed food ration
+
+=== ADJACENT === N=$(gold) NE=. E=. SE=d(dog/canine)[PET — don't attack] S=. SW=| W=| NW=|
+
+=== HINT === Stairs DOWN are visible at (57,13) but NO ROUTE to them is known yet — walking straight there will fail. Find a way through first: open a closed door on this room's wall, or explore toward them.
+
+=== VISIBLE FEATURES === stairs DOWN at (57,13); door (open/gap) at (65,3), (34,4), (71,7), (13,10), (61,13), (71,14), (27,15), (42,15), (47,16); door (closed) at (47,3), (16,5), (43,5), (65,5), (11,10), (26,10), (27,11), (74,11), (22,12), (52,13), (55,15), (25,17); weapon at (15,9); gold at (3,5)
+
+=== VISIBLE MONSTERS === little dog at (4,7), 1 step SE [PET - don't attack]; lichen at (35,17), 32 steps E; grid bug at (73,12), 70 steps E
+
+=== MESSAGES ===
+  Velkommen Agent, welcome to NetHack!  You are a neutral human Valkyrie.
