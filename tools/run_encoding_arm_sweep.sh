@@ -35,7 +35,7 @@ export STALL_WATCHDOG=1
 export MAX_CONCURRENT="${MAX_CONCURRENT:-16}"
 
 SKILLS='"skill_set":"netplay_true,reveal,rollback"'
-ENCODINGS=(B0 BBOX SPARSE_ONDEMAND JSON)
+ENCODINGS=(B0 BBOX SPARSE_ONDEMAND BBOX_JSON)
 ARMS=(prime_agent claude_code)
 
 export PATH="$HOME/.local/bin:$PATH"
