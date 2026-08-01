@@ -203,6 +203,57 @@ if [ -n "${SKILL_SET:-}" ]; then
   OVERRIDES+=(--taskset.env_args.skill_set "${SKILL_SET}")
 fi
 
+# ENV_ARGS: a JSON object merged over `[taskset.env_args]`, for cells that vary a
+# `load_environment` kwarg the CLI arms have no dotted override for -- notably the
+# engine difficulty/generation knobs:
+#     ENV_ARGS='{"tune":{"reveal_map":1.0}}'
+#
+# A whole-object override REPLACES the table rather than merging into it, so this
+# folds in the config's own env_args first and refuses to run alongside SKILL_SET
+# (which writes the same table through a dotted path and would be silently
+# clobbered). One config, one differing factor -- forking the toml instead would
+# drift from the base and reintroduce exactly the confounds the single-base design
+# exists to prevent.
+if [ -n "${ENV_ARGS:-}" ]; then
+  if [ "${ARM}" = "control" ]; then
+    echo "launch_cell: ENV_ARGS is for the CLI arms; the control arm takes these" >&2
+    echo "  inside EXTRA_ARGS/[args]. Refusing to guess." >&2
+    exit 2
+  fi
+  if [ -n "${SKILL_SET:-}" ]; then
+    echo "launch_cell: set SKILL_SET *inside* ENV_ARGS, not alongside it -- a whole-" >&2
+    echo "  object env_args override replaces the table and would drop it." >&2
+    exit 2
+  fi
+  # The venv interpreter, NOT `python3`: tomllib is 3.11+ and the system python
+  # here is 3.10, where this failed with a bare ModuleNotFoundError that the
+  # `|| exit 2` below reported as "not valid JSON".
+  # Emitted as DOTTED SCALARS, one per leaf, not as one JSON object: the eval CLI
+  # validates `--taskset.env_args` as a dict and rejects a JSON *string* for it
+  # ("Input should be a valid dictionary"). Dotted paths are also what the
+  # existing SKILL_SET override uses, so both go through the same mechanism and
+  # merge into the config's table instead of replacing it.
+  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$(dirname "${EVAL_BIN}")/python" - <<'PYFLAT'
+import json, os
+def walk(prefix, node):
+    for k, v in node.items():
+        path = f"{prefix}.{k}"
+        if isinstance(v, dict):
+            walk(path, v)
+        else:
+            print(f"--taskset.env_args{path}")
+            # Scalars reach the config as STRINGS through the CLI, and a knob
+            # like tune.reveal_map must be a float -- json.dumps keeps 1.0 as
+            # `1.0` and true as `true`, which the loader coerces correctly,
+            # whereas bare str(v) would hand it "1.0"/"True".
+            print(v if isinstance(v, str) else json.dumps(v))
+walk("", json.loads(os.environ["ENV_ARGS"]))
+PYFLAT
+) || { echo "launch_cell: ENV_ARGS is not valid JSON" >&2; exit 2; }
+  echo "[launch_cell] env_args overrides: ${_ENV_ARG_FLAGS[*]}"
+  OVERRIDES+=("${_ENV_ARG_FLAGS[@]}")
+fi
+
 # MAX_CONCURRENT caps how many of this cell's seeds run at once. The config
 # default is 128, i.e. every seed of a cell starts simultaneously -- so "one cell
 # at a time" is still 5-way concurrency, and running three cells together was
