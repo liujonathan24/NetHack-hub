@@ -132,8 +132,29 @@ Traces are disposable; the config and the commit are not. Both are committed:
 | path | what |
 |---|---|
 | `results/configs/<cell>__<arm>.toml` | the **resolved** config the eval CLI actually ran — every hyperparameter after CLI/env overrides, not the template. 272 files. |
-| `results/run_provenance.json` | `run -> HEAD` for every driver-launched sweep, plus a finish timestamp per cell. |
+| `results/run_provenance.json` | `run -> HEAD` for every driver-launched sweep, plus a finish timestamp per cell. Entries written from 2026-07-31 also carry an `engine` block (see below); earlier entries do **not**, and the engine behind them cannot be recovered. |
+| `<cell outdir>/engine_provenance.json` | the engine fingerprint for that cell — engine repo HEAD, `third_party/NetHack` SHA + the SHA the superproject pins, dirty flags, and the resolved `libnethack.so` path/mtime/size against the newest tracked build input. |
 | `results/cli_harness_rollouts.json` | per-seed outcomes, 121 rollouts. |
+
+**The HEAD above pins the harness only, not the engine.** Two measured incidents made
+that gap expensive:
+
+* `third_party/NetHack` was checked out to `66c84e6` while the engine repo pinned
+  `fefd557`. About 30 engine-dependent tests failed with what read as engine *logic*
+  bugs — `test_engine_env::test_snapshot_restore_branching_via_env` failed
+  `assert not np.array_equal(glyphs_a, glyphs_b)`, i.e. two *branched* games returning
+  byte-identical maps. No traceback mentioned the submodule.
+* With the pointer restored, the compiled artifact was still from the other source
+  line: `src/src/nle.c` at 2026-07-31 18:52 vs `libnethack.so` at 2026-07-22 04:26, a
+  230 h gap. Every rollout `ctypes`-loads that `.so`; a source checkout does not
+  rebuild it and nothing warns.
+
+`launch_cell.sh` now runs `tools/cli_harness_eval/engine_provenance.py --check` before
+every cell: it logs a one-line `[engine] …` fingerprint, writes the JSON above into the
+cell's output dir, and **refuses to launch** (exit 4) when the `.so` predates the newest
+tracked build input, when the submodule is dirty, or when it sits off the pinned commit.
+`ALLOW_STALE_ENGINE=1` bypasses it, loudly, on stderr — a run launched that way is not
+reproducible from any commit and must say so in its notes.
 
 Commit pinned per sweep:
 

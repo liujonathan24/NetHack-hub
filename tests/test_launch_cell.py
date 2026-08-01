@@ -53,7 +53,18 @@ def _base_env():
 
     # Keep PATH (for bash/python3) but nothing else -- the script must not
     # depend on ambient PYTHONPATH etc.
-    return {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    #
+    # ALLOW_STALE_ENGINE=1 because these tests are about ARGUMENT CONSTRUCTION,
+    # not about the engine: the preflight added in launch_cell.sh reads the real
+    # engine on this box, and on a dev box mid-rebuild the .so legitimately lags
+    # the source (measured: libnethack.so 2026-07-22 04:26 vs src/src/nle.c
+    # 2026-07-31 18:52). Without the bypass, every test here would flip red for
+    # a reason none of them is testing. The preflight itself is covered by
+    # test_engine_provenance.py against a synthetic engine tree.
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "ALLOW_STALE_ENGINE": "1",
+    }
 
 
 def test_refuses_an_unknown_arm(tmp_path):
@@ -74,7 +85,11 @@ def test_echoes_the_resolved_settings_before_running(tmp_path):
     out = tmp_path / "out"
     result, _ = _run(tmp_path, ["claude_code", str(out), "20", "1"])
     assert result.returncode == 0, result.stderr
-    line = result.stdout.strip().splitlines()[0]
+    # Not `splitlines()[0]`: the engine preflight prints its own `[engine] ...`
+    # fingerprint line first, and which line comes first is not the contract.
+    lines = [ln for ln in result.stdout.strip().splitlines() if "[launch_cell]" in ln]
+    assert len(lines) == 1, result.stdout
+    line = lines[0]
     assert "arm=claude_code" in line
     assert "max_calls=20" in line
     assert "n=1" in line
