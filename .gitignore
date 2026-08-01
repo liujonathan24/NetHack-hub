@@ -35,6 +35,14 @@ dat/
 /outputs/cli_harness_eval/**/turns/
 /outputs/cli_harness_eval/**/eval.log
 /outputs/cli_harness_eval/**/config.toml
+# Same artifacts from ANY other sweep directory. The rules above only covered
+# outputs/cli_harness_eval/, so a sweep launched into a new subtree (e.g. the
+# encoding-eval launcher, or a one-off probe dir) had its multi-hundred-MB
+# traces show up as untracked-but-committable. Already-tracked artifacts under
+# outputs/encoding_eval/ are unaffected -- .gitignore does not untrack files.
+/outputs/**/traces.jsonl
+/outputs/**/turns/
+/outputs/**/eval.log
 # The eval CLI's default per-run dir (`<env>--<model>--<harness>/<uuid>/`)
 # when `--output_dir` isn't passed explicitly (ad-hoc `eval` invocations,
 # not launch_cell.sh, which always sets `--output_dir`).
