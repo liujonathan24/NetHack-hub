@@ -305,11 +305,53 @@ def build_tool_result(*, name, arguments, feedback, status=None,
     }
 
 
+#: Why the MCP route cannot see the model's message at write time, stated once
+#: so every affected record carries the same auditable sentence. Consumed by
+#: `tools/trace_reasoning.py`, which is the thing that fixes it after the fact.
+MCP_REASONING_UNAVAILABLE = (
+    "dispatched over MCP: the tool server is a separate process from the one "
+    "the model talks to, so no assistant message exists at write time. Backfill "
+    "it from the rollout trace with `python -m tools.trace_reasoning <run_dir>` "
+    "(or let NetHackTask.finalize do it live)."
+)
+
+#: The model did produce a message this turn; it simply had no visible text
+#: (a bare tool call). Distinct from "this route cannot see it" above.
+NO_TEXT_REASONING_UNAVAILABLE = (
+    "the model emitted a tool call with no assistant text this turn"
+)
+
+
+def _reasoning_block(assistant_msg, dispatch_route: str) -> dict:
+    """The `reasoning` block for a record written live by the harness.
+
+    Three outcomes, and keeping them apart is the whole point:
+      * text in hand              -> available, source=assistant_message;
+      * message in hand, no text  -> unavailable, "the model said nothing";
+      * no message at all (MCP)   -> unavailable, and says why + how to fix it.
+    """
+    if assistant_msg is None:
+        if dispatch_route == "mcp":
+            return TS.unavailable_reasoning(MCP_REASONING_UNAVAILABLE)
+        return TS.unavailable_reasoning(
+            "no assistant message was associated with this turn")
+    if isinstance(assistant_msg, dict):
+        text = assistant_msg.get("content") or ""
+        extra = assistant_msg.get("reasoning_content") or ""
+    else:
+        text = getattr(assistant_msg, "content", "") or ""
+        extra = getattr(assistant_msg, "reasoning_content", "") or ""
+    if not (text or extra):
+        return TS.unavailable_reasoning(NO_TEXT_REASONING_UNAVAILABLE)
+    return TS.reasoning_record(text, "assistant_message", "inline",
+                               reasoning_text=extra)
+
+
 def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
                        action_indices, total_reward: float, obs_text: str,
                        obs_content=None, *, actions=None, tool_results=None,
                        all_messages=None, applied=True, lm_turn=None,
-                       turn=None, gt_obs=True) -> None:
+                       turn=None, gt_obs=True, dispatch_route="harness") -> None:
     """Write one NDJSON line per LM turn. Best-effort; never raises.
 
     Captures everything needed to render the game as the model saw it (raw
@@ -410,6 +452,11 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
                 out_dir, run_id=run_id, turn=turn_no),
             "assistant_message": assist_content,
             "tool_calls": tc_serial,
+            # Which route delivered this call, and -- explicitly, never by
+            # inference from an empty string -- whether the agent's own words
+            # for this turn are available and why not (schema version 3).
+            "dispatch_route": dispatch_route,
+            "reasoning": _reasoning_block(assistant_msg, dispatch_route),
             # Kept verbatim for version-0/1 readers. It is the harness step
             # loop's PLANNED index list and is structurally empty for every
             # pre_executed skill; `actions` below is the authoritative record.

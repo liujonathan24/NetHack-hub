@@ -72,6 +72,47 @@ Fix: `reset_agent_cache()` after the auto-dismiss loop and after `rollback`.
 a seed. Now renders `Changed dungeon level from 1 to 2`, mentioning the branch
 only when it actually changes.
 
+### 1.6 The MAP was not byte-faithful to the engine grid, and nothing checked
+§1.3 says the grid "must stay a faithful render of the engine". Nothing tested
+it, and it was not true. Diffing the trace's `raw_grid` (from `tty_chars`)
+against the rendered `=== MAP ===` (from `chars`) on seed 0 under
+`tune={"reveal_map":1.0}` shows two cells differing from turn 2 on — (16,5) and
+(11,10), `+` on the tty, `|`/`-` on the map — and both are absent from VISIBLE
+FEATURES. Reproduced in the committed trace
+`outputs/trace_probe/B0_reveal/turns/0_28800_1785554140.ndjson`.
+
+They are **real, walkable doors**: `np_move_to(16,5)` takes the hero through one
+and out of the starting room. The agent was shown a wall across its only early
+exit, under the one encoding whose whole point is "lights on".
+
+Cause — **not** the NetPlay tracker (the MAP never touches it). `reveal_map` is
+a render-time overlay in the engine (`win/rl/winrl.cc :: fill_obs`). It runs
+`cvt_sdoor_to_door()` on secret doors, which permanently converts them in
+`levl[][]` so the revealed level is genuinely connected — but it only *paints* a
+cell that is still unknown or was secret **on that frame**. So the frame that
+converts the door paints it into `chars`, `glyphs` and `tty_chars`; on every
+later frame the cell is neither unknown nor secret, the guard skips it, and
+`chars` falls back to the wall face the hero remembers. `tty_chars` keeps the
+door because the overlay writes straight into the exported buffer and NLE
+re-copies only *dirty* terminal lines. The engine emitted the truth once and
+stopped repeating it.
+
+Fix: `prompt/engine_grid.py` reconciles the two planes back into one grid, in
+the direction of `levl[][]` — a cell `chars` calls a wall face that the engine's
+own tty still draws as `+` is restored. Deliberately narrow, because tty is the
+plane that can carry menu prose (the 10.6% bleed that moved the MAP off tty in
+the first place): wall faces only, `+` only, and never on a tty row containing a
+4+ letter run. No harness memory is involved — drop the tty plane and it
+degrades to plain `chars`. `prompt/features.py` reads the same grid, so the MAP
+and VISIBLE FEATURES can no longer disagree about a door.
+`tests/test_map_engine_fidelity.py` diffs MAP against `raw_grid` across the
+first 6 turns under both fog and reveal and asserts they agree, and pins that
+fog does **not** gain the (still-secret) doors.
+
+Residual, engine-side, not copied into the MAP: a monster that moved can linger
+on `tty_chars` for a frame or two (dirty-line refresh) while `chars` is already
+correct — staleness in the other direction.
+
 ---
 
 ## 2. FIXED — information the agent could not have
@@ -133,42 +174,127 @@ PID, idle time and last recorded turn. Silence is measured per PID rather than
 per seed — one process owns every seed of a cell, so a seed that merely
 *finished* would otherwise look stalled. See `RUNBOOK.md`.
 
-### 3.2 The spoiling-food interrupt and the standing-on-stairs fallback are inert
-Both are present and both silently do nothing:
-- `_spoiling_now` passes a `_RawView` (chars/glyphs/blstats only) into `shape()`,
-  which needs `.message` → `AttributeError` swallowed by a bare `except` → always `[]`.
-- `rendering.py` stores remembered stairs as `(depth,x,y)`; `sparse_map.py` tests
-  `(x,y)` membership — can never match.
+### 3.2 The spoiling-food interrupt and the standing-on-stairs fallback were inert — **BOTH FIXED**
+- **FIXED.** `_spoiling_now` passed a `_RawView` (chars/glyphs/blstats only) into
+  `shape()`, which needs `.message` → `AttributeError` swallowed by a bare
+  `except` → always `[]`. The interrupt had never fired. `_raw_view` now returns
+  the env's own `_last_observation` (a complete `CoreObservation`), and the list
+  fallback builds a view carrying **every** published key rather than three.
+  Verified firing end-to-end inside a live `explore_level` macro
+  (`tests/test_spoiling_interrupt.py`), on `corpse_age`'s own thresholds
+  (RISKY_AGE 30, URGENT_WINDOW 5) — no rot arithmetic is duplicated here.
+  A `b"corpse" in inv_strs` fast path keeps the per-engine-step cost near zero
+  (`shape()` is ~220 µs and this runs after every step of a ≤100-step macro).
+  **The swallow itself was the real defect**: `[]` meant both "no spoiling food"
+  and "this function is broken". Guards in `netplay_true.py` now go through
+  `_swallowed(site, exc)` — counted in `swallowed_exceptions()`, logged at
+  WARNING with a traceback on first occurrence — and
+  `NETHACK_STRICT_SKILL_ERRORS=1` re-raises instead of swallowing.
+- **FIXED.** `rendering._remember_stairs_down` stores `(depth,x,y)`;
+  `sparse_map.py` tested `(x,y)` membership, so the fallback could not fire on
+  any input. **Verified live before the fix** (seed 0, `reveal_map`): one real
+  render populated the memo as `{(1, 57, 13)}`, i.e. the test the sparse map
+  performs for a hero on those stairs is `(57,13) in {(1,57,13)}` → False.
+  It matters because under SPARSE the entity list *is* the map and `@` covers
+  its own tile, so this was the only channel that could say "you are standing on
+  `>`". `sparse_map.py` now reads the memo through the same depth-aware
+  `rendering._remembered_stairs_down` helper the HINT ladder uses, so producer
+  and consumer cannot disagree about the key shape again; legacy 2-tuple entries
+  still resolve. `tests/test_sparse_map_under_player.py` wires the real producer
+  to the real consumer and also pins the cross-floor case the depth key exists
+  for.
 
-### 3.3 `reveal` silently clamps to 41 of 79 columns
-`_REVEAL_MAX_W = 40`, undocumented. Requesting `x1=0,x2=78` returns
-`(x0-40, y0-20)`. Worst under `BBOX`/`SPARSE_ONDEMAND`, where `reveal` is the
-only map access.
+### 3.3 `reveal` silently clamped to 41 of 79 columns — **FIXED**
+`_REVEAL_MAX_W = 40`, undocumented, applied to the exclusive difference
+`x2 - x1`, so `x1=0,x2=78` returned `(x0-40, y0-20)` and said nothing. Worst
+under `BBOX`/`SPARSE_ONDEMAND`, where `reveal` is the only map access.
+
+The caps are now `_REVEAL_MAX_COLS = 79` / `_REVEAL_MAX_ROWS = 21` — the whole
+map — because the request is clamped to the grid **before** the size cap, so the
+worst case a caller can reach is the map itself. Measured: a full 79×21 reveal
+is **1,807 characters**, against 1,328 for the `=== MAP ===` section a full-map
+variant sends *every* turn and 2,613 for a whole observation. The blowup the cap
+was written against does not exist. The clamping machinery is kept for
+experiments that want it, but every clamp now (a) appends a
+`NOTE: partial view — …` sentence naming the columns/rows withheld, and (b)
+increments `skills.reveal_clamp_counts()` (`calls` / `out_of_range` / `too_wide`
+/ `too_tall` / `truncated`, mirrored per-episode on `env._reveal_clamps`), so a
+sweep can measure the rate instead of nobody finding out for months.
 
 ### 3.4 Intermediate messages are dropped
 `shape()` keeps only the last message, so a 100-step macro surfaces one line —
 `You kill the little dog!` never reached the agent. `pre_visible_obs` already
 holds them; the kill log now scans them, but nothing else does.
 
-### 3.5 No reasoning is recorded
-`assistant_message` is empty on every turn of every trace — the model replies
-with a bare tool call. We can see *what* it decided, never *why*. This caps how
-far trace debugging can go.
+### 3.5 No reasoning is recorded — FIXED (schema version 3)
+Was: `assistant_message` empty on every turn of every CLI-arm trace (0 of 12 and
+0 of 20 on the two committed reference artifacts; 9 of 29 on the control arm),
+and `tool_calls` empty on 100% of CLI-arm turns. We could see *what* it decided,
+never *why*.
 
-### 3.6 Death is not announced on the turn it happens
-The death turn renders `HP: 0/N` with no death text and a stale HINT; the agent
-learns on the *next* call, when every tool is already gated.
+Two different causes, two different fixes:
 
-### 3.7 `rendering._PUBLISHED_TOOLS` is a process-global that is never restored
-`load_environment` -> `render_system_prompt(published_tools=...)` writes a
-module-level set, and `_fix_hint_vocabulary` reads it to delete HINT sentences
+* **`tool_calls`** was empty for no good reason. The dispatched name and
+  arguments are the arguments to `_apply_tool_call` — `tool_results[i].name` was
+  already built from them — but the field was filled only from a *parsed*
+  assistant message, which exists only inside the in-process v0 rollout loop.
+  It is now synthesized on the MCP route, and every record carries
+  `dispatch_route` (`"harness"` / `"mcp"`) saying which route wrote it.
+* **The reasoning** genuinely is not visible to the tool server: a CLI agent
+  talks to the interception endpoint in another process. So the record now says
+  so — `reasoning.available = false` with a `reason`, never a silent `""` — and
+  the words are recovered afterwards from `traces.jsonl`'s sampled assistant
+  nodes, which is where every arm's model calls are recorded.
+  `NetHackTask.finalize` does that join live; `python -m tools.trace_reasoning
+  <run_dir>` does it over any completed run, including old ones.
+
+The join is verified, not assumed: it must reproduce the `assistant_message` the
+control arm already wrote inline, or it refuses to write anything. Measured
+396/396 exact on `outputs/pilot_reveal`. Where a scaffold makes a 1:1 mapping
+impossible — Prime Agent runs skills inside `ipython`, so its model turns do not
+correspond to skill dispatches — the records say `available: false` with that as
+the reason rather than attaching a plausible paragraph to the wrong move.
+
+Still missing, and honestly labelled rather than guessed: reasoning for any arm
+whose model calls do not pass through the interception endpoint, and per-turn
+attribution for `ipython`-mediated arms.
+
+### 3.6 Death is not announced on the turn it happens — **FIXED**
+The death turn rendered `HP: 0/N` with no death text and a stale HINT (observed:
+"Hostile adjacent (SE). Call `attack(...)` — your HP is healthy." on a corpse);
+the agent learned on the *next* call, when every tool is already gated and the
+one action that still works has never been mentioned.
+
+Fix: `rendering._game_over_block`, emitted **first**, above JOURNAL, and it
+suppresses the HINT ladder. Detected from the observation — `hitpoints <= 0`, or
+NetHack's own death-screen phrases in the messages or on the tty — *not* from
+`state["died"]`, which `env_response` sets after this render; that ordering is
+exactly what made the announcement a turn late. It names HP/Dlvl/turn, quotes
+the game's own cause line, says every further call is refused, and (only when
+`rollback` is in this rollout's published set) says rollback still works.
+`tests/test_death_announcement.py` drives a real `modify={"hp":0}` death and
+asserts the *death turn's own* content says so.
+
+### 3.7 `rendering._PUBLISHED_TOOLS` is a process-global that is never restored — **FIXED**
+`load_environment` -> `render_system_prompt(published_tools=...)` wrote a
+module-level set, and `_fix_hint_vocabulary` read it to delete HINT sentences
 naming unbound tools (correct in production: `search` is not bound under
-`netplay_true`). Nothing ever puts it back, so *booting an environment changes
-how every later render in the same process behaves*. Harmless in a real rollout,
-but it makes render-level tests order-dependent: adding a test that boots an env
+`netplay_true`). Nothing ever put it back, so *booting an environment changed
+how every later render in the same process behaved*. Harmless in a real rollout,
+but it made render-level tests order-dependent: a test that boots an env
 truncated the exit hint asserted by `test_hint_actionability`, which passes in
-isolation. `environments/nethack/tests/golden/obs_configs.py` saves and restores
-it as a local workaround; the leak itself is unfixed.
+isolation.
+
+Fix: the global is gone. `render_system_prompt` is now pure, and the resolved
+adapter names are written once per rollout into
+`state[rendering.PUBLISHED_TOOLS_STATE_KEY]` by `setup_state`;
+`_fix_hint_vocabulary(hint, published_tools)` takes the set explicitly and
+rewrites nothing when it is empty ("unknown publisher → leave the text alone",
+the same default the global had at import). The save/restore workaround in
+`tests/golden/obs_configs.py` is deleted. `tests/test_published_tools_scope.py`
+pins both ends, including the original order-dependence; the five golden
+snapshots are byte-identical before and after, so production behaviour is
+unchanged.
 
 ---
 

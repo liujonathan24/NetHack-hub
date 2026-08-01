@@ -30,7 +30,13 @@ from tools.eval_metrics import (  # noqa: E402
     balrog_columns,
     read_ndjson,
     select_turn_files,
+    write_table,
 )
+
+#: A THIRD writer of `<run_dir>/table.{md,json}`. Namespaced like the other two
+#: (`eval_metrics.write_table`) so a run directory aggregated by more than one
+#: tool keeps every result instead of only the last one.
+PRODUCER = "encoding_eval_run"
 
 CELLS = ["B0", "JSON", "TOON", "IMG", "IMG_TTY"]
 REPR = {
@@ -193,8 +199,6 @@ if __name__ == "__main__":
     table = aggregate(run_dir)
     md = to_markdown(table)
     print(md)
-    out_json = os.path.join(run_dir, "table.json")
-    out_md = os.path.join(run_dir, "table.md")
-    json.dump(table, open(out_json, "w"), indent=1)
-    open(out_md, "w").write(md + "\n")
-    print(f"\nwrote {out_md} and {out_json}")
+    paths = write_table(run_dir, table, md, producer=PRODUCER)
+    print(f"\nwrote {paths['primary_md']} and {paths['primary_json']}"
+          f"\n(also copied to {paths['canonical_md']} / {paths['canonical_json']})")

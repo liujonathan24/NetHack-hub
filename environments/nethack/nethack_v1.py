@@ -136,6 +136,14 @@ class NetHackState(vf.State):
     moves_executed: int = 0
     # Engine-side termination (death / ascension / step cap).
     terminated: bool = False
+    # The per-turn NDJSON this rollout is writing, as `<run_id>.ndjson` under
+    # the toolset's `trace_dir`. Published because the FILE is written in the
+    # tool-server process while the model's assistant messages only exist on the
+    # `Trace` in the driver process -- `NetHackTask.finalize` needs both to join
+    # them, and `run_id` embeds a pid + epoch it cannot otherwise guess. Empty
+    # until the first tool call (the writer mints the id lazily) and empty
+    # forever when tracing is off.
+    trace_run_id: str = ""
     # Reward-relevant scalars, mirrored out of the v0 state after each call.
     scout_reward_total: float = 0.0
     descent_count: float = 0.0
@@ -549,6 +557,7 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
         state.terminated = bool(v0.get("terminated")) or state.terminated
+        state.trace_run_id = str(v0.get("_trace_run_id") or "")
 
     def _register(self, mcp: FastMCP) -> None:
         """Publish the gated tool set over MCP.
@@ -596,6 +605,12 @@ class NetHackTaskData(vf.TaskData):
 
     seed: int = 0
     tier: str = "full_nle"
+
+
+#: Returned when the reasoning backfill could not run at all (tracing off, the
+#: NDJSON is not reachable from this process, ...). Zeroes, not absence: the
+#: metric being present and zero is itself the finding.
+_NO_REASONING = {"recovered": 0, "inline": 0, "unavailable": 0}
 
 
 class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
@@ -672,6 +687,7 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
         :class:`NetHackState` for what it does and does not evidence.
         """
         state = trace.state
+        reasoning = self._backfill_turn_reasoning(trace)
         trace.metrics.update(
             {
                 "skill_calls": float(state.skill_calls),
@@ -685,6 +701,58 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
                 "moves_executed": float(state.moves_executed),
             }
         )
+        # Published so a run's own output says how much of the agent's reasoning
+        # it captured, instead of that being discoverable only by reading the
+        # NDJSON by hand.
+        trace.metrics.update({f"reasoning_{k}": float(v) for k, v in reasoning.items()})
+
+    def _backfill_turn_reasoning(self, trace) -> dict:
+        """Write the model's own words for each turn into this rollout's NDJSON.
+
+        WHY THIS RUNS HERE AND NOT IN THE WRITER. The trace records are written
+        by the TOOL SERVER, one per `_apply_tool_call`; the model's messages
+        live on the `Trace` in the DRIVER process, because a CLI agent talks to
+        the interception endpoint, not to us. There is no moment inside a tool
+        call at which both are in hand. `finalize` is the first moment there is:
+        every call has been served (so every record exists) and the trace holds
+        every sampled assistant message.
+
+        Best-effort by construction. A failure here must never fail a scored
+        rollout, and a run whose NDJSON is on another host (a container runtime)
+        simply finds no file -- `tools/trace_reasoning.py` then does the same
+        join offline over the collected artifacts.
+
+        Returns `{"recovered", "inline", "unavailable"}` counts. One Task
+        instance is shared across a rollout group (`v1/task.py:224`), so this
+        returns per-rollout numbers rather than stashing them on `self`.
+        """
+        try:
+            from pathlib import Path
+
+            from tools.trace_reasoning import (
+                assistant_turns_from_trace,
+                backfill_records,
+                _write_ndjson_atomically,
+            )
+            from tools.eval_metrics import read_ndjson
+
+            trace_dir = self.config.toolset.trace_dir
+            run_id = getattr(trace.state, "trace_run_id", "")
+            if not trace_dir or not run_id:
+                return _NO_REASONING
+            path = Path(trace_dir) / f"{run_id}.ndjson"
+            if not path.exists():
+                return _NO_REASONING
+            records = read_ndjson(path)
+            stats = backfill_records(records, assistant_turns_from_trace(trace))
+            _write_ndjson_atomically(path, records)
+            return {
+                "recovered": stats["recovered"],
+                "inline": stats["already"],
+                "unavailable": stats["unavailable"],
+            }
+        except Exception:  # pragma: no cover - diagnostics must not fail a rollout
+            return _NO_REASONING
 
     # -- stop conditions ---------------------------------------------------- #
     @vf.stop

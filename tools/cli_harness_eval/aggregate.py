@@ -91,6 +91,7 @@ from tools.eval_metrics import (  # noqa: E402
     PRICE_TABLE_GLM_5_2,
     PRICE_TABLES,
     balrog_columns,
+    concurrent_rollout_files,
     degeneracy,
     game_turns,
     mean_se,
@@ -101,11 +102,15 @@ from tools.eval_metrics import (  # noqa: E402
     select_turn_files,
     skill_call_count,
     turn_file_parts,
+    write_table,
 )
 
 __all__ = [
     "ARMS",
     "ACTIONS_METRIC",
+    "PRODUCER",
+    "SEC_PER_CALL_SHARED_PROCESS",
+    "sec_per_call_unavailable_reason",
     "PRICE_TABLES",
     "PRICE_TABLE_GLM_5_2",
     "actions_used",
@@ -118,6 +123,12 @@ __all__ = [
     "seconds_per_call_halves",
     "to_markdown",
 ]
+
+#: This aggregator's name in `table.<producer>.{md,json}` and in
+#: `table.provenance.json`. `tools/encoding_eval/aggregate.py` computes a
+#: DIFFERENT table from the same directory layout and used to write the same
+#: two filenames; see `eval_metrics.write_table`.
+PRODUCER = "cli_harness_eval"
 
 ARMS = ("control", "claude_code", "prime_agent")
 
@@ -177,8 +188,39 @@ def post_death_drain(turns: list[dict]) -> int:
     return len(turns) - death_idx - 1
 
 
-def rollout_from_turns(turns: list[dict]) -> dict:
-    """Per-rollout stats derived purely from the turns/*.ndjson channel."""
+#: What `sec/call` means, and the one condition under which it means nothing.
+#: `t_mono` is `time.monotonic()` -- PROCESS-wide, not rollout-wide -- and the
+#: eval CLI runs a cell's seeds concurrently in one process, so a delta between
+#: one rollout's consecutive turns also contains whatever share of the
+#: interpreter its co-tenants took. The column is then an artifact of the
+#: interleaving rather than either rollout's latency, and the honest report is
+#: "unavailable", not a plausible-looking number. See
+#: `eval_metrics.concurrent_rollout_files`.
+SEC_PER_CALL_SHARED_PROCESS = (
+    "shared its eval process (pid {pid}) with {n} other concurrent rollout(s); "
+    "`t_mono` is process-wide, so its per-call deltas include the other "
+    "rollout(s)' work and do not measure this rollout's latency"
+)
+
+
+def sec_per_call_unavailable_reason(path, peers) -> str:
+    """The `sec/call` unavailability reason for one rollout, or `""`."""
+    if not peers:
+        return ""
+    parts = turn_file_parts(path)
+    return SEC_PER_CALL_SHARED_PROCESS.format(
+        pid=parts[1] if parts else "?", n=len(peers)
+    )
+
+
+def rollout_from_turns(turns: list[dict], sec_per_call_unavailable: str = "") -> dict:
+    """Per-rollout stats derived purely from the turns/*.ndjson channel.
+
+    `sec_per_call_unavailable`, when non-empty, is the reason this rollout's
+    latency cannot be measured from its own timestamps; the two `sec_per_call`
+    fields are then `None` and the reason rides along on the row. Default `""`
+    keeps the old single-rollout behaviour for every existing caller.
+    """
     max_dlvl, max_xp, died = 1, 1, False
     for t in turns:
         max_dlvl = max(max_dlvl, t.get("max_dlvl_reached") or t.get("dlvl") or 1)
@@ -187,7 +229,10 @@ def rollout_from_turns(turns: list[dict]) -> dict:
             max_xp = max(max_xp, status.get("experience_level") or 1)
         if _hitpoints(t) == 0:
             died = True
-    first_half, second_half = seconds_per_call_halves(turns)
+    if sec_per_call_unavailable:
+        first_half = second_half = None
+    else:
+        first_half, second_half = seconds_per_call_halves(turns)
     row = {
         "max_dlvl": max_dlvl,
         "max_xp": max_xp,
@@ -197,6 +242,7 @@ def rollout_from_turns(turns: list[dict]) -> dict:
         "post_death_drain": post_death_drain(turns),
         "sec_per_call_first_half": first_half,
         "sec_per_call_second_half": second_half,
+        "sec_per_call_unavailable": sec_per_call_unavailable,
     }
     row.update(balrog_columns(max_dlvl, max_xp))
     return row
@@ -327,11 +373,29 @@ def aggregate_arm(
                 traces.append(json.loads(line))
 
     turn_items = []
+    path_rows = []
     for p in turns_paths:
         parts = turn_file_parts(p)
-        turn_items.append((parts[0] if parts else None, _read_turns_file(p)))
+        rows = _read_turns_file(p)
+        turn_items.append((parts[0] if parts else None, rows))
+        path_rows.append((p, rows))
 
-    turn_rollouts = [rollout_from_turns(rows) for _, rows in turn_items]
+    # Which of this cell's rollouts shared an interpreter with another, and so
+    # cannot have their per-call latency read off `t_mono` (see
+    # SEC_PER_CALL_SHARED_PROCESS). Detected, not assumed: same pid AND
+    # overlapping first/last-turn timestamps.
+    overlaps = concurrent_rollout_files(path_rows)
+    sec_unavailable = [
+        (str(p), sec_per_call_unavailable_reason(p, overlaps.get(str(p))))
+        for p, _ in path_rows
+        if overlaps.get(str(p))
+    ]
+    turn_rollouts = [
+        rollout_from_turns(
+            rows, sec_per_call_unavailable_reason(p, overlaps.get(str(p)))
+        )
+        for p, rows in path_rows
+    ]
 
     depths = [r["max_dlvl"] for r in turn_rollouts]
     depth_mean, depth_se = mean_se(depths)
@@ -424,6 +488,13 @@ def aggregate_arm(
         "cost_priced_model": model if price is not None else None,
         "sec_per_call_first_half_mean": sec_first_mean,
         "sec_per_call_second_half_mean": sec_second_mean,
+        # `[(path, reason)]` for every rollout whose latency is NOT measurable.
+        # Carried into the table so the column reads "unavailable (<why>)"
+        # rather than printing an interleaving artifact as if it were latency.
+        "sec_per_call_unavailable": sec_unavailable,
+        "sec_per_call_n_available": sum(
+            1 for r in turn_rollouts if r["sec_per_call_first_half"] is not None
+        ),
         "post_death_drain_mean": drain_mean,
         "game_turns_mean": mean_se([r["game_turns"] for r in turn_rollouts])[0],
         "degenerate": degenerate,
@@ -472,10 +543,19 @@ def to_markdown(rows: list[dict]) -> str:
         dpc = f"{_fmt(r['depth_per_llm_call_mean'], '{:.4f}')} ± {_fmt(r['depth_per_llm_call_se'], '{:.4f}')}"
         bpt = f"{_fmt(r['balrog_pct_per_game_turn_mean'], '{:.5f}')}"
         bpc = f"{_fmt(r['balrog_pct_per_llm_call_mean'], '{:.4f}')}"
-        sec = (
-            f"{_fmt(r['sec_per_call_first_half_mean'], '{:.1f}')}s → "
-            f"{_fmt(r['sec_per_call_second_half_mean'], '{:.1f}')}s"
-        )
+        n_shared = len(r.get("sec_per_call_unavailable") or [])
+        if r["sec_per_call_first_half_mean"] is None and n_shared:
+            # Never print a plausible-looking wrong value: every rollout in this
+            # cell shared its interpreter, so `t_mono` deltas are interleaving
+            # artifacts, not latency.
+            sec = f"unavailable ({n_shared} concurrent rollouts/process)"
+        else:
+            sec = (
+                f"{_fmt(r['sec_per_call_first_half_mean'], '{:.1f}')}s → "
+                f"{_fmt(r['sec_per_call_second_half_mean'], '{:.1f}')}s"
+            )
+            if n_shared:
+                sec += f" ({r['sec_per_call_n_available']}/{r['n']} rollouts)"
         drain = _fmt(r["post_death_drain_mean"], "{:.1f}")
         lines.append(
             f"| {r.get('cell', r['arm'])} | {r['n']} | {depth} | {balrog} | {balrog_min} | "
@@ -500,6 +580,16 @@ def to_markdown(rows: list[dict]) -> str:
         "ran and is 'unavailable' when that model is unpriced -- never another "
         "model's table."
     )
+    for r in rows:
+        if r.get("sec_per_call_unavailable"):
+            lines.append(
+                f"`sec/call` unavailable for {len(r['sec_per_call_unavailable'])} "
+                f"rollout(s) in `{r.get('cell', r['arm'])}`: "
+                + "; ".join(
+                    f"{os.path.basename(p)} {why}"
+                    for p, why in r["sec_per_call_unavailable"]
+                )
+            )
     for r in rows:
         if r["degenerate"]:
             lines.append(
@@ -621,14 +711,17 @@ def main(argv=None) -> int:
         return 1
     md = to_markdown(rows)
     print(md)
-    Path(run_dir).mkdir(parents=True, exist_ok=True)
-    out_json = os.path.join(run_dir, "table.json")
-    out_md = os.path.join(run_dir, "table.md")
-    with open(out_json, "w") as fh:
-        json.dump(rows, fh, indent=1)
-    with open(out_md, "w") as fh:
-        fh.write(md + "\n")
-    print(f"\nwrote {out_md} and {out_json}")
+    # `main` OWNS the files. `run_sweep.sh` used to additionally pipe this
+    # stdout through `tee "$RUN_ROOT/table.md"`, so the same path was written
+    # twice per invocation -- once by the shell (stdout only, so the stderr
+    # warnings about ignored retry files and unpriced models were dropped) and
+    # once here. Whichever finished last won. The shell no longer tees.
+    paths = write_table(run_dir, rows, md, producer=PRODUCER)
+    print(
+        f"\nwrote {paths['primary_md']} and {paths['primary_json']}"
+        f"\n(also copied to {paths['canonical_md']} / {paths['canonical_json']}"
+        f" -- see {os.path.join(run_dir, 'table.provenance.json')})"
+    )
     return 0
 
 

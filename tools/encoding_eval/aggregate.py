@@ -41,7 +41,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
@@ -54,7 +53,15 @@ from tools.eval_metrics import (  # noqa: E402
     pace_columns,
     read_ndjson,
     select_turn_files,
+    write_table,
 )
+
+#: This aggregator's name in `table.<producer>.{md,json}`. It and
+#: `tools/cli_harness_eval/aggregate.py` compute DIFFERENT tables from the same
+#: `<run_dir>/<cell>/{traces.jsonl,turns/}` layout, and both used to write
+#: `<run_dir>/table.md` + `table.json` -- so running both over one directory
+#: silently replaced the first result. See `eval_metrics.write_table`.
+PRODUCER = "encoding_eval"
 
 
 def _max_dlvl(sample: dict) -> int:
@@ -339,12 +346,12 @@ def main(argv=None) -> int:
         return 1
     md = table_to_markdown(rows)
     print(md)
-    Path(run_dir).mkdir(parents=True, exist_ok=True)
-    with open(os.path.join(run_dir, "table.json"), "w") as fh:
-        json.dump(rows, fh, indent=1)
-    with open(os.path.join(run_dir, "table.md"), "w") as fh:
-        fh.write(md + "\n")
-    print(f"\nwrote {os.path.join(run_dir, 'table.md')} and {os.path.join(run_dir, 'table.json')}")
+    paths = write_table(run_dir, rows, md, producer=PRODUCER)
+    print(
+        f"\nwrote {paths['primary_md']} and {paths['primary_json']}"
+        f"\n(also copied to {paths['canonical_md']} / {paths['canonical_json']}"
+        f" -- see {os.path.join(run_dir, 'table.provenance.json')})"
+    )
     return 0
 
 

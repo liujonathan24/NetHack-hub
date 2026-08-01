@@ -162,6 +162,19 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
 fi
 
 echo "[sweep] aggregating ${RUN_ROOT}"
-python3 tools/cli_harness_eval/aggregate.py "$RUN_ROOT" | tee "${RUN_ROOT}/table.md"
+# DO NOT `| tee "${RUN_ROOT}/table.md"` here. `aggregate.py`'s `main()` writes
+# that exact path itself, so teeing wrote it twice per invocation and the shell
+# copy was the WORSE of the two: a pipe captures stdout only, so the
+# aggregator's stderr warnings (ignored retry attempts, seeds absent from
+# traces.jsonl, a cell whose model has no price table) never reached the file,
+# and the pipeline's exit status was tee's, not the aggregator's -- an
+# aggregator that refused to write an empty table still looked like success.
+# Both streams go to a log instead; the table files are the aggregator's.
+python3 tools/cli_harness_eval/aggregate.py "$RUN_ROOT" 2>&1 \
+  | tee "${RUN_ROOT}/aggregate.log"
+AGG_RC=${PIPESTATUS[0]}
+if [ "$AGG_RC" -ne 0 ]; then
+  echo "[sweep] aggregate FAILED (exit ${AGG_RC}) -- see ${RUN_ROOT}/aggregate.log" >&2
+fi
 
-[ "${#FAILED[@]}" -eq 0 ] || exit 1
+[ "${#FAILED[@]}" -eq 0 ] && [ "$AGG_RC" -eq 0 ] || exit 1

@@ -21,12 +21,15 @@ The shared implementations all live in `tools/eval_metrics.py`:
    degeneracy rule runs off `eval_metrics.skill_call_count`'s explicit fallback
    chain and reports UNKNOWN rather than guessing.
 
-3. `tool_calls` IS EMPTY IN CLI-ARM TURN FILES. Those arms dispatch over MCP and
-   the env-side record never populates it. Skill usage then comes from the trace
-   `nodes` -- but ONLY the nodes flagged `sampled`, because `nodes` is a
-   cumulative prefix replay of the conversation, not a list of calls. Counting
-   every assistant node over-counted by ~15x (911 nodes -> "455 skills" for a
-   30-call rollout) and made every skill-adoption percentage garbage.
+3. `tool_calls` WAS EMPTY IN CLI-ARM TURN FILES WRITTEN BEFORE SCHEMA VERSION 3.
+   Those arms dispatch over MCP and the env-side record did not populate it;
+   `nethack.py:_apply_tool_call` now synthesizes it from the dispatch arguments,
+   and every record carries `dispatch_route`. OLDER FILES STILL HAVE IT EMPTY,
+   so skill usage is still read from the trace `nodes` -- but ONLY the nodes
+   flagged `sampled`, because `nodes` is a cumulative prefix replay of the
+   conversation, not a list of calls. Counting every assistant node over-counted
+   by ~15x (911 nodes -> "455 skills" for a 30-call rollout) and made every
+   skill-adoption percentage garbage.
 
 4. PRIME AGENT NESTS SKILLS INSIDE `ipython`. Counting the outer tool name
    reports 100% `ipython` / 0% everything else. We parse the code payload.

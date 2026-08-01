@@ -107,12 +107,14 @@ def test_pre_executed_skills_now_record_their_command_stream(driven):
     """`np_explore_level` expands into many engine steps; all of them land."""
     _state, recs = driven
     macro = recs[0]
-    # NB `tool_calls` stays empty on this route -- it is filled from the parsed
-    # assistant message, which only exists in the native rollout loop, and the
-    # CLI/MCP arms have the same gap (see tools/cli_harness_eval/progress.py's
-    # header). `tool_results[i]["name"]` is route-independent, which is part of
-    # why it was added.
+    # `tool_calls` USED to stay empty on this route (it was filled only from a
+    # parsed assistant message, which exists only in the native rollout loop),
+    # so both CLI arms recorded nothing at all about what they called. It is now
+    # synthesized from the dispatch arguments -- see
+    # `test_cli_arm_reasoning.py`, which owns that property. `tool_results[i]`
+    # has been route-independent since version 2.
     assert macro["tool_results"][0]["name"] == "np_explore_level"
+    assert macro["tool_calls"][0]["name"] == "np_explore_level"
     # The version-0/1 field is still exactly as empty as it always was...
     assert macro["action_indices"] == []
     # ...and the new one is not.
@@ -509,7 +511,7 @@ def test_new_records_validate_and_carry_a_version_stamp(driven):
     _state, recs = driven
     for r in recs:
         assert TS.validate_record(r) == [], (r["lm_turn"], TS.validate_record(r))
-        assert TS.record_version(r) == TS.TRACE_SCHEMA_VERSION == 2
+        assert TS.record_version(r) == TS.TRACE_SCHEMA_VERSION >= 2
         assert "t_mono" in r
 
 
