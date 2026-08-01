@@ -92,8 +92,22 @@ def sparse_entity_map(structured, state) -> str:
         # and the tile we would most be lying about is a down-staircase, the one
         # thing the score depends on. Fall back to the remembered stair coords
         # (the same memo the descend hint uses), then admit ignorance.
+        #
+        # THE MEMO IS DEPTH-KEYED. `rendering._remember_stairs_down` stores
+        # `(depth, x, y)` -- deliberately, because (x,y) means a different tile
+        # on every floor and the memo is never cleared on descent. This code
+        # used to test `(x, y) in state["_seen_stairs_down"]`: a 2-tuple against
+        # a set that only ever contains 3-tuples, so the fallback could not fire
+        # on ANY input (docs/HARNESS_DEFECTS.md 3.2 -- verified live: after a
+        # real render the memo held `{(1, 57, 13)}` and the membership test was
+        # `(57, 13) in {(1, 57, 13)}` == False). Under SPARSE the entity list IS
+        # the map, so this was the only way to learn you are standing on `>` --
+        # the single tile the whole score depends on. Read it through the same
+        # depth-aware helper the HINT ladder uses, so the producer and this
+        # consumer cannot disagree about the key shape again.
         pos = (px, py)
-        known = state.get("_seen_stairs_down") or set()
+        from nethack_harness.prompt.rendering import _remembered_stairs_down
+        known = _remembered_stairs_down(state, structured)
         if pos in known:
             out.append("standing on: stairs down  <- DESCEND FROM HERE")
         else:

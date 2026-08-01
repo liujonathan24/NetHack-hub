@@ -84,46 +84,35 @@ async def render_observation(name: str) -> str:
     observation is what a rollout actually shows the model.
     """
     import nethack  # imported lazily: needs PYTHONPATH set up by the caller
-    from nethack_harness.prompt import rendering
 
-    # `load_environment` -> `render_system_prompt(published_tools=...)` writes
-    # the PROCESS-GLOBAL `rendering._PUBLISHED_TOOLS`, which `_fix_hint_vocabulary`
-    # then uses to delete HINT sentences naming unbound tools (`search` is not
-    # bound under netplay_true, so "Call `search(times=10)`..." is stripped).
-    # That global is never restored. Booting an environment therefore changes
-    # how EVERY later render in the process behaves — measured: it truncates
-    # the exit hint that `test_hint_actionability` asserts on, failing a test
-    # that passes on its own.
-    #
-    # The pinned observations must be rendered WITH the global set (that is
-    # production behaviour), so we set it via the normal path and put it back
-    # afterwards. Fixing the leak at its source is a change to shared rendering
-    # code that other work is touching right now; containing it here costs
-    # nothing and keeps this file's side effects to zero.
-    saved = set(rendering._PUBLISHED_TOOLS)
-    try:
-        cfg = CONFIGS[name]
-        env = nethack.load_environment(
-            variant=cfg["variant"],
-            skill_set=SKILL_SET,
-            max_turns=MAX_TURNS,
-            explicit_seeds=[SEED],
-            n_examples=1,
-            character=CHARACTER,
-            compact_obs=cfg["compact_obs"],
-            tune=cfg["tune"],
-        )
-        ex = env.dataset[0]
-        state = {
-            "task": {"seed": SEED},
-            "info": ex["info"],
-            "prompt": ex["prompt"],
-            "responses": [],
-            "turn": 0,
-            "id": f"golden_obs_{name}",
-            "model": "golden_obs",
-        }
-        state = await env.setup_state(state)
-        return env._render_obs_text(state)
-    finally:
-        rendering._PUBLISHED_TOOLS = saved
+    # NOTE (was a workaround, now isn't). This function used to save and restore
+    # the process-global `rendering._PUBLISHED_TOOLS`, because
+    # `load_environment` -> `render_system_prompt(published_tools=...)` wrote it
+    # and nothing put it back — so recording a snapshot here truncated the exit
+    # hint that `test_hint_actionability` asserts on, in a DIFFERENT test file.
+    # The global is gone: the published-tool set now travels in per-rollout state
+    # (`rendering.PUBLISHED_TOOLS_STATE_KEY`, written by `setup_state`), so this
+    # file has no process-wide side effects to contain.
+    cfg = CONFIGS[name]
+    env = nethack.load_environment(
+        variant=cfg["variant"],
+        skill_set=SKILL_SET,
+        max_turns=MAX_TURNS,
+        explicit_seeds=[SEED],
+        n_examples=1,
+        character=CHARACTER,
+        compact_obs=cfg["compact_obs"],
+        tune=cfg["tune"],
+    )
+    ex = env.dataset[0]
+    state = {
+        "task": {"seed": SEED},
+        "info": ex["info"],
+        "prompt": ex["prompt"],
+        "responses": [],
+        "turn": 0,
+        "id": f"golden_obs_{name}",
+        "model": "golden_obs",
+    }
+    state = await env.setup_state(state)
+    return env._render_obs_text(state)

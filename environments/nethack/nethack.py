@@ -174,6 +174,7 @@ from nethack_harness.prompt.rendering import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_VERBOSE,
     render_system_prompt as _render_system_prompt,
+    PUBLISHED_TOOLS_STATE_KEY as _PUBLISHED_TOOLS_STATE_KEY,
     _strip_blank_rows,
     _glyph_run_encode,
     _inventory_fingerprint,
@@ -565,6 +566,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         state["env"] = env
         state["character"] = character
+        # The tool names this rollout actually publishes, carried in state so the
+        # observation renderer can gate HINT vocabulary on them WITHOUT a process
+        # global (docs/HARNESS_DEFECTS.md 3.7: `render_system_prompt` used to
+        # stash the set module-level and nothing ever put it back, so booting an
+        # env changed every later render in the process). See
+        # rendering.PUBLISHED_TOOLS_STATE_KEY.
+        state[_PUBLISHED_TOOLS_STATE_KEY] = set(self._allowed_skill_names)
         # Continual-harness bookkeeping (no-op when self.continual=False).
         state["_orig_seed"] = int(seed)
         state["_continual_life"] = 1
@@ -806,7 +814,24 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         The `TurnRecorder` context wraps the WHOLE body so it captures engine
         steps taken anywhere inside it, including inside closed-loop skills.
+
+        TWO ROUTES REACH HERE, and they differ only in what they can see of the
+        MODEL, never in what happens to the game. `env_response` gets here via
+        `_parse_tool_call`, which stashes the assistant message and its parsed
+        calls in `state`. An MCP-driven CLI agent (`NetHackToolset._executing`)
+        calls this method directly, in a different process from the one the
+        model talks to, so those breadcrumbs are never set. Measured before this
+        split was made explicit: `tool_calls` was empty on 100% of CLI-arm turns
+        even though the dispatched name and arguments are RIGHT HERE as
+        arguments to this method -- `tool_results[i]["name"]` had already been
+        populated from them. The record now carries the same call on both
+        routes, plus `dispatch_route` saying which one it was.
         """
+        # `_last_tool_calls` is set on EVERY harness turn (including turns with
+        # no tool call, where it is `[]`), so `is None` distinguishes the routes
+        # without a flag the caller could forget to pass.
+        parsed_calls = state.get("_last_tool_calls")
+        route = "harness" if parsed_calls is not None else "mcp"
         state["_trace_lm_turn"] = int(state.get("_trace_lm_turn", 0)) + 1
         tt = state["_turn_trace"] = {
             "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
@@ -830,9 +855,23 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             engine_steps=len(rec.actions), reward=tt.get("reward") or 0.0,
             game_message=rec.messages[-1] if rec.messages else "",
         )
+        # On the MCP route there is no parsed assistant message to read the call
+        # out of, but the call itself was handed to us -- so synthesize the same
+        # `{"name", "arguments"}` shape the harness route produces. `arguments`
+        # is the already-parsed dict here (the MCP client parsed the JSON), which
+        # matches `tool_results[i]["arguments"]` on every other path; on the
+        # harness route it stays the raw JSON string the model emitted, exactly
+        # as version-0/1 readers expect.
+        if parsed_calls is not None:
+            trace_calls = parsed_calls
+        elif skill_name:
+            trace_calls = [{"name": skill_name,
+                            "arguments": skill_args if isinstance(skill_args, dict) else {}}]
+        else:
+            trace_calls = []
         _write_trace_entry(
             self, state, state.get("_last_assistant_msg"),
-            state.get("_last_tool_calls") or [],
+            trace_calls,
             tt.get("action_indices") or [], tt.get("reward") or 0.0,
             obs_text, obs_content=content,
             actions=rec.action_record(), tool_results=[result],
@@ -844,6 +883,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # applied=True: `actions.n == 0` is what says nothing ran, and that
             # is a different fact.
             applied=True,
+            dispatch_route=route,
         )
         return content
 
