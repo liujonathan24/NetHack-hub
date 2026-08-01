@@ -1374,11 +1374,41 @@ def format_observation_as_chat(
                         found = stairs_down(visible_features(state["raw_obs"]))
                         if found:
                             f0 = found[0]
-                            hint = (
-                                f"Stairs DOWN visible at ({f0.x},{f0.y}). "
-                                f"Call `move_to(x={f0.x}, y={f0.y})` to walk "
-                                "to them, then `descend`."
-                            )
+                            # Only recommend walking there if a route actually
+                            # exists. Under `tune.reveal_map` the whole level is
+                            # visible from turn 1, so the stairs are frequently
+                            # SEEN long before they are REACHABLE -- measured: a
+                            # revealed rollout was handed this identical hint for
+                            # 28 consecutive turns while every move_to bounced off
+                            # `It's solid stone.`, ending at Dlvl 1 with
+                            # descent_reward 0. Under fog the hint simply never
+                            # fired that early, so this only bites the revealed
+                            # arms. Unknown reachability keeps the old text.
+                            reachable = True
+                            try:
+                                from nethack_harness.tools.netplay_true import (
+                                    get_agent,
+                                )
+                                _ag = get_agent(state["env"])
+                                reachable = (
+                                    _ag.get_path_to(f0.x, f0.y) is not None
+                                )
+                            except Exception:
+                                reachable = True
+                            if reachable:
+                                hint = (
+                                    f"Stairs DOWN visible at ({f0.x},{f0.y}). "
+                                    f"Call `move_to(x={f0.x}, y={f0.y})` to walk "
+                                    "to them, then `descend`."
+                                )
+                            else:
+                                hint = (
+                                    f"Stairs DOWN are visible at ({f0.x},{f0.y}) "
+                                    "but NO ROUTE to them is known yet — walking "
+                                    "straight there will fail. Find a way through "
+                                    "first: open a closed door on this room's "
+                                    "wall, or explore toward them."
+                                )
                     except Exception:
                         pass
         # Don't let secondary overrides clobber the standing-on-stairs hint.
