@@ -1,0 +1,83 @@
+# Arm 0 (control): our purpose-built harness, run through verifiers 0.2.1's
+# v0 LEGACY BRIDGE. `id` + no `taskset.id` selects the bridge
+# (`verifiers/v1/env.py:128`), which calls the v0 `env.run_rollout` verbatim
+# (`v1/legacy.py:517`) and maps the result into a v1 `Trace`. Nothing in this
+# arm's path is ported, so its dispatch order, prompt compaction and rubric are
+# the exact code experiment 1 validated.
+#
+#   eval @ tools/cli_harness_eval/configs/control.toml
+#
+# Requires on PYTHONPATH: the engine repo (NetHackHarness), the repo root, and
+# environments/nethack. See configs/README.md.
+#
+# PINNED IDENTICALLY TO claude_code.toml: model, character, seeds, task_spec and
+# skill set. The action budget is nominally 150 on both arms but is NOT exactly
+# equivalent — see the `max_turns` note below. Task 11 must normalize on the
+# MEASURED action count, never on the nominal 150.
+
+id = "nethack"                  # v0 env id -> the legacy bridge
+model = "z-ai/glm-5.2"
+num_tasks = 16
+num_rollouts = 1
+rich = false
+push = false
+
+[args]                          # kwargs forwarded to `load_environment`
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+n_examples = 16
+skill_set = "netplay_true"           # the netplay gate: no raw `move` adapter is built
+interface = "skill"
+variant = "B0"           # uncompressed ASCII (exp1's deepest + cheapest cell)
+map_detail = "full"
+# The control arm's nearest counterpart to the CLI arms' `max_skill_calls`.
+#
+# BUDGET ASYMMETRY — READ BEFORE COMPARING THE ARMS. The v0 loop caps LM TURNS,
+# not executed skills, and a turn can pass without executing one:
+#   * `nethack.py:676-680` — a turn with no tool call returns a "you must call a
+#     tool" nudge and burns the turn. MEASURED: the engine is not stepped,
+#     `terminated` stays False and `is_completed` (`nethack.py:1284-1297`)
+#     returns False, so the turn is spent with no skill executed.
+#   * `nethack.py:690` — only the FIRST tool call of a turn is applied. MEASURED
+#     with three `search` calls in one turn: in-game time advanced by 1, and the
+#     observation carried "[multi-tool warning: only the first of 3 tool calls
+#     was applied.]". (The `_dropped_extra_tool_calls` counter is consumed and
+#     reset when that warning is rendered, `nethack.py:1263-1270`, so it is NOT
+#     readable afterwards — the warning line is the durable artifact.)
+# So the control arm gets *at most* 150 executed skills and typically fewer,
+# while the CLI arm's toolset-side referee grants exactly 150 executed skills —
+# and a CLI arm that batches tool calls has every one of them dispatched over
+# MCP, where the control arm would have executed only the first. The asymmetry
+# favours the CLI arm on the experiment's controlled variable.
+#
+# It is left as-is deliberately: raising `max_turns` to compensate would change
+# arm-0 semantics that Task 12 preserved on purpose, and the size of the gap is
+# a per-rollout property that no config value can fix. Task 11 must normalize on
+# the measured counts instead — the v0 rubric already emits `total_tool_calls`
+# per rollout, which is the exact counterpart of the CLI arm's `skill_calls`
+# metric. Recorded as a Task 11 requirement in the design doc §10.
+max_turns = 150
+# Per-turn NDJSON (raw_grid, structured_obs, rendered message, tool_calls,
+# reward, dlvl, hp) — one file per rollout. This is the only channel that
+# records what the agent actually saw each turn; the acceptance artifact under
+# `tools/cli_harness_eval/acceptance/` was cut from its CLI-arm counterpart.
+#
+# ABSOLUTE ON PURPOSE — see prime_agent.toml's note on the same key and
+# configs/README.md caveat 1: a relative value resolves inside the rollout's
+# own runtime workdir, which is deleted at teardown, so the per-turn NDJSON
+# would be lost with no error. `claude_code.toml` gets the same fix in the
+# same commit; `prime_agent.toml` already carries it (Task 10).
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/cli_harness_eval/control/turns"
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
+
+# Provider transients must not kill a rollout. Prime intermittently returns
+# `finish_reason: "error"`, which verifiers' ModdedChatCompletion schema rejects
+# (it allows only stop|length|tool_calls|content_filter|function_call); pydantic
+# raises inside the interception server and the harness exits 1. Measured: 1 of
+# 20 rollouts lost this way. The default is max_retries=0, so one hiccup is fatal.
+[retries.rollout]
+max_retries = 2

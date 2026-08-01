@@ -1,0 +1,5 @@
+run_name  abl4
+started   2026-07-26T20:56:29-04:00
+max_turns 400   seeds first 5
+cells     4
+git_head  d4aaf2518eced80164daf9a7e63075b46616dfd8

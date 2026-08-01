@@ -1,0 +1,903 @@
+diff --git a/docs/v1/harnesses.md b/docs/v1/harnesses.md
+index 752f3d2735..bbf90cd708 100644
+--- a/docs/v1/harnesses.md
++++ b/docs/v1/harnesses.md
+@@ -2,6 +2,32 @@
+ 
+ verifiers supports a range of harnesses out of the box, including Claude Code, Codex, the tool-enabled `bash` harness, and the minimal tool-less `null` harness. However, you may want to build a custom one or extend the selection of third‑party harnesses.
+ 
++## Packaging an external harness
++
++An external harness must be installed in the same Python environment as verifiers. Its
++`harness.id` determines the import module: the package name is lowercased and hyphens are
++replaced with underscores. For example, `external-harness-v1` resolves to
++`external_harness_v1`. A Hub ID such as `acme/external-harness@1.2.0` installs through the
++Environment Hub and resolves to `external_harness`. The loader checks the built-in
++`verifiers.v1.harnesses.<module>` namespace first, then the top-level `<module>` supplied by
++an external distribution.
++
++The top-level module must use `__all__` to export exactly one `Harness` subclass:
++
++```python
++# external_harness_v1/__init__.py
++from external_harness_v1.harness import SuperSecretHarness
++
++__all__ = ["SuperSecretHarness"]
++```
++
++`__all__` may contain config classes or other public objects, but only one exported class
++may inherit from `Harness`. Declare the config specialization on the harness, for example
++`class SuperSecretHarness(Harness[SuperSecretHarnessConfig])`. This lets the eval config loader
++validate plugin-specific fields from TOML or CLI arguments before constructing the harness.
++Missing imports inside an installed plugin are reported directly rather than being treated
++as a missing plugin.
++
+ ## A minimal harness implementation
+ 
+ ```python
+diff --git a/skills/evaluate-environments/references/REFERENCE.md b/skills/evaluate-environments/references/REFERENCE.md
+index 8c4572791c..978a7ef298 100644
+--- a/skills/evaluate-environments/references/REFERENCE.md
++++ b/skills/evaluate-environments/references/REFERENCE.md
+@@ -363,7 +363,8 @@ Remote Prime sandbox; reached via native port exposure.
+ | `memory` | `float` | `2.0` | Memory in GB. |
+ | `gpu` | `str \| None` | `None` | GPU spec, e.g. `"A100"` or `"A100:2"` (bare count = provider-chosen type). |
+ | `disk` | `float` | `5.0` | Disk in GB. |
+-| `idle_timeout` | `float \| None` | `3600` | Seconds of inactivity before the sandbox is deleted; `None` disables it. |
++| `idle_timeout` | `float \| None` | `3600` | Seconds of inactivity before the sandbox is deleted; `None` disables it. Must be positive and ≤ `timeout` when set. |
++| `timeout` | `float` | `86400` | Hard maximum sandbox lifetime in seconds (60–86400). |
+ | `creates_per_min` | `int \| None` | `None` | Pace sandbox creation to this many per minute, host-wide across every env-server worker (None/≤0 disables). Tunnel creation is limited separately and globally. |
+ 
+ ### `ModalConfig` — `type: "modal"`
+@@ -381,6 +382,7 @@ Remote Modal sandbox; reached via Modal's own port forwarding (`encrypted_ports`
+ | `gpu` | `str \| None` | `None` | GPU spec, e.g. `"A100"` or `"A100:2"`. |
+ | `disk` | `float` | `5.0` | Disk in GB. Modal sandboxes have no disk knob, so **accepted but not enforced**. |
+ | `creates_per_sec` | `float \| None` | `40.0` | Pace sandbox creation to this many per second, host-wide across every env-server worker (None/≤0 disables). |
++| `timeout` | `float` | `86400` | Hard maximum sandbox lifetime in seconds (60–86400). |
+ 
+ Before each rollout or validation check, `resolve_runtime_config` combines the selected runtime config with the row's `TaskData`:
+ 
+diff --git a/tests/v1/fixtures/external_plugin_package/external_plugin_v1/__init__.py b/tests/v1/fixtures/external_plugin_package/external_plugin_v1/__init__.py
+new file mode 100644
+index 0000000000..e6dd4c63c1
+--- /dev/null
++++ b/tests/v1/fixtures/external_plugin_package/external_plugin_v1/__init__.py
+@@ -0,0 +1,42 @@
++"""Installed external taskset, harness, and judge fixture for loader regression tests."""
++
++import verifiers.v1 as vf
++
++
++class ExternalTasksetConfig(vf.TasksetConfig):
++    custom_taskset_flag: bool = False
++
++
++class ExternalData(vf.TaskData):
++    pass
++
++
++class ExternalTask(vf.Task[ExternalData]):
++    pass
++
++
++class ExternalTaskset(vf.Taskset[ExternalTask, ExternalTasksetConfig]):
++    def load(self) -> list[ExternalTask]:
++        data = ExternalData(idx=0, prompt="external plugin fixture")
++        return [ExternalTask(data, self.config.task)]
++
++
++class SuperSecretHarnessConfig(vf.HarnessConfig):
++    custom_harness_flag: bool = False
++
++
++class SuperSecretHarness(vf.Harness[SuperSecretHarnessConfig]):
++    async def launch(self, ctx, trace, runtime, endpoint, secret, mcp_urls):
++        return vf.ProgramResult(exit_code=0, stdout="", stderr="")
++
++
++class ExternalJudgeConfig(vf.JudgeConfig):
++    custom_judge_flag: bool = False
++
++
++class ExternalJudge(vf.Judge[float, ExternalJudgeConfig]):
++    async def score(self, task, trace):
++        return float(self.config.custom_judge_flag)
++
++
++__all__ = ["SuperSecretHarness", "ExternalJudge", "ExternalTaskset"]
+diff --git a/tests/v1/fixtures/external_plugin_package/pyproject.toml b/tests/v1/fixtures/external_plugin_package/pyproject.toml
+new file mode 100644
+index 0000000000..de039ec473
+--- /dev/null
++++ b/tests/v1/fixtures/external_plugin_package/pyproject.toml
+@@ -0,0 +1,11 @@
++[build-system]
++requires = ["hatchling"]
++build-backend = "hatchling.build"
++
++[project]
++name = "external-plugin-v1"
++version = "0.0.0"
++requires-python = ">=3.11"
++
++[tool.hatch.build.targets.wheel]
++packages = ["external_plugin_v1"]
+diff --git a/tests/v1/test_compile.py b/tests/v1/test_compile.py
+new file mode 100644
+index 0000000000..eef7ba8804
+--- /dev/null
++++ b/tests/v1/test_compile.py
+@@ -0,0 +1,45 @@
++"""Tests for verifiers.v1.utils.compile."""
++
++from types import SimpleNamespace
++
++from verifiers.v1.runtimes.modal import ModalConfig
++from verifiers.v1.runtimes.prime import PrimeConfig
++from verifiers.v1.runtimes.subprocess import SubprocessConfig
++from verifiers.v1.utils.compile import cap_remote_harness_timeout
++
++
++def _task(idx: str = "t0") -> SimpleNamespace:
++    return SimpleNamespace(data=SimpleNamespace(idx=idx))
++
++
++def test_cap_remote_harness_timeout_caps_at_runtime_timeout():
++    """A harness timeout longer than the runtime's hard timeout is capped there."""
++    config = PrimeConfig(timeout=120, idle_timeout=60)
++    capped = cap_remote_harness_timeout(3600, config, _task())
++    assert capped == 120
++
++
++def test_cap_remote_harness_timeout_passes_through_when_under_cap():
++    """A harness timeout under the runtime timeout passes through unchanged."""
++    config = PrimeConfig(timeout=3600)
++    assert cap_remote_harness_timeout(120, config, _task()) == 120
++
++
++def test_cap_remote_harness_timeout_passes_through_for_local_runtime():
++    """Local runtimes are never capped."""
++    config = SubprocessConfig()
++    assert cap_remote_harness_timeout(999999, config, _task()) == 999999
++
++
++def test_cap_remote_harness_timeout_truncates_fractional_lifetime():
++    """Modal truncates timeout to int(); the cap must match so the harness limit
++    never exceeds the sandbox's actual (truncated) lifetime."""
++    config = ModalConfig(timeout=120.5)
++    capped = cap_remote_harness_timeout(121, config, _task())
++    assert capped == 120  # int(120.5) = 120, not 120.5
++
++
++def test_cap_remote_harness_timeout_none_passes_through():
++    """A None harness timeout passes through unchanged."""
++    config = PrimeConfig(timeout=120, idle_timeout=60)
++    assert cap_remote_harness_timeout(None, config, _task()) is None
+diff --git a/tests/v1/test_loaders_external_plugins.py b/tests/v1/test_loaders_external_plugins.py
+new file mode 100644
+index 0000000000..299166ba46
+--- /dev/null
++++ b/tests/v1/test_loaders_external_plugins.py
+@@ -0,0 +1,104 @@
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++from verifiers.v1.loaders import harness_class, import_harness
++
++
++FIXTURE_PACKAGE = Path(__file__).parent / "fixtures" / "external_plugin_package"
++
++
++def test_installed_external_package_constructs_full_environment(tmp_path):
++    site_packages = tmp_path / "site-packages"
++    install = subprocess.run(
++        [
++            shutil.which("uv") or "uv",
++            "pip",
++            "install",
++            "--target",
++            str(site_packages),
++            "--no-deps",
++            str(FIXTURE_PACKAGE),
++        ],
++        capture_output=True,
++        text=True,
++    )
++    assert install.returncode == 0, install.stderr
++
++    script = r"""
++import sys
++
++sys.path.insert(0, sys.argv[1])
++
++from verifiers.v1.envs.single_agent import SingleAgentEnv, SingleAgentEnvConfig
++
++config = SingleAgentEnvConfig.model_validate(
++    {
++        "taskset": {
++            "id": "external-plugin-v1",
++            "custom_taskset_flag": True,
++            "task": {
++                "judges": [
++                    {
++                        "id": "external-plugin-v1",
++                        "custom_judge_flag": True,
++                    }
++                ]
++            },
++        },
++        "agent": {
++            "harness": {"id": "external-plugin-v1", "custom_harness_flag": True},
++        },
++    }
++)
++assert type(config.taskset).__name__ == "ExternalTasksetConfig"
++assert config.taskset.custom_taskset_flag is True
++assert type(config.agent.harness).__name__ == "SuperSecretHarnessConfig"
++assert config.agent.harness.custom_harness_flag is True
++assert type(config.taskset.task.judges[0]).__name__ == "ExternalJudgeConfig"
++assert config.taskset.task.judges[0].custom_judge_flag is True
++
++environment = SingleAgentEnv(config)
++assert type(environment.taskset).__name__ == "ExternalTaskset"
++harness = environment._harnesses["agent"]
++assert type(harness).__name__ == "SuperSecretHarness"
++assert harness.config is config.agent.harness
++tasks = environment.taskset.select()
++assert len(tasks) == 1
++judges = tasks[0].plugged_judges()
++assert len(judges) == 1
++assert type(judges[0]).__name__ == "ExternalJudge"
++assert judges[0].config is config.taskset.task.judges[0]
++"""
++    construct = subprocess.run(
++        [sys.executable, "-I", "-c", script, str(site_packages)],
++        capture_output=True,
++        text=True,
++    )
++    assert construct.returncode == 0, construct.stderr
++
++
++def test_external_harness_internal_import_errors_are_not_hidden(tmp_path, monkeypatch):
++    (tmp_path / "broken_harness_v1.py").write_text(
++        "import missing_dependency_for_loader_test\n"
++    )
++    monkeypatch.syspath_prepend(str(tmp_path))
++
++    with pytest.raises(ModuleNotFoundError) as exc_info:
++        harness_class("broken-harness-v1")
++
++    assert exc_info.value.name == "missing_dependency_for_loader_test"
++
++
++def test_missing_external_harness_reports_both_import_candidates():
++    with pytest.raises(ModuleNotFoundError) as exc_info:
++        import_harness("missing-external-harness-v1")
++
++    message = str(exc_info.value)
++    assert "normalized module 'missing_external_harness_v1'" in message
++    assert "'verifiers.v1.harnesses.missing_external_harness_v1'" in message
++    assert "'missing_external_harness_v1'" in message
++    assert exc_info.value.__cause__.name == "missing_external_harness_v1"
+diff --git a/tests/v1/test_runtime_stop_confirmed.py b/tests/v1/test_runtime_stop_confirmed.py
+new file mode 100644
+index 0000000000..048d9af53d
+--- /dev/null
++++ b/tests/v1/test_runtime_stop_confirmed.py
+@@ -0,0 +1,303 @@
++import asyncio
++from types import SimpleNamespace
++
++from prime_sandboxes.core.client import APIError
++
++import pytest
++
++from verifiers.v1.runtimes.modal import ModalConfig, ModalRuntime
++from verifiers.v1.runtimes.prime import PrimeConfig, PrimeRuntime
++
++
++class FakePrimeClient:
++    def __init__(self, error=None):
++        self.error = error
++        self.deleted = []
++        self.closed = False
++
++    async def delete(self, runtime_id):
++        self.deleted.append(runtime_id)
++        if self.error is not None:
++            raise self.error
++
++    async def aclose(self):
++        self.closed = True
++
++
++class FakeTerminate:
++    def __init__(self, error=None):
++        self.error = error
++        self.calls = 0
++        self.aio = self
++
++    async def __call__(self):
++        self.calls += 1
++        if self.error is not None:
++            raise self.error
++
++
++@pytest.mark.parametrize("fails", [False, True])
++def test_prime_stop_confirmed_preserves_cleanup_state_on_failure(fails):
++    runtime = PrimeRuntime(PrimeConfig())
++    runtime.info.id = "prime-runtime-id"
++    client = FakePrimeClient(RuntimeError("delete failed") if fails else None)
++    runtime._client = client
++    if fails:
++        with pytest.raises(RuntimeError, match="delete failed"):
++            asyncio.run(runtime.stop_confirmed())
++        assert runtime._client is client
++        client.error = None
++
++    asyncio.run(runtime.stop_confirmed())
++    assert runtime._client is None
++    assert client.closed is True
++    assert runtime.info.id == "prime-runtime-id"
++    expected_calls = 2 if fails else 1
++    assert client.deleted == ["prime-runtime-id"] * expected_calls
++
++    asyncio.run(runtime.stop_confirmed())
++    assert client.deleted == ["prime-runtime-id"] * expected_calls
++
++
++def test_prime_stop_confirmed_treats_already_gone_sandbox_as_success():
++    """A 404 from delete means the sandbox was already removed; stop_confirmed
++    should treat it as confirmed success, not fail forever on retries."""
++    runtime = PrimeRuntime(PrimeConfig())
++    runtime.info.id = "prime-runtime-id"
++    client = FakePrimeClient(APIError("HTTP 404: sandbox not found"))
++    runtime._client = client
++
++    asyncio.run(runtime.stop_confirmed())
++    assert runtime._client is None
++    assert client.closed is True
++    assert runtime._confirmed_stop_id == "prime-runtime-id"
++    assert client.deleted == ["prime-runtime-id"]
++
++    # Idempotent: a second call is a no-op (no new delete attempt).
++    asyncio.run(runtime.stop_confirmed())
++    assert client.deleted == ["prime-runtime-id"]
++
++
++def test_prime_stop_confirmed_sets_stopped_flag():
++    """stop_confirmed must set stopped=True so borrow checks reject the dead runtime."""
++    runtime = PrimeRuntime(PrimeConfig())
++    runtime.info.id = "prime-runtime-id"
++    client = FakePrimeClient()
++    runtime._client = client
++    assert runtime.stopped is False
++    asyncio.run(runtime.stop_confirmed())
++    assert runtime.stopped is True
++
++
++def test_modal_stop_confirmed_sets_stopped_flag():
++    """stop_confirmed must set stopped=True so borrow checks reject the dead runtime."""
++    runtime = ModalRuntime(ModalConfig())
++    runtime.info.id = "modal-runtime-id"
++    terminate = FakeTerminate()
++    sandbox = SimpleNamespace(terminate=terminate)
++    runtime._sandbox = sandbox
++    assert runtime.stopped is False
++    asyncio.run(runtime.stop_confirmed())
++    assert runtime.stopped is True
++
++
++def test_prime_stop_confirmed_closes_client_when_provider_id_missing():
++    """When start failed before setting info.id, stop_confirmed must close the
++    live client before raising, so the client does not leak."""
++    runtime = PrimeRuntime(PrimeConfig())
++    runtime.info.id = None
++    client = FakePrimeClient()
++    runtime._client = client
++
++    import pytest as _pytest
++
++    with _pytest.raises(RuntimeError, match="provider ID"):
++        asyncio.run(runtime.stop_confirmed())
++    assert runtime._client is None
++    assert client.closed is True
++
++
++def test_prime_stop_confirmed_rejects_loose_404_in_non_api_errors():
++    """A non-APIError whose message happens to contain '404' must NOT be
++    treated as a confirmed deletion — only the provider's own APIError with
++    an HTTP 404 prefix qualifies."""
++    runtime = PrimeRuntime(PrimeConfig())
++    runtime.info.id = "prime-runtime-id"
++    # RuntimeError with 404 in the message — must propagate, not be swallowed.
++    client = FakePrimeClient(RuntimeError("connect to port 404 failed"))
++    runtime._client = client
++
++    import pytest as _pytest
++
++    with _pytest.raises(RuntimeError, match="connect to port 404 failed"):
++        asyncio.run(runtime.stop_confirmed())
++    assert runtime._client is client
++    assert runtime._confirmed_stop_id is None
++
++
++def test_prime_stop_confirmed_rejects_non_404_api_errors():
++    """An APIError with a non-404 status code must propagate, not be treated
++    as confirmed deletion."""
++    runtime = PrimeRuntime(PrimeConfig())
++    runtime.info.id = "prime-runtime-id"
++    client = FakePrimeClient(APIError("HTTP 500: internal server error"))
++    runtime._client = client
++
++    import pytest as _pytest
++
++    with _pytest.raises(APIError, match="HTTP 500"):
++        asyncio.run(runtime.stop_confirmed())
++    assert runtime._client is client
++    assert runtime._confirmed_stop_id is None
++
++
++@pytest.mark.parametrize("fails", [False, True])
++def test_modal_stop_confirmed_preserves_cleanup_state_on_failure(fails):
++    runtime = ModalRuntime(ModalConfig())
++    runtime.info.id = "modal-runtime-id"
++    terminate = FakeTerminate(RuntimeError("terminate failed") if fails else None)
++    sandbox = SimpleNamespace(terminate=terminate)
++    runtime._sandbox = sandbox
++    if fails:
++        with pytest.raises(RuntimeError, match="terminate failed"):
++            asyncio.run(runtime.stop_confirmed())
++        assert runtime._sandbox is sandbox
++        terminate.error = None
++
++    asyncio.run(runtime.stop_confirmed())
++    assert runtime._sandbox is None
++    assert runtime.info.id == "modal-runtime-id"
++    expected_calls = 2 if fails else 1
++    assert terminate.calls == expected_calls
++
++    asyncio.run(runtime.stop_confirmed())
++    assert terminate.calls == expected_calls
++
++
++def test_confirmed_stop_fails_when_remote_handle_was_consumed_without_confirmation():
++    prime = PrimeRuntime(PrimeConfig())
++    prime.info.id = "prime-runtime-id"
++    with pytest.raises(RuntimeError, match="live client"):
++        asyncio.run(prime.stop_confirmed())
++
++    modal = ModalRuntime(ModalConfig())
++    modal.info.id = "modal-runtime-id"
++    with pytest.raises(RuntimeError, match="live handle"):
++        asyncio.run(modal.stop_confirmed())
++
++
++def test_prime_idle_timeout_cannot_exceed_hard_lifetime():
++    with pytest.raises(ValueError, match="must not exceed the hard sandbox timeout"):
++        PrimeConfig(idle_timeout=121, timeout=120)
++
++
++def test_prime_idle_timeout_must_be_positive_or_disabled():
++    with pytest.raises(ValueError, match="must be positive or None"):
++        PrimeConfig(idle_timeout=0)
++    assert PrimeConfig(idle_timeout=None, timeout=60).idle_timeout is None
++
++
++class AsyncCallable:
++    def __init__(self, function):
++        self.function = function
++        self.aio = self
++
++    async def __call__(self, *args, **kwargs):
++        return self.function(*args, **kwargs)
++
++
++def test_prime_start_forwards_idle_timeout_and_hard_lifetime(monkeypatch):
++    requests = []
++
++    class CreateSandboxRequest:
++        def __init__(self, **kwargs):
++            self.__dict__.update(kwargs)
++            requests.append(kwargs)
++
++    class Client:
++        async def create(self, request):
++            assert isinstance(request, CreateSandboxRequest)
++            return SimpleNamespace(id="prime-provider-id", pending_image_build_id=None)
++
++        async def wait_for_creation(self, runtime_id):
++            assert runtime_id == "prime-provider-id"
++
++        async def execute_command(self, runtime_id, command):
++            assert runtime_id == "prime-provider-id"
++            assert "mkdir -p" in command
++
++    monkeypatch.setitem(
++        __import__("sys").modules,
++        "prime_sandboxes",
++        SimpleNamespace(
++            AsyncSandboxClient=Client, CreateSandboxRequest=CreateSandboxRequest
++        ),
++    )
++    runtime = PrimeRuntime(
++        PrimeConfig(
++            image="pinned@example",
++            idle_timeout=61,
++            timeout=121,
++            labels=["generic-runtime-test"],
++        )
++    )
++    runtime._confirmed_stop_id = "prior-runtime-id"
++    asyncio.run(runtime.start())
++    assert runtime.info.id == "prime-provider-id"
++    assert runtime._confirmed_stop_id is None
++    assert len(requests) == 1
++    request = requests[0]
++    assert "network_access" not in request
++    assert request["idle_timeout_minutes"] == 2
++    assert request["timeout_minutes"] == 3
++    assert request["labels"] == ["generic-runtime-test"]
++
++
++def test_modal_start_forwards_egress_block_and_hard_lifetime(monkeypatch):
++    calls = []
++
++    class Image:
++        @classmethod
++        def from_registry(cls, image):
++            calls.append(("image", image))
++            return cls()
++
++        def entrypoint(self, value):
++            calls.append(("entrypoint", value))
++            return self
++
++    filesystem = SimpleNamespace(
++        make_directory=AsyncCallable(lambda path: calls.append(("mkdir", path)))
++    )
++    sandbox = SimpleNamespace(object_id="modal-provider-id", filesystem=filesystem)
++
++    class App:
++        lookup = AsyncCallable(lambda *args, **kwargs: SimpleNamespace(name=args[0]))
++
++    class Sandbox:
++        create = AsyncCallable(
++            lambda *args, **kwargs: (calls.append(("create", args, kwargs)), sandbox)[1]
++        )
++
++    monkeypatch.setitem(
++        __import__("sys").modules,
++        "modal",
++        SimpleNamespace(App=App, Sandbox=Sandbox, Image=Image),
++    )
++    runtime = ModalRuntime(
++        ModalConfig(
++            image="pinned@example",
++            network_access=False,
++            timeout=121,
++            creates_per_sec=None,
++        )
++    )
++    runtime._confirmed_stop_id = "prior-runtime-id"
++    asyncio.run(runtime.start())
++    assert runtime.info.id == "modal-provider-id"
++    assert runtime._confirmed_stop_id is None
++    create = next(row for row in calls if row[0] == "create")
++    kwargs = create[2]
++    assert kwargs["block_network"] is True
++    assert kwargs["timeout"] == 121
++    assert kwargs["encrypted_ports"]
+diff --git a/verifiers/v1/loaders.py b/verifiers/v1/loaders.py
+index 0049c0c4fb..dabe2edc80 100644
+--- a/verifiers/v1/loaders.py
++++ b/verifiers/v1/loaders.py
+@@ -2,7 +2,6 @@
+ 
+ import contextvars
+ import importlib
+-import importlib.util
+ import pkgutil
+ from types import ModuleType
+ from typing import Callable
+@@ -78,28 +77,38 @@ def narrow_plugin_field(
+ 
+ def _import_plugin(plugin_id: str, kind: str, group: str) -> ModuleType:
+     module = ensure_installed(plugin_id)
+-    namespaced = f"{group}.{module}"
+-    target = namespaced if importlib.util.find_spec(namespaced) else module
+-    try:
+-        return importlib.import_module(target)
+-    except ModuleNotFoundError as e:
+-        if kind == "harness" and plugin_id == "default":
+-            raise ModuleNotFoundError(
+-                "the `default` harness was renamed to `bash`: "
+-                "--env.agent.harness.id bash (or your env's role name)"
+-            ) from e
+-        hint = (
+-            f" The built-in harnesses are: {', '.join(builtin_harness_ids())}."
+-            if kind == "harness"
+-            else ""
+-        )
+-        article = "An" if kind[0] in "aeiou" else "A"
++    targets = (f"{group}.{module}", module)
++    last_error: ModuleNotFoundError | None = None
++    for target in targets:
++        try:
++            return importlib.import_module(target)
++        except ModuleNotFoundError as error:
++            # A missing candidate (or one of its parent packages) permits the flat-module
++            # fallback. A dependency imported from inside a found plugin does not.
++            if error.name is None or not (
++                error.name == target or target.startswith(f"{error.name}.")
++            ):
++                raise
++            last_error = error
++    if kind == "harness" and plugin_id == "default":
+         raise ModuleNotFoundError(
+-            f"{kind} {plugin_id!r} not found (tried to import {target!r}). {article} {kind} is a "
+-            f"package exporting its {kind.capitalize()} subclass via `__all__` — the built-in "
+-            f"ones ship with verifiers in the `{group}` package, installed from "
+-            f"the Environments Hub (`org/name`), or authored yourself.{hint}"
+-        ) from e
++            "the `default` harness was renamed to `bash`: "
++            "--env.agent.harness.id bash (or your env's role name)"
++        ) from last_error
++    hint = (
++        f" The built-in harnesses are: {', '.join(builtin_harness_ids())}."
++        if kind == "harness"
++        else ""
++    )
++    tried = ", ".join(repr(target) for target in targets)
++    article = "An" if kind[0] in "aeiou" else "A"
++    raise ModuleNotFoundError(
++        f"{kind} {plugin_id!r} not found (normalized module {module!r}; tried imports: "
++        f"{tried}). {article} {kind} is a package exporting its {kind.capitalize()} subclass via "
++        f"`__all__` — the built-in ones ship with verifiers in the `{group}` package, "
++        f"installed from the Environments Hub (`org/name`), installed from an external "
++        f"package, or authored yourself.{hint}"
++    ) from last_error
+ 
+ 
+ def _plugin_class(module: ModuleType, base: type, kind: str) -> type:
+diff --git a/verifiers/v1/runtimes/base.py b/verifiers/v1/runtimes/base.py
+index e8d80cb3b9..e907f5e795 100644
+--- a/verifiers/v1/runtimes/base.py
++++ b/verifiers/v1/runtimes/base.py
+@@ -164,6 +164,16 @@ async def stop(self) -> None:
+         self.stopped = True  # before the await: no new borrows once teardown begins
+         await run_shielded(self.teardown())
+ 
++    async def stop_confirmed(self) -> None:
++        """Free the resource or raise when provider deletion cannot be confirmed.
++
++        Local runtimes inherit the normal stop contract. Remote runtimes whose regular
++        teardown is intentionally best-effort override this method so security-sensitive
++        controllers can fail closed rather than treating a swallowed provider error as a
++        confirmed deletion.
++        """
++        await self.stop()
++
+     async def teardown(self) -> None:
+         """Free the provisioned resource, off the event loop. Override only for teardown
+         that must be async (e.g. a remote API call); `stop` shields it from cancellation.
+diff --git a/verifiers/v1/runtimes/modal.py b/verifiers/v1/runtimes/modal.py
+index 14f5a67b8f..2c8e685e73 100644
+--- a/verifiers/v1/runtimes/modal.py
++++ b/verifiers/v1/runtimes/modal.py
+@@ -14,6 +14,7 @@
+ from pathlib import PurePosixPath
+ from typing import ClassVar, Literal
+ 
++from pydantic import Field
+ from pydantic_config import BaseConfig
+ 
+ from verifiers.v1.errors import SandboxError
+@@ -52,6 +53,8 @@ class ModalConfig(BaseConfig):
+     creates_per_sec: float | None = 40.0
+     """Pace sandbox creation to this many per second, enforced host-wide across every
+     env-server worker process (None/<= 0 disables it)."""
++    timeout: float = Field(default=24 * 60 * 60, ge=60, le=24 * 60 * 60)
++    """Hard maximum sandbox lifetime in seconds."""
+ 
+ 
+ class ModalRuntimeInfo(ModalConfig, BaseRuntimeInfo):
+@@ -66,6 +69,7 @@ def __init__(self, config: ModalConfig, name: str | None = None) -> None:
+         self.config = config
+         self.info = ModalRuntimeInfo(**config.model_dump())
+         self._sandbox = None
++        self._confirmed_stop_id: str | None = None
+ 
+     @property
+     def published_port(self) -> int | None:
+@@ -100,9 +104,10 @@ async def start(self) -> None:
+                     gpu=self.config.gpu,
+                     region=self.config.region,
+                     block_network=not self.config.network_access,
+-                    timeout=24 * 60 * 60,  # Maximum lifetime of any sandbox.
++                    timeout=int(self.config.timeout),
+                     encrypted_ports=[SERVICE_PORT],
+                 )
++            self._confirmed_stop_id = None
+             self.info.id = self._sandbox.object_id
+             logger.info(
+                 "modal: sandbox %s up (image=%s)", self.info.id, self.config.image
+@@ -182,6 +187,27 @@ async def write(self, path: str, data: bytes) -> None:
+         except Exception as e:
+             raise SandboxError(f"write {path!r}: {e}") from e
+ 
++    async def stop_confirmed(self) -> None:
++        """Terminate the Modal sandbox or preserve cleanup state and raise."""
++        runtime_id = self.info.id
++        if runtime_id is not None and runtime_id == self._confirmed_stop_id:
++            return
++        sandbox = self._sandbox
++        if sandbox is None:
++            if runtime_id is None:
++                return
++            raise RuntimeError(
++                "modal sandbox termination cannot be confirmed without its live handle"
++            )
++        if runtime_id is None:
++            raise RuntimeError(
++                "modal sandbox termination cannot be confirmed without a provider ID"
++            )
++        await sandbox.terminate.aio()
++        self._confirmed_stop_id = runtime_id
++        self.stopped = True
++        self._sandbox = None
++
+     def cleanup(self) -> None:
+         # Synchronous atexit backstop (the async API can't run once the loop is gone): terminate
+         # the sandbox via Modal's sync API so the costly resource isn't left to its max-lifetime.
+diff --git a/verifiers/v1/runtimes/prime.py b/verifiers/v1/runtimes/prime.py
+index b8de3386b7..9d1a60c4dc 100644
+--- a/verifiers/v1/runtimes/prime.py
++++ b/verifiers/v1/runtimes/prime.py
+@@ -62,6 +62,8 @@ class PrimeConfig(NetworkPolicyConfig):
+     """Disk in GB."""
+     idle_timeout: float | None = 3600
+     """Seconds of inactivity before the sandbox self-deletes (None disables)."""
++    timeout: float = MAX_LIFETIME
++    """Hard maximum sandbox lifetime in seconds."""
+     creates_per_min: int | None = None
+     """Pace sandbox creation to this many per minute, enforced host-wide across every
+     env-server worker process (None/<= 0 disables it). (Tunnel creation is limited separately
+@@ -85,11 +87,16 @@ def _validate_egress(self) -> "PrimeConfig":
+ 
+     @model_validator(mode="after")
+     def _validate_idle_timeout(self) -> "PrimeConfig":
+-        if self.idle_timeout is not None and self.idle_timeout > MAX_LIFETIME:
+-            raise ValueError(
+-                f"idle_timeout ({self.idle_timeout}s) must not exceed the "
+-                f"{MAX_LIFETIME}s ({MAX_LIFETIME // 3600}h) max sandbox lifetime"
+-            )
++        if not 60 <= self.timeout <= MAX_LIFETIME:
++            raise ValueError(f"timeout must be between 60 and {MAX_LIFETIME} seconds")
++        if self.idle_timeout is not None:
++            if self.idle_timeout <= 0:
++                raise ValueError("idle_timeout must be positive or None")
++            if self.idle_timeout > self.timeout:
++                raise ValueError(
++                    f"idle_timeout ({self.idle_timeout}s) must not exceed the "
++                    f"hard sandbox timeout ({self.timeout}s)"
++                )
+         return self
+ 
+ 
+@@ -107,6 +114,7 @@ def __init__(self, config: PrimeConfig, name: str | None = None) -> None:
+         self.config = config
+         self.info = PrimeRuntimeInfo(**config.model_dump())
+         self._client = None
++        self._confirmed_stop_id: str | None = None
+ 
+     @property
+     def published_port(self) -> int | None:
+@@ -132,7 +140,7 @@ async def start(self) -> None:
+             "memory_gb": self.config.memory,
+             "disk_size_gb": self.config.disk,
+             "gpu_count": gpu_count,
+-            "timeout_minutes": MAX_LIFETIME // 60,
++            "timeout_minutes": math.ceil(self.config.timeout / 60),
+             "idle_timeout_minutes": idle_minutes,
+             "gpu_type": gpu_type,
+             "region": self.config.region,
+@@ -154,6 +162,7 @@ async def start(self) -> None:
+                         **{k: v for k, v in options.items() if v is not None},
+                     )
+                 )
++            self._confirmed_stop_id = None
+             self.info.id = sandbox.id
+             # The create response says whether the platform already has the image:
+             # `pending_image_build_id` set means a first-use auto-build is running and the
+@@ -312,6 +321,48 @@ async def write(self, path: str, data: bytes) -> None:
+         except Exception as e:
+             raise SandboxError(f"write {path!r}: {e}") from e
+ 
++    async def stop_confirmed(self) -> None:
++        """Delete the Prime sandbox or preserve cleanup state and raise."""
++        runtime_id = self.info.id
++        if runtime_id is not None and runtime_id == self._confirmed_stop_id:
++            return
++        client = self._client
++        if client is None:
++            if runtime_id is None:
++                return
++            raise RuntimeError(
++                "prime sandbox deletion cannot be confirmed without its live client"
++            )
++        if runtime_id is None:
++            # Provisioning failed before a provider ID was assigned; release
++            # the live client so it doesn't leak.
++            self._client = None
++            with contextlib.suppress(Exception):
++                await client.aclose()
++            raise RuntimeError(
++                "prime sandbox deletion cannot be confirmed without a provider ID"
++            )
++        try:
++            await client.delete(runtime_id)
++        except Exception as exc:
++            # A 404 from the provider means the sandbox was already removed
++            # (idle timeout, max lifetime, or an earlier best-effort cleanup).
++            # That is confirmed success — treat it as such so retries don't keep
++            # failing.  Match the provider's own APIError with an HTTP 404
++            # prefix, not a loose substring, so unrelated errors can't be
++            # misread as the sandbox being gone.
++            from prime_sandboxes.core.client import APIError
++
++            if isinstance(exc, APIError) and str(exc).startswith("HTTP 404"):
++                logger.info("prime: sandbox %s already gone (404): %s", runtime_id, exc)
++            else:
++                raise
++        self._confirmed_stop_id = runtime_id
++        self.stopped = True
++        self._client = None
++        with contextlib.suppress(Exception):
++            await client.aclose()
++
+     def cleanup(self) -> None:
+         # Synchronous atexit backstop (the async client can't run once the loop is gone): delete
+         # the sandbox via the sync client, so the costly resource isn't left to its max-lifetime.
+diff --git a/verifiers/v1/utils/compile.py b/verifiers/v1/utils/compile.py
+index faf2d38048..e25727ab88 100644
+--- a/verifiers/v1/utils/compile.py
++++ b/verifiers/v1/utils/compile.py
+@@ -113,20 +113,23 @@ class can carry. For `shared_tools` only emptiness matters — declarations and
+ def cap_remote_harness_timeout(
+     harness_timeout: float | None, runtime_config: RuntimeConfig, task: Task
+ ) -> float | None:
+-    """Remote sandboxes live at most 24 hours: cap the harness timeout there (with a
+-    warning) so a long run times out cleanly instead of the provider killing the box
+-    mid-run."""
+-    if (
+-        harness_timeout is not None
+-        and harness_timeout > 24 * 60 * 60
+-        and not runtime_is_local(runtime_config)
+-    ):
++    """Remote sandboxes live at most as long as their runtime's hard ``timeout``:
++    cap the harness timeout there (with a warning) so a long run times out cleanly
++    instead of the provider killing the box mid-run."""
++    if harness_timeout is None or runtime_is_local(runtime_config):
++        return harness_timeout
++    # Providers truncate the hard lifetime to whole seconds (Modal via int(),
++    # Prime via ceil-to-minutes); cap against that integer so the harness limit
++    # never exceeds the sandbox's actual lifetime.
++    max_lifetime = int(getattr(runtime_config, "timeout", 24 * 60 * 60))
++    if harness_timeout > max_lifetime:
+         logger.warning(
+             "task %r resolves to a %.1f-hour harness timeout, but %s sandboxes have a "
+-            "maximum lifetime of 24 hours; capping it at 24 hours",
++            "maximum lifetime of %.1f hours; capping it there",
+             task.data.idx,
+             harness_timeout / (60 * 60),
+             runtime_config.type,
++            max_lifetime / (60 * 60),
+         )
+-        return 24 * 60 * 60
++        return max_lifetime
+     return harness_timeout

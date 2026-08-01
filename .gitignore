@@ -24,3 +24,37 @@ dat/
 .DS_Store
 *.swp
 .venv
+
+# CLI-harness-eval run artifacts (tools/cli_harness_eval/launch_cell.sh):
+# bulky per-turn traces, per-rollout `traces.jsonl`, eval logs and resolved
+# configs from real runs. Acceptance artifacts are committed deliberately
+# under tools/cli_harness_eval/acceptance/ -- these patterns don't touch
+# that directory. Keep any aggregated table.md / table.json a run's
+# tools/cli_harness_eval/aggregate.py produces (not matched below).
+/outputs/cli_harness_eval/**/traces.jsonl
+/outputs/cli_harness_eval/**/turns/
+/outputs/cli_harness_eval/**/eval.log
+/outputs/cli_harness_eval/**/config.toml
+# The eval CLI's default per-run dir (`<env>--<model>--<harness>/<uuid>/`)
+# when `--output_dir` isn't passed explicitly (ad-hoc `eval` invocations,
+# not launch_cell.sh, which always sets `--output_dir`).
+/outputs/nethack_v1--*/
+/outputs/*--bash/
+
+# Task 18 Step 5: a run1 log (`outputs/cli_harness_eval/run1/prime_agent.log`)
+# was committed un-ignored and carried a leaked MCP bearer token -- the Prime
+# Agent arm's `ipython` tool has no denylist (see
+# tools/cli_harness_eval/configs/README.md §7) and printed it into its own
+# trace. Every consolidated run log under outputs/ is a raw capture of a
+# real eval invocation and must never be committed, regardless of which
+# subdirectory it lands in.
+/outputs/**/*.log
+
+# Per-turn rollout traces from ANY eval subtree, not just cli_harness_eval.
+# `outputs/encoding_eval/**/traces.jsonl` grew to 70+ MB apiece and, together
+# with a 255 MB `outputs/cli_harness_eval/run1/control.log`, made this branch
+# unpushable (GitHub hard-fails blobs over 100 MB). Both were purged from
+# history; keep them out. Aggregated artifacts a run produces next to them
+# (table.md, summary.json, results.jsonl, metrics) are unaffected.
+traces.jsonl
+/outputs/**/turns/

@@ -154,6 +154,13 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
         entry = {
             "turn": state.get("turn_count", 0),
             "t_wall": _time.time(),
+            # Strictly monotonic clock (unaffected by NTP/wall-clock
+            # adjustments), alongside `t_wall`. Diffing consecutive `t_mono`
+            # values is the reliable way to measure seconds/call and detect
+            # superlinear latency growth as context accumulates over a long
+            # rollout (`t_wall` deltas can be corrupted by a clock step
+            # mid-rollout; `t_mono` cannot).
+            "t_mono": _time.monotonic(),
             "variant": env_self.variant,
             "raw_grid": grid,
             "status": status,
@@ -666,6 +673,48 @@ def _to_action_indices(env: NetHackCoreEnv, actions: list[int]) -> list[int]:
     return [int(a) for a in actions]
 
 
+# Carriage return. NetHack binds it in prompt contexts (getlin submit, --More--
+# acknowledge, menu confirm) but NOT in command context, where `rhack()` falls
+# through to its bad-command branch and prints `Unknown command '^M'.`
+# (third_party/NetHack/src/src/cmd.c, `visctrl()` renders 13 as "^M").
+CARRIAGE_RETURN = 13
+
+
+def _cr_would_be_unknown_command(obs) -> bool:
+    """True when feeding a CR to the engine *right now* would be a stray CR.
+
+    A stray CR is one that reaches NetHack's command dispatcher rather than a
+    prompt, and its only effect is the `Unknown command '^M'.` top-line message.
+    That message then persists on the tty until something repaints it, so a
+    single stray CR pollutes the agent's observation for many turns afterwards.
+
+    The discriminator is the engine's own `misc` observation, which is exactly
+    the three "am I waiting for input, and what kind" flags:
+
+        misc == (in_yn_function, in_getlin, xwaitingforspace)
+
+    Measured against a live engine (Val/Monk, seed 19):
+
+        idle, awaiting a command  -> (0, 0, 0)   <- a CR here is stray
+        "[- or ?*]" item prompt   -> (1, 0, 0)
+        --More--                  -> (0, 1, 1)
+        getlin ("write what?")    -> (0, 1, 0)
+        inventory menu, "(end)"   -> (0, 0, 1)
+
+    So a CR is stray iff every flag is clear. Anything else -- including a state
+    we cannot read -- is treated as "a prompt might be open", and the CR is sent
+    unchanged. Never raises: a detector failure must not break a rollout, and
+    failing open only restores the previous behaviour.
+    """
+    try:
+        misc = obs.get("misc") if isinstance(obs, dict) else getattr(obs, "misc", None)
+        if misc is None:
+            return False
+        return all(int(v) == 0 for v in misc)
+    except Exception:
+        return False
+
+
 
 
 # ---------- rewards ----------
@@ -812,6 +861,12 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
     # tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
     _HARNESS_OWNED = {"inventory_item", "menu_option"}
 
+    # Namespace prefix of the vendored NetPlay skills (see tools/netplay_true.py).
+    _NETPLAY_TRUE_PREFIX = "np_"
+
+    # Namespace prefix of BALROG's 80 raw commands (see tools/balrog_actions.py).
+    _BALROG_PREFIX = "bal_"
+
     # skill_set: 'full' (default), 'move' (only move + survival), 'dir8'
     # (8 single-direction tools + survival, no `move` aggregator), or a
     # comma-separated whitelist e.g. 'move,descend,search'. The ladder
@@ -881,19 +936,107 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
-    elif "," in skill_set:
-        keep = {s.strip() for s in skill_set.split(",")}
+    elif skill_set == "netplay_true":
+        # NetPlay's ACTUAL published action surface, vendored from
+        # github.com/CommanderCero/NetPlay @ 6acb90d and bound to our engine
+        # (see environments/nethack/vendor/PROVENANCE.md and
+        # nethack_harness/tools/netplay_true.py).
+        #
+        # Deliberately a SEPARATE set from `netplay` above. That set is our own
+        # hand-written approximation: 18 tools, of which `attack` is a
+        # directional bump rather than NetPlay's pursue-until-dead
+        # `melee_attack(x,y)`, and `explore_and_descend` caps its search where
+        # NetPlay's `explore_level` runs until exploration is provably
+        # exhausted. Three experiment arms are already proven against it, so it
+        # stays untouched; use `netplay_true` to A/B the action surface itself.
+        #
+        # All 31 skills of upstream's exposed repository (netplay/__init__.py
+        # lines 9-18) are registered under an `np_` prefix so they cannot
+        # collide with our same-named skills.
+        #
+        # No `move` tool is published here either, so the literal gate holds --
+        # but this set is NOT gate-equivalent to `netplay`. `np_press_key` /
+        # `np_type_text` ARE published (faithful to upstream), and both pass a
+        # raw keystroke straight to the engine; NetHack reads vi-style letters
+        # (h/j/k/l/y/u/b/n) as compass steps, so `np_type_text(text="hhhh")` is
+        # an unrestricted 4-step walk -- a strict superset of a `move` tool.
+        # This is correct fidelity to upstream, not a bug to "fix" by
+        # withholding those two tools. See vendor/PROVENANCE.md ("The move
+        # gate does not carry over to netplay_true") and
+        # test_raw_keystroke_surface_present_in_netplay_true_absent_in_netplay.
+        from nethack_harness.tools import netplay_true as _npt
+        keep = set(_npt.NETPLAY_TRUE_TOOL_NAMES)
         out = []
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        return out
+    elif skill_set == "balrog80":
+        # BALROG's published NLE action surface: the 80 text commands in their
+        # `balrog/environments/nle/__init__.py` ACTIONS dict, and nothing else.
+        #
+        # This is the matched-action-space baseline for reading our encoding
+        # results against BALROG's leaderboard numbers. It is deliberately
+        # HARSHER than `dir8`: no pathfinding of any kind, no closed loops, and
+        # no in-skill item selection -- `bal_eat` opens NetHack's own "What do
+        # you want to eat?" prompt and the agent answers it on the next turn.
+        # It is also, in one respect, more capable than `dir8`: `bal_travel`
+        # and `bal_far_*` are stock NetHack commands that cover ground, so a
+        # BALROG agent is not the unaided single-stepper it first appears.
+        #
+        # No journal/wiki tools here. BALROG gives its agent none, and adding
+        # them would confound exactly the memory axis 1c measures.
+        from nethack_harness.tools import balrog_actions as _bal
+        keep = set(_bal.BALROG_TOOL_NAMES)
+        out = []
+        for name, schema in skill_registry.all_schemas().items():
+            if name not in keep: continue
+            params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        return out
+    elif "," in skill_set:
+        # Tokens are tool names, EXCEPT a preset name, which expands to that
+        # preset's tools. The 1d arms are documented above as
+        # "<netplay tools>,reveal,request_map" — but a token like "netplay_true"
+        # matches no *registered tool*, so the arm silently collapsed to just
+        # `request_map` (1 tool). Expanding presets by recursion keeps this
+        # correct as the presets themselves change.
+        tokens = [s.strip() for s in skill_set.split(",") if s.strip()]
+        presets = {"netplay", "netplay_true", "dir8", "move", "full", "balrog80"}
+        out = []
+        seen: set = set()
+        for tok in tokens:
+            if tok in presets:
+                for adapter in _build_skill_adapter_callables(skill_set=tok):
+                    nm = getattr(adapter, "__name__", "")
+                    if nm and nm not in seen:
+                        seen.add(nm)
+                        out.append(adapter)
+        keep = {t for t in tokens if t not in presets}
+        for name, schema in skill_registry.all_schemas().items():
+            if name in _HARNESS_OWNED: continue
+            if name not in keep or name in seen: continue
+            params = schema.get("parameters", {}) or {}
+            seen.add(name)
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
     # default 'full'
     out = []
     for name, schema in skill_registry.all_schemas().items():
         if name in _HARNESS_OWNED:
+            continue
+        # The vendored NetPlay skills register themselves globally the moment
+        # nethack_harness.tools.netplay_true is imported (by the
+        # `netplay_true` branch above, or by a test). They are an alternative
+        # ACTION SURFACE, not extra tools, so they must never leak into 'full'
+        # -- that would silently add 31 tools to every existing arm.
+        if name.startswith(_NETPLAY_TRUE_PREFIX):
+            continue
+        # Same reasoning for BALROG's 80 raw commands: importing
+        # tools.balrog_actions registers them globally, and they are an
+        # alternative ACTION SURFACE, not extra tools.
+        if name.startswith(_BALROG_PREFIX):
             continue
         params = schema.get("parameters", {}) or {}
         out.append(_make_skill_adapter(name, schema.get("description", ""), params))

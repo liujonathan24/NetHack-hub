@@ -1,0 +1,8 @@
+run_name    smoke
+started     2026-07-26T06:48:06-04:00
+max_calls   20
+seeds       first 1 of the pinned explicit_seeds (shuffle=false => seeds 0..0)
+arms        control claude_code prime_agent
+git_head    20815be0d24d495b86a50590ee4ccc0c6a03939f
+git_dirty   yes
+finished    2026-07-26T07:08:59-04:00

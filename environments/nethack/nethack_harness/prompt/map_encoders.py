@@ -33,6 +33,41 @@ def _model_dict(model: Any, detail: str) -> dict:
     return d
 
 
+def build_cells(chars, cell_masks: dict | None = None) -> list:
+    """Per-tile records for every REVEALED tile: ``{x, y, c, <enabled attrs>}``.
+
+    Readable by construction. The previous JSON body carried ``grid`` — an RLE
+    of raw *glyph ids* (``"2359x79,2362,2361x7,..."``) — which is unreadable to a
+    model: nothing in the prompt says 2362 is a wall and 2359 is unseen rock.
+    Here ``c`` is the rendered character (``.`` floor, ``|``/``-`` wall, ``>``
+    stairs down, ``#`` corridor), the same alphabet the ASCII encodings use and
+    the one the system prompt's glyph key already explains.
+
+    Unrevealed tiles (space) are omitted rather than emitted as blanks, so the
+    payload stays proportional to what the hero has actually seen instead of
+    always paying for 21x79.
+    """
+    import numpy as np
+
+    chars = np.asarray(chars)
+    h, w = chars.shape
+    masks = cell_masks or {}
+    out: list = []
+    for y in range(h):
+        row = chars[y]
+        for x in range(w):
+            ch = int(row[x])
+            if ch == ord(" "):
+                continue
+            rec = {"x": x, "y": y, "c": chr(ch)}
+            for attr in _CELL_ATTRS:
+                m = masks.get(attr)
+                if m is not None:
+                    rec[attr] = int(m[y, x])
+            out.append(rec)
+    return out
+
+
 # ---------- sub-experiment 1b: per-cell SPATIAL / EXPLORATION layers ----------
 #
 # The identification-rich JSON base (kind/coord/desc/species/door/stair + the
@@ -47,33 +82,31 @@ def _model_dict(model: Any, detail: str) -> dict:
 _CELL_ATTRS = ("seen", "visited", "reach")
 
 
-def build_cell_layers(chars, player, visited_xy, cell_schema) -> dict:
-    """Return ``{layer_name: rle_string}`` for each enabled cell_schema attr.
+def build_cell_masks(chars, player, visited_xy, cell_schema) -> dict:
+    """Return ``{attr: 0/1 ndarray}`` for each enabled cell_schema attribute.
 
-    ``chars`` is the NLE 21x79 char grid, ``player`` is (x, y), ``visited_xy``
-    is the set of (x, y) tiles the hero has stood on this level, ``cell_schema``
-    is a set/collection drawn from ``_CELL_ATTRS``. Each layer is a 0/1 mask
-    RLE-encoded exactly like the terrain grid.
+    ``chars`` is the 21x79 char grid, ``player`` is (x, y), ``visited_xy`` is the
+    set of (x, y) tiles the hero has stood on this level, ``cell_schema`` is a
+    collection drawn from ``_CELL_ATTRS``. Consumed by :func:`build_cells`, which
+    folds each enabled attribute into the per-tile record.
     """
     import numpy as np
-    from nethack_core.map_model import _rle_grid
 
     schema = set(cell_schema or ())
     chars = np.asarray(chars)
     h, w = chars.shape
-    layers: dict = {}
+    masks: dict = {}
 
     if "seen" in schema:
         # Revealed iff the rendered char is not the unseen/rock sentinel (space).
-        seen = (chars != ord(" ")).astype(int)
-        layers["seen_grid"] = _rle_grid(seen)
+        masks["seen"] = (chars != ord(" ")).astype(int)
 
     if "visited" in schema:
         vis = np.zeros((h, w), dtype=int)
         for (x, y) in visited_xy or ():
             if 0 <= y < h and 0 <= x < w:
                 vis[y, x] = 1
-        layers["visited_grid"] = _rle_grid(vis)
+        masks["visited"] = vis
 
     if "reach" in schema:
         from nethack_harness.navigation.pathfinding import reachable_set
@@ -81,15 +114,43 @@ def build_cell_layers(chars, player, visited_xy, cell_schema) -> dict:
         for (x, y) in reachable_set(chars, tuple(player)):
             if 0 <= y < h and 0 <= x < w:
                 reach[y, x] = 1
-        layers["reach_grid"] = _rle_grid(reach)
+        masks["reach"] = reach
 
-    return layers
+    return masks
 
 
-def json_encode(model: Any, *, detail: str = "full", cell_layers: dict | None = None) -> str:
+def build_cell_layers(chars, player, visited_xy, cell_schema) -> dict:
+    """RLE 0/1 mask layers (``seen_grid`` / ``visited_grid`` / ``reach_grid``).
+
+    The original sub-experiment-1b form, kept because `docs/experiments/
+    exp1b-json-cellcontent-arms.md` documents these key names. The rendered JSON
+    now uses :func:`build_cells` instead, which attaches the same attributes to
+    per-tile ``{x, y, c}`` records rather than to a separate opaque mask.
+    """
+    from nethack_core.map_model import _rle_grid
+
+    masks = build_cell_masks(chars, player, visited_xy, cell_schema)
+    return {f"{attr}_grid": _rle_grid(m) for attr, m in masks.items()}
+
+
+def json_encode(
+    model: Any,
+    *,
+    detail: str = "full",
+    chars=None,
+    cell_masks: dict | None = None,
+) -> str:
+    """Serialize the map model as JSON.
+
+    At ``detail="full"``, passing ``chars`` emits readable per-tile ``cells``
+    (``{x, y, c, ...}``) in place of the raw-glyph-id ``grid`` RLE. Without
+    ``chars`` the legacy ``grid`` form is kept, so callers that only have a
+    model still work.
+    """
     d = _model_dict(model, detail)
-    if cell_layers:
-        d.update(cell_layers)
+    if detail == "full" and chars is not None:
+        d.pop("grid", None)
+        d["cells"] = build_cells(chars, cell_masks)
     return json.dumps(d, separators=(",", ":"))
 
 

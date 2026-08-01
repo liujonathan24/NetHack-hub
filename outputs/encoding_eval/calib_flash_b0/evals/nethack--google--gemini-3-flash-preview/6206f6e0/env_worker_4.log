@@ -1,0 +1,10 @@
+2026-07-26 13:30:01 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 13:30:02 - verifiers.utils.env_utils - INFO - Using provided args: task_spec=full_nle, character=Val-hum-neu-fem, max_turns=400, skill_set=netplay_true, explicit_seeds=[0, 1, 2, 3, 4], compact_obs=False, variant=B0, trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, map_detail=full
+2026-07-26 13:30:02 - verifiers.utils.env_utils - INFO - Using default args: subgoal_proposer=None, belief_state_interval=25, level_blob=None, history_drop_after=100, history_keep_full=5, refiner_model=None, refine_interval=20, tune=None, continual_lives=5, journal_render_max_chars=2000, refine=False, interface='skill', cell_schema=None, bootstrap_dir=None, sub_lm=None, continual=False, sub_lm_model=None, modify=None, summarize_and_reset=False, pin_objective_on_setup=True, seed=0, n_examples=256, refiner=None
+2026-07-26 13:30:02 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 13:30:02 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 13:30:02 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-4 on ipc:///tmp/vf-af7a6d02e156-nethack-4
+2026-07-26 13:30:02 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 13:30:02 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-4
+2026-07-26 14:06:51 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 14:06:51 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-4

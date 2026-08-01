@@ -11,8 +11,13 @@
 set -uo pipefail
 ARM="${1:?arm}"; OUTDIR="${2:?outdir}"; MT="${3:-6}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "$REPO"
-export PYTHONPATH=".:environments/nethack"
+# The compiled engine (`nethack_core`) lives in the NetHack-engine repo and must
+# lead PYTHONPATH; it is not pip-installed. Override with ENGINE_REPO if needed.
+ENGINE_REPO="${ENGINE_REPO:-/scratch/gpfs/ZHUANGL/jl0796/NetHackHarness}"
+export PYTHONPATH="${ENGINE_REPO}:.:environments/nethack"
 export PI_API_KEY="${PI_API_KEY:-$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.prime/config.json')))['api_key'])")}"
+# Absolute, so the trace survives regardless of the runner's working directory.
+OUTDIR="$(mkdir -p "$OUTDIR" && cd "$OUTDIR" && pwd)"
 
 SPINE='"task_spec":"full_nle","variant":"B0","interface":"skill","character":"Val-hum-neu-fem","compact_obs":false,"explicit_seeds":[0]'
 NETPLAY_NOMEM="move_to,explore_and_descend,attack,throw,descend,search,pickup,engrave_elbereth,pray,eat,quaff,read,kick,wiki_lookup,wiki_search"
@@ -36,7 +41,7 @@ echo "[1c-smoke] arm=$ARM max_turns=$MT out=$OUTDIR"
 echo "[1c-smoke] -a $ARGS"
 # NB: no `-p prime` — resolve the model from configs/endpoints.toml (prime-team
 # block) so the X-Prime-Team-ID billing header is kept.
-.venv/bin/vf-eval nethack --env-dir-path environments \
+.venv-cli-eval/bin/vf-eval nethack --env-dir-path environments \
   -m "$MODEL" --endpoints-path configs/endpoints.toml \
   -a "$ARGS" -n 1 -r 1 -c 1 --num-workers 1 --max-tokens 2048 \
   --output-dir "$OUTDIR" --disable-tui --verbose

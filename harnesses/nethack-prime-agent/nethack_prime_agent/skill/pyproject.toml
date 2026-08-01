@@ -1,0 +1,17 @@
+# Prime Agent installs this package `--editable` into its kernel venv during
+# kernel setup (`skills.md:168`). The venv is shared across rollouts and already
+# ships `httpx` and `prime-agent-runtime`; `mcp` is the one dependency it has to
+# resolve, and it is what `rlm.McpIntegration` imports lazily.
+[project]
+name = "prime-agent-skill-nethack"
+version = "0.1.0"
+description = "NetHack tool-server integration for Prime Agent (verifiers MCP toolset)."
+requires-python = ">=3.10"
+dependencies = ["mcp", "httpx", "prime-agent-runtime"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nethack"]

@@ -1,0 +1,7 @@
+run_name  abl3
+started   2026-07-26T19:57:44-04:00
+max_turns 400   seeds first 5
+cells     3
+git_head  26ca2aadbf1146e5f9a9013dc9da11e229051f67
+finished  2026-07-26T20:23:09-04:00
+[abl] FAILED cells: 1d_dm_fixed

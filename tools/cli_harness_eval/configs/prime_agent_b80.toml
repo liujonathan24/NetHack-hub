@@ -1,0 +1,141 @@
+# balrog80 cell: BALROG's real 80-action surface (single keystrokes), the
+# action space the sourced SOTA (gemini-3-pro, 6.77%) actually used. Budget is
+# raised because each call now does FAR less work than a NetPlay mega-skill:
+# BALROG's leader made 1,057-2,231 model calls per episode. 400 would starve it.
+# Arm 2: Prime Agent driving the same game over MCP.
+#
+#   eval @ tools/cli_harness_eval/configs/prime_agent.toml
+#
+# Same taskset, same tool server, same toolset-side referee as claude_code.toml.
+# The harness is external (`harnesses/nethack-prime-agent/`, installed with
+# `uv pip install -e`), which stock verifiers 0.2.1 resolves without any patch —
+# see `tests/test_vendored_loader.py` and `tests/test_prime_agent_harness.py`.
+#
+# THE TOOL SURFACE DIFFERS IN KIND FROM ARM 1, BY DESIGN OF THE SCAFFOLD.
+# Claude Code is a native MCP client: it sees 18 agent tools named
+# `mcp__nethack__<skill>`. Prime Agent deliberately does not expose MCP as agent
+# tools — its only built-in tool is `ipython`, and the server arrives as a Python
+# package imported into its kernel, so the agent writes
+# `await nethack.explore_and_descend()` inside Python. Same server, same 18
+# tools, same budget; one extra layer of indirection. This is a property of the
+# scaffold being measured, not a harness defect — see configs/README.md §6.
+#
+# Requires on PYTHONPATH: the engine repo (NetHackHarness), the repo root, and
+# environments/nethack -- the tool server is launched as `python -m nethack_v1`
+# with the parent's environment inherited (`v1/mcp/launch.py:208`).
+#
+# PINNED IDENTICALLY TO control.toml AND claude_code.toml: model, character,
+# seeds, task_spec and skill set. The action budget is nominally 150 on all three
+# arms but is NOT exactly equivalent — this arm, like claude_code, gets exactly
+# 150 executed skills; the control arm at most 150 (see control.toml's
+# `max_turns` note). Task 11 normalizes on the measured counts: `skill_calls`
+# here, `total_tool_calls` there.
+
+model = "z-ai/glm-5.2"
+num_tasks = 16
+num_rollouts = 1
+rich = false
+push = false
+
+[taskset]
+id = "nethack_v1"
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+n_examples = 16
+interface = "skill"
+variant = "B0"           # uncompressed ASCII (exp1's deepest + cheapest cell)
+map_detail = "full"
+# Self-dispatch is the only v1 mode: a 0.2.x toolset is an MCP server, so the
+# tool call itself both executes the skill and returns the observation.
+self_dispatch = true
+obs_mode = "push"
+# The cross-arm referee, enforced toolset-side so it binds a CLI agent whose
+# internal loop we do not control. Exactly 150 executed skills: the counter
+# advances only when a call reaches the engine, and concurrent calls are
+# serialized (`NetHackToolset._with_state`) so a batched turn cannot overrun it.
+# That serialization matters more here than on arm 1: `McpIntegration` opens a
+# fresh session per call and the model can fire several with `asyncio.gather`.
+max_skill_calls = 150
+max_turns = 200
+# Per-turn NDJSON, one file per rollout — the same channel the acceptance
+# artifacts under `tools/cli_harness_eval/acceptance/` were cut from.
+#
+# ABSOLUTE ON PURPOSE. `trace_dir` is resolved by the TOOL SERVER process, whose
+# cwd is its own runtime workdir (`/tmp/vf-<id>`), and that directory is deleted
+# at teardown — so a relative value silently discards the entire per-turn record
+# with no error. Measured: two otherwise identical rollouts produced no file
+# (relative) and 12 lines (absolute). `control.toml` and `claude_code.toml` still
+# carry relative values; fixing those belongs to Task 11, which owns the launch.
+#
+# Machine-specific, like `harness.path_prepend` below. Elsewhere, override on the
+# command line: `--taskset.trace-dir "$PWD/outputs/..."`.
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/cli_harness_eval/prime_agent_b80/turns"
+# Seed AGENTS.md / CLAUDE.md, wiki/ and memory/ into the agent's workdir. Prime
+# Agent loads AGENTS.md (and CLAUDE.md) from the cwd at startup, the same way
+# Claude Code does, so this lands as real context on both arms.
+seed_workspace = true
+# The tool server gets its own runtime, isolating the (C-extension) game
+# process from whatever the agent's kernel does to its own workdir.
+colocated = false
+
+[taskset.env_args]
+skill_set = "balrog80"           # single keystrokes, not mega-skills
+
+[harness]
+id = "nethack-prime-agent"
+# `disabled_tools` is deliberately EMPTY, and the harness REJECTS a non-empty
+# value: Prime Agent's only built-in tool is `ipython` and it offers an
+# allowlist, not a denylist. `websearch` (its one networked bundled skill) is off
+# by default in the harness config, which is the capability match for arm 1's
+# `--bare` (no WebFetch/WebSearch). The kernel is the counterpart of arm 1's
+# Bash/Edit/Read: it can read `wiki/` and write `memory/`.
+#
+# Prime Agent is an npm global, not a downloadable release tarball, so this
+# harness does NOT install it (unlike `claude_code`, which curls a pinned
+# version). Pin the version here so a background `npm -g` upgrade cannot change
+# the scaffold under test mid-experiment; `setup` fails loudly on a mismatch.
+version = "0.3.3"
+# `node` (prime-agent's bin is a `#!/usr/bin/env node` script) and `uv` (it
+# builds its IPython kernel venv with it) must be on PATH inside the runtime.
+# The subprocess runtime inherits the host PATH, which on this cluster does not
+# carry the nvm/uv shims unless the launching shell had them.
+path_prepend = "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1/bin:/home/jl0796/.local/bin"
+# Where the Python skill package is materialized. FIXED, not per-rollout: Prime
+# Agent keys its kernel venv on the set of Python-skill paths, so a per-rollout
+# path would rebuild the venv (a uv install) on every seed. Same non-per-user
+# `/tmp` design as verifiers' own `/tmp/vf-scripts` and `/tmp/vf-claude-code-*`
+# — check `ls -ld /tmp/vf-prime-agent` before launching and override this if the
+# directory belongs to someone else. See configs/README.md caveat 6.
+install_dir = "/tmp/vf-prime-agent"
+# THE MODEL'S REAL CONTEXT WINDOW. Not optional cosmetics: a custom provider's
+# model definition that omits `contextWindow` is normalized to 128000 by Prime
+# Agent, and its session host then ENDS THE AGENT LOOP the first time context
+# exceeds `contextWindow - 16384` = 111,616 tokens. Under `--print` nothing
+# resumes it — the CLI exits 0 with no output, and verifiers can only record
+# that as `agent_completed`. It is what truncated three of five run-1 rollouts
+# mid-action at 107-130 of 400 skill calls. 1048576 is the value Prime Agent's
+# own bundled catalog carries for `z-ai/glm-5.2`. CHANGE IT WITH `model` ABOVE.
+context_window = 1048576
+# Hides /scratch (this cluster's shared multi-user GPFS filesystem) and this
+# repo from the agent's `ipython` tool via a `bwrap` mount-namespace sandbox --
+# see configs/README.md §7. `setup` fails loudly if `bwrap` is missing rather
+# than silently running unconfined.
+sandbox = true
+
+[harness.runtime]
+# Same determination as arm 1: `NEEDS_CONTAINER` is Task-level in the pinned
+# 0.2.1, `NetHackTask` does not set it, and no Harness-level check exists yet.
+type = "subprocess"
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
+
+# Provider transients must not kill a rollout. Prime intermittently returns
+# `finish_reason: "error"`, which verifiers' ModdedChatCompletion schema rejects
+# (it allows only stop|length|tool_calls|content_filter|function_call); pydantic
+# raises inside the interception server and the harness exits 1. Measured: 1 of
+# 20 rollouts lost this way. The default is max_retries=0, so one hiccup is fatal.
+[retries.rollout]
+max_retries = 2

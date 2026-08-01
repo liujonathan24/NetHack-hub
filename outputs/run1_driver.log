@@ -1,0 +1,32 @@
+run_name    run1
+started     2026-07-26T15:49:49-04:00
+max_calls   400
+seeds       first 5 of the pinned explicit_seeds (shuffle=false => seeds 0..4)
+arms        control claude_code prime_agent
+git_head    1c851600e0257befb47d66327d18774b340ab864
+git_dirty   yes
+
+  Rough wall-clock ~= ONE rollout, since seeds run concurrently (--max-concurrent
+  defaults to 128) and the arms are fanned out here:
+    400 calls x ~10s median  ~=  67 min
+  Rollouts that die terminate early (Task 14), so this is an upper bound.
+  Concurrency caveat: the prime_agent arm shares a Prime Agent daemon; even
+  SEQUENTIAL rollouts on that arm are unproven (Task 10 concern 3). If it
+  misbehaves at N>1, run it with MAX_CONCURRENT=1 via the eval CLI.
+
+[sweep] starting control -> outputs/cli_harness_eval/run1/control (log: outputs/cli_harness_eval/run1/control.log)
+[sweep] starting claude_code -> outputs/cli_harness_eval/run1/claude_code (log: outputs/cli_harness_eval/run1/claude_code.log)
+[sweep] starting prime_agent -> outputs/cli_harness_eval/run1/prime_agent (log: outputs/cli_harness_eval/run1/prime_agent.log)
+[sweep] control: ok
+[sweep] claude_code: ok
+[sweep] prime_agent: ok
+[sweep] aggregating outputs/cli_harness_eval/run1
+| Arm | n | Depth (mean ± SE) | BALROG % (mean ± SE) | Died % | Actions used (measured, mean ± SE) | Cost/rollout ($) | sec/call 1st half → 2nd half | Post-death drain |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| control | 5 | 2.20 ± 0.49 | 1.09 ± 0.45 | 80% | total_tool_calls=230.20 ± 62.09 | $6.5440 ± 2.7238 | 4.5s → 5.3s | 0.0 |
+| claude_code | 5 | 1.60 ± 0.60 | 1.28 ± 0.53 | 100% | skill_calls=234.60 ± 40.46 | $8.2535 ± 2.5857 | 13.9s → 14.7s | 0.2 |
+| prime_agent | 5 | 2.20 ± 0.58 | 1.22 ± 0.52 | 20% | skill_calls=94.60 ± 21.81 | $1.3646 ± 0.3520 | 18.0s → 30.5s | 0.0 |
+
+Notes: 'Actions used' is the MEASURED count, never the nominal 150-call budget -- the control arm's `max_turns` caps LM turns (a no-tool-call turn burns the turn; extra parallel tool calls past the first are dropped), so it gets *at most* the nominal budget in executed skills, while the CLI arms' toolset-side referee grants exactly that many. The arms are therefore NOT budget-matched; do not read a lower control action count as the model choosing to stop early.
+
+wrote outputs/cli_harness_eval/run1/table.md and outputs/cli_harness_eval/run1/table.json

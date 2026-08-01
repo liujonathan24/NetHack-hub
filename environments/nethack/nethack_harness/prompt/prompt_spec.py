@@ -34,6 +34,9 @@ from nethack_harness.prompt.rendering import (
     _format_obs_netplay,
     _format_obs_glyphbox_native,
     _format_obs_summarize_reset,
+    _glyph_run_encode,
+    _render_ascii_map,
+    _strip_blank_rows,
 )
 from nethack_harness.helpers import (
     _refinement_directive,
@@ -170,6 +173,40 @@ def _image_template(render_name):
     return _render
 
 
+def _balrog_plus_map_template(fmt):
+    """BALROG's natural-language scene description, followed by the map.
+
+    Reproduces the observation shape of BALROG's published NetHack runs, whose
+    CSVs carry a language description ("horizontal wall near north") *and* the
+    raw grid in the same observation. Variant ``B`` gives the description with
+    no grid; ``B0``/``JSON`` give the map with no description. Neither alone
+    matches the leaderboard's input, which is what these cells are for.
+
+    ``fmt`` is "ascii" (append the rendered map view) or "json" (append the
+    readable per-tile JSON body).
+    """
+
+    def _render(structured, journal, state, *, compact, journal_max_chars):
+        desc = _format_obs_balrog(structured, journal, state, journal_max_chars)
+        if fmt == "json":
+            from nethack_core.map_model import build_map_model
+            from nethack_harness.prompt.map_encoders import json_encode
+
+            raw = state["raw_obs"]
+            body = json_encode(
+                build_map_model(raw),
+                detail=state.get("map_detail", "full"),
+                chars=raw.chars,
+            )
+            return f"{desc}\n=== MAP (JSON) ===\n{body}\n"
+        map_view = _render_ascii_map(structured, state)
+        if compact:
+            map_view = _glyph_run_encode(_strip_blank_rows(map_view))
+        return f"{desc}\n=== MAP ===\n{map_view}\n"
+
+    return _render
+
+
 def _structured_map_template(fmt):
     """Per-turn template emitting a structured-text map (JSON or TOON).
 
@@ -188,17 +225,17 @@ def _structured_map_template(fmt):
     def _render(structured, journal, state, *, compact, journal_max_chars):
         from nethack_core.map_model import build_map_model
         from nethack_harness.prompt.map_encoders import (
-            json_encode, toon_encode, build_cell_layers,
+            json_encode, toon_encode, build_cell_masks,
         )
 
         detail = state.get("map_detail", "full")
         model = build_map_model(state["raw_obs"])
         if fmt == "json":
+            import numpy as np
+            raw = state["raw_obs"]
             cell_schema = state.get("cell_schema") or set()
-            cell_layers = None
+            cell_masks = None
             if cell_schema:
-                import numpy as np
-                raw = state["raw_obs"]
                 bl = np.asarray(raw.blstats)
                 player = (int(bl[0]), int(bl[1]))
                 # Key visited tiles by the hero's ACTUAL depth (blstats[12]) so
@@ -207,10 +244,14 @@ def _structured_map_template(fmt):
                 dlvl_key = int(bl[12])
                 visited_all = state.get("_visited_tiles") or {}
                 visited_xy = visited_all.get(dlvl_key, set())
-                cell_layers = build_cell_layers(
+                cell_masks = build_cell_masks(
                     raw.chars, player, visited_xy, cell_schema,
                 )
-            map_text = json_encode(model, detail=detail, cell_layers=cell_layers)
+            # Pass `chars` so the body carries readable per-tile records rather
+            # than the raw-glyph-id RLE the model cannot interpret.
+            map_text = json_encode(
+                model, detail=detail, chars=raw.chars, cell_masks=cell_masks,
+            )
         else:
             map_text = toon_encode(model, detail=detail)
         status = format_observation_as_chat(
@@ -307,6 +348,64 @@ def _delayed_map_template(base_fmt):
         return _splice_placeholder(text, _DELAYED_MAP_PLACEHOLDER)
 
     return _render
+
+
+def _balrog_delayed_map_template():
+    """BALROG-style language scene, with the ASCII map on the delayed schedule.
+
+    Combines the two treatments that scored best independently in the sweep:
+    the natural-language description (variant ``B_ASCII``, which pairs it with a
+    map every turn) and delayed map delivery (variant ``DM``, which re-sends the
+    full grid only on a new floor or on ``request_map``).
+
+    The pairing is the point. Under plain ``DM`` the agent has *nothing* spatial
+    between refreshes; here the language description carries orientation every
+    turn while the expensive grid is withheld, so withholding it should cost
+    less. Pair with ``belief_state_interval=0`` for the journal-only memory arm.
+    """
+
+    def _render(structured, journal, state, *, compact, journal_max_chars):
+        force = bool(state.pop("_force_map", False)) if state is not None else False
+        cur_fp = _delayed_map_fingerprint(structured, state)
+        prev_fp = state.get("_delayed_map_fp") if state is not None else None
+        show_map = force or prev_fp is None or cur_fp != prev_fp
+        if state is not None:
+            state["_delayed_map_fp"] = cur_fp
+
+        desc = _format_obs_balrog(structured, journal, state, journal_max_chars)
+        if not show_map:
+            return f"{desc}\n{_DELAYED_MAP_PLACEHOLDER}\n"
+        map_view = _render_ascii_map(structured, state)
+        if compact:
+            map_view = _glyph_run_encode(_strip_blank_rows(map_view))
+        return f"{desc}\n=== MAP ===\n{map_view}\n"
+
+    return _render
+
+
+def _bbox_json_template(structured, journal, state, *, compact, journal_max_chars):
+    """JSON body with the per-tile `cells` withheld; map regions via reveal().
+
+    `json_encode(..., detail="minimal")` emits player + entities and no map body
+    at all, which is exactly the half we want kept: entities stay structured and
+    coordinate-addressable, while the 21x79 tile array — the part that costs
+    thousands of tokens per turn — is served only when the agent asks for it.
+    Everything non-map (journal, status, inventory, under-player) renders as
+    usual, matching the plain BBOX cell.
+    """
+    from nethack_core.map_model import build_map_model
+    from nethack_harness.prompt.map_encoders import json_encode
+
+    body = json_encode(build_map_model(state["raw_obs"]), detail="minimal")
+    rest = format_observation_as_chat(
+        structured, journal, state, compact=compact,
+        journal_max_chars=journal_max_chars,
+        include_map=False, include_local=False,
+    )
+    return (
+        f"=== MAP (JSON, entities only) ===\n{body}\n"
+        f"{_BBOX_MAP_PLACEHOLDER}\n\n{rest}"
+    )
 
 
 def _bbox_template(structured, journal, state, *, compact, journal_max_chars):
@@ -465,6 +564,14 @@ def _build_registry(system_prompt: str) -> dict:
         "N": canonical("N"),
         # BALROG: natural-language scene, no ASCII grid.
         "B": canonical("B", turn_template=_formatter_template(_format_obs_balrog)),
+        # BALROG's *actual* leaderboard observation carries BOTH a
+        # natural-language scene description AND the raw map — its run CSVs show
+        # "horizontal wall near north" alongside the 80x24 grid. Variant B drops
+        # the grid on purpose (testing whether the map earns its tokens), so
+        # neither B nor B0 alone reproduces what their Gemini-3-Flash run saw.
+        # These two cells do: description + map, over ASCII and over JSON.
+        "B_ASCII": canonical("B_ASCII", turn_template=_balrog_plus_map_template("ascii")),
+        "B_JSON": canonical("B_JSON", turn_template=_balrog_plus_map_template("json")),
         # Glyphbox: canonical render, paired with interface=code by the caller.
         "G": canonical("G", turn_template=_formatter_template(_format_obs_glyphbox)),
         # Experiment 1 baseline encodings — FAITHFUL ports of the prior
@@ -504,10 +611,28 @@ def _build_registry(system_prompt: str) -> dict:
                         obs=ObsSpec(setup_flags={"_delayed_map": True})),
         "DM_JSON": canonical("DM_JSON", turn_template=_delayed_map_template("json"),
                              obs=ObsSpec(setup_flags={"_delayed_map": True})),
+        # Combined cell: language description (B_ASCII) + delayed map (DM).
+        # Run it with belief_state_interval=0 to add the third winner,
+        # journal-only memory. `_delayed_map` must stay set — it is what exposes
+        # the `request_map` tool the agent needs to refresh on demand.
+        "DM_B_ASCII": canonical("DM_B_ASCII",
+                                turn_template=_balrog_delayed_map_template(),
+                                obs=ObsSpec(setup_flags={"_delayed_map": True})),
         # Bounding-box on-demand: the map is hidden; the agent views regions via
         # reveal(x1,y1,x2,y2), which returns an ASCII crop as tool feedback.
         "BBOX": canonical("BBOX", turn_template=_bbox_template,
                           obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # JSON body (player + entities, structured and addressable) with the
+        # per-tile `cells` array WITHHELD; the agent pulls map regions via
+        # reveal(x1,y1,x2,y2). Measured motivation: JSON inline costs ~3,400
+        # tok/turn (~4,300 with all 1b layers) against B0's ~690, while BBOX
+        # delivery runs ~480 because `reveal` fires on only 1-2% of turns. This
+        # cell asks whether JSON's structure is worth having once you stop
+        # paying for it every turn — and re-tests 1b's null result, which may
+        # have been an attention problem at 12-15k chars rather than the layers
+        # carrying no information.
+        "BBOX_JSON": canonical("BBOX_JSON", turn_template=_bbox_json_template,
+                               obs=ObsSpec(setup_flags={"_bbox_map": True})),
         # Continual-harness adaptation: periodic self-refinement directive.
         "P": canonical("P", turn_hooks=(_p_refinement_hook,)),
         # Full Continual Harness: refiner + sub-agents + system inject + run_macro.

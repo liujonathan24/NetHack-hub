@@ -1,0 +1,1860 @@
+# CLI-agent harness comparison — implementation plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Measure whether a general-purpose coding-agent scaffold (Codex, Prime Agent) plays NetHack better than the purpose-built harness, holding game, action surface, seeds, and model fixed.
+
+**Architecture:** One verifiers-v1 taskset and one toolset, consumed by three harnesses. The toolset gains a `self_dispatch` mode so MCP-driven CLI agents get self-contained tool calls (execute + return observation), while the control arm keeps today's harness-driven `env_response` loop byte-identical. CLI arms run in a sandbox seeded with the filesystem equivalents of the harness's prompt/tool affordances.
+
+**Tech Stack:** Python 3.12, verifiers v1 (`vf.Taskset` / `vf.Toolset` / `vf.Harness`), MCP over streamable HTTP, Prime Inference (GLM 5.2), pytest.
+
+**Spec:** `docs/superpowers/specs/2026-07-25-cli-harness-eval-design.md`
+
+## Preconditions
+
+**Do not start until the experiments migration lands in hub `main`.** Tasks 1–3 restore source
+fixes that migration may also touch; Task 11 depends on files it brings over.
+
+Verify before Task 1, and rebase `exp/cli-harness-eval` onto hub `main` first:
+
+```bash
+git -C /scratch/gpfs/ZHUANGL/jl0796/NetHack-hub fetch origin
+git log --oneline -3 origin/main
+ls tools/encoding_eval/          # expect: _verify_gate.py, aggregate_run.py, launch_cell.sh, _smoke.sh
+ls docs/experiments/             # expect: exp1-results.md, exp1-trace-assumptions.md
+```
+
+If those files are present, re-check whether Tasks 1–3 are still needed:
+
+```bash
+grep -c allowed_skill_names environments/nethack/nethack.py                    # 0 => Task 1 needed
+grep -c _standard_tier environments/nethack/nethack.py                         # 0 => Task 2 needed
+ls environments/nethack/nethack_harness/prompt/balrog_achievements.json        # absent => Task 3 needed
+```
+
+### RESOLVED 2026-07-25 — Tasks 1–3 are NO-OPS
+
+PR #16 ("Experiment 1 + real BALROG metric + 1b/1c/1d infrastructure") merged to `main` as
+`1fbbc3a` and brought all three source fixes plus the eval tooling. Verified on `1fbbc3a`:
+
+| check | result | task |
+|---|---|---|
+| `grep -c allowed_skill_names nethack.py` | **7** | Task 1 — skip |
+| `grep -c _standard_tier nethack.py` | **2** | Task 2 — skip |
+| `balrog_achievements.json` | **present**; `balrog.py` 53 → 102 lines, exports `balrog_progress` | Task 3 — skip |
+| `tests/test_balrog_progress.py` | asserts the 12.56% DL10/XL6 anchor | Task 3 — skip |
+| `tools/encoding_eval/` | `_verify_gate.py`, `aggregate_run.py`, `launch_cell.sh`, `_smoke.sh` present | Task 11 unblocked |
+
+**Still required:** Task 11, Step 1. `configs/endpoints.toml` line 41 keeps `z-ai/glm-5.2` under
+`pinference-glm` (no team header); the funded `prime-team` block at line 50 lists Gemini only.
+GLM will bill the $0 personal balance and **hang**.
+
+**Execution starts at Task 4.**
+
+## Global Constraints
+
+Every task inherits these. Values copied verbatim from the spec.
+
+- Model: `z-ai/glm-5.2`, identical for every arm, via the verifiers v1 intercepted endpoint.
+- Seeds: `[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]`, pinned, identical per arm.
+- Character: `Val-hum-neu-fem`. Task spec: `full_nle`, uncapped.
+- Action surface: `skill_set="netplay"` (15 skills), same registry and gate for every arm.
+- Budget: **150 skill calls**, counted toolset-side, not `max_turns`.
+- Early stop counts as terminal; report `turns_used`.
+- `memory/` is wiped per rollout. No `map/` is ever seeded.
+- MCP transport is **streamable HTTP** (Prime Agent supports no stdio). Engine runs outside the agent sandbox.
+- Repo: NetHack-hub, branch `exp/cli-harness-eval`. Author commits as Jonathan Liu; no AI attribution trailers.
+- `nethack_core` is an external dependency (`nethack-core @ git+https://github.com/liujonathan24/NetHack-engine.git`); never vendor it.
+
+## File Structure
+
+| path | responsibility |
+|---|---|
+| `environments/nethack/nethack.py` | Tasks 1, 2, 4 — gate, per-turn scrub, `_apply_tool_call` seam |
+| `environments/nethack/nethack_harness/prompt/balrog.py` (+ `balrog_achievements.json`) | Task 3 — real BALROG scorer |
+| `environments/nethack/nethack_v1.py` | Tasks 5, 6 — `self_dispatch`, `obs_mode`, call-count referee |
+| `tools/cli_harness_eval/workspace.py` | Task 7 — seeded-workspace builder |
+| `vendor/verifiers_1985/` | Task 8 — vendored external-harness loader patch |
+| `tools/cli_harness_eval/configs/*.toml` | Tasks 9, 10 — per-arm configs |
+| `harnesses/nethack-prime-agent/` | Task 10 — installable external harness distribution |
+| `tools/cli_harness_eval/launch_cell.sh`, `aggregate_run.py` | Task 11 — launcher + aggregation |
+
+---
+
+### Task 1: Restore the tool gate
+
+Without this a self-dispatching toolset executes any tool name Codex emits, including the
+withheld `move`. This is the single most load-bearing fix in the plan.
+
+**Files:**
+- Modify: `environments/nethack/nethack.py` (constructor kwargs; `env_response` after `env = state["env"]`; `load_environment` tool-callable block)
+- Test: `environments/nethack/tests/test_tool_gate.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `NetHackVerifiersEnv.__init__(..., allowed_skill_names: Optional[set] = None)`, attribute `self._allowed_skill_names: set[str]`. Task 4 and Task 5 both rely on the gate running inside `_apply_tool_call`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# environments/nethack/tests/test_tool_gate.py
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import nethack as m
+
+
+def test_netplay_env_exposes_no_low_level_move():
+    env = m.load_environment(task_spec="full_nle", skill_set="netplay", n_examples=1)
+    assert "move" not in env._allowed_skill_names
+    assert "explore_and_descend" in env._allowed_skill_names
+
+
+def test_gate_defaults_to_off_for_backcompat():
+    env = m.load_environment(task_spec="full_nle", n_examples=1)
+    env._allowed_skill_names = set()
+    assert not env._allowed_skill_names  # empty set disables the gate
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_tool_gate.py -v`
+Expected: FAIL with `AttributeError: 'NetHackVerifiersEnv' object has no attribute '_allowed_skill_names'`
+
+- [ ] **Step 3: Add the constructor kwarg**
+
+In `NetHackVerifiersEnv.__init__`, after the `setup_character: Optional[str] = None,` parameter:
+
+```python
+        # Names of the skills actually exposed to the model this rollout (the
+        # tool schema it was given). Tool calls for anything NOT in this set are
+        # rejected in env_response instead of being dispatched against the full
+        # registry — otherwise a hallucinated `move(direction=…)` executes even
+        # under the netplay set (which withholds it), leaking the low-level
+        # primitive into the effective action surface and confounding
+        # cross-encoding comparisons. None/empty disables the gate (back-compat).
+        allowed_skill_names: Optional[set] = None,
+```
+
+and in the body, after `self._setup_character = setup_character`:
+
+```python
+        self._allowed_skill_names = set(allowed_skill_names or ())
+```
+
+- [ ] **Step 4: Wire it in `load_environment`**
+
+Immediately after the `interface` if/elif/else that builds `tool_callables`:
+
+```python
+    # The exact set of tool names offered to the model — used to gate
+    # hallucinated tool calls in env_response (see allowed_skill_names).
+    _allowed_skill_names = {getattr(t, "__name__", "") for t in tool_callables} - {""}
+```
+
+and add to the `NetHackVerifiersEnv(...)` call, next to `setup_character=character,`:
+
+```python
+        allowed_skill_names=_allowed_skill_names,
+```
+
+- [ ] **Step 5: Add the rejection branch in `env_response`**
+
+Immediately after `env: NetHackCoreEnv = state["env"]` and **before** the `_DIR_BIND` dir8 rebind:
+
+```python
+        # Gate hallucinated tool calls: reject any skill the model was NOT given
+        # in its tool schema this rollout, instead of dispatching it against the
+        # full registry. Checked on the ORIGINAL name, before the dir8 rebind
+        # below (dir8's compass tools ARE in the exposed set). No NLE step is
+        # consumed.
+        if self._allowed_skill_names and skill_name not in self._allowed_skill_names:
+            avail = ", ".join(sorted(self._allowed_skill_names))
+            obs_text = self.spec.turn_template(
+                state["structured_obs"], state["journal"], state,
+                compact=self.compact_obs,
+                journal_max_chars=self.journal_render_max_chars,
+            )
+            content = compose_user_content(
+                obs_text,
+                [f"[Tool {skill_name!r} is not available. Call one of: {avail}]"],
+            )
+            return [vf.UserMessage(role="user", content=content)]
+```
+
+- [ ] **Step 6: Run tests to verify they pass**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_tool_gate.py -v`
+Expected: 2 passed
+
+- [ ] **Step 7: Run the ported gate verifier end-to-end**
+
+Run: `PYTHONPATH=.:environments/nethack python tools/encoding_eval/_verify_gate.py`
+Expected: reports `move executed = 0`; exit 0
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add environments/nethack/nethack.py environments/nethack/tests/test_tool_gate.py
+git commit -m "fix(nethack): gate hallucinated tool calls to the exposed skill set"
+```
+
+---
+
+### Task 2: Restore the per-turn intro-banner scrub
+
+The setup-time scrub is not enough: every `env.step` re-carries the banner in the unexplored top
+tty rows, and standard tiers never repaint them, so it bleeds into the rendered MAP — biasing
+ASCII/tty renders while leaving JSON/TOON clean.
+
+**Files:**
+- Modify: `environments/nethack/nethack.py` (`setup_state` after `state["meta"] = meta`; `env_response` just before the `obs_text = self.spec.turn_template(...)` render at ~line 1072)
+- Test: `environments/nethack/tests/test_banner_scrub.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `state["_standard_tier"]: bool`, read by the render path in `env_response` and (after Task 4) by `_apply_tool_call`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# environments/nethack/tests/test_banner_scrub.py
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import nethack as m
+
+BANNER = "NetHack, Copyright 1985-2020"
+
+
+def test_standard_tier_flag_is_set_at_setup():
+    spec = m.GAME_SPECS["full_nle"]
+    assert spec.nle_task != "engine"   # standard tier => scrubbing applies
+
+
+def test_scrub_removes_banner_rows():
+    import numpy as np
+    tty = np.full((24, 80), ord(" "), dtype=np.uint8)
+    for i, ch in enumerate(BANNER):
+        tty[0, i] = ord(ch)
+
+    class _Obs:
+        pass
+    obs = _Obs()
+    obs.tty_chars = tty
+    m._scrub_intro_banner(obs)
+    row0 = "".join(chr(c) for c in obs.tty_chars[0]).strip()
+    assert "Copyright" not in row0
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_banner_scrub.py -v`
+Expected: `test_scrub_removes_banner_rows` FAILS if the scrub does not clear row 0; `test_standard_tier_flag_is_set_at_setup` should already pass (it asserts on the existing `GameSpec`).
+
+- [ ] **Step 3: Set the flag in `setup_state`**
+
+After `state["meta"] = meta`:
+
+```python
+        # Standard NLE tiers (full_nle etc.) paint the intro/copyright banner
+        # over the top tty rows on every step; the engine-driven CurriculumEnv
+        # does not, and owns its own map — so per-turn banner scrubbing is gated
+        # to the standard tiers only (see the render path in env_response).
+        state["_standard_tier"] = spec.nle_task != "engine"
+```
+
+- [ ] **Step 4: Re-scrub before the render in `env_response`**
+
+Immediately before `# Build the per-turn user message from the spec's turn template.`:
+
+```python
+        # Re-scrub the intro/copyright banner before rendering. Each env.step
+        # re-carries the banner in the still-unexplored top tty rows, and in the
+        # right-offset-map standard tiers it is never repainted by gameplay — so
+        # the one-time scrub in setup_state is not enough. Gated to standard
+        # tiers; defensive (never raises).
+        if state.get("_standard_tier", True):
+            _scrub_intro_banner(state["raw_obs"])
+            state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_banner_scrub.py -v`
+Expected: 2 passed
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add environments/nethack/nethack.py environments/nethack/tests/test_banner_scrub.py
+git commit -m "fix(nethack): re-scrub intro banner every turn before map render"
+```
+
+---
+
+### Task 3: Restore the real BALROG scorer
+
+Hub `balrog.py` is a 53-line self-described *"smooth proxy… approximation"*. The real metric
+reproduces `balrog-ai/BALROG` from a vendored achievements table. They disagree materially: at
+DL10/XL6 the real metric gives **12.56%**, the proxy **6.4%**.
+
+**Files:**
+- Create: `environments/nethack/nethack_harness/prompt/balrog_achievements.json` (2,959 bytes, copied verbatim)
+- Modify: `environments/nethack/nethack_harness/prompt/balrog.py`
+- Modify: `environments/nethack/pyproject.toml` (package the JSON)
+- Test: `environments/nethack/tests/test_balrog_real.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `balrog_progress(max_dlvl: int, xp_level: int, *, ascended: bool = False) -> float` returning 0.0–1.0. `progression_score` / `progression_tier` keep their existing signatures. Task 11's aggregation imports `balrog_progress`.
+
+- [ ] **Step 1: Copy the achievements table and the scorer from engine history**
+
+```bash
+ENG=/scratch/gpfs/ZHUANGL/jl0796/NetHackHarness
+P=environments/nethack/nethack_harness/prompt
+git -C "$ENG" show 9baa515^:$P/balrog_achievements.json > $P/balrog_achievements.json
+git -C "$ENG" show 9baa515^:$P/balrog.py > $P/balrog.py
+wc -c $P/balrog_achievements.json   # expect 2959
+```
+
+- [ ] **Step 2: Write the anchor test**
+
+```python
+# environments/nethack/tests/test_balrog_real.py
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from nethack_harness.prompt.balrog import balrog_progress
+
+
+def test_matches_published_anchor_dl10_xl6():
+    """BALROG's published anchor: DL10 / XL6 == 12.56%."""
+    assert round(balrog_progress(10, 6) * 100, 2) == 12.56
+
+
+def test_monotonic_in_depth():
+    assert balrog_progress(6, 1) >= balrog_progress(2, 1)
+
+
+def test_bounded():
+    assert 0.0 <= balrog_progress(1, 1) <= 1.0
+    assert 0.0 <= balrog_progress(50, 30) <= 1.0
+```
+
+- [ ] **Step 3: Run the test**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_balrog_real.py -v`
+Expected: 3 passed. If `test_matches_published_anchor_dl10_xl6` fails, the JSON did not copy — re-run Step 1 and check the byte count.
+
+- [ ] **Step 4: Package the JSON in the wheel**
+
+In `environments/nethack/pyproject.toml`, add to `[tool.hatch.build] include`:
+
+```toml
+"nethack_harness/prompt/balrog_achievements.json",
+```
+
+- [ ] **Step 5: Verify the package data resolves from an installed layout**
+
+Run: `PYTHONPATH=environments/nethack python -c "from nethack_harness.prompt.balrog import balrog_progress; print(round(balrog_progress(10,6)*100,2))"`
+Expected: `12.56`
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add environments/nethack/nethack_harness/prompt/balrog.py \
+        environments/nethack/nethack_harness/prompt/balrog_achievements.json \
+        environments/nethack/pyproject.toml \
+        environments/nethack/tests/test_balrog_real.py
+git commit -m "feat(nethack): real BALROG progression scorer + vendored achievements table"
+```
+
+---
+
+### Task 4: Extract the `_apply_tool_call` seam
+
+`env_response` currently does two jobs: decide *what* the model called, and *apply* it. CLI arms
+need only the second half, callable directly. This is a pure refactor — arm 0 behavior must not
+change.
+
+**Files:**
+- Modify: `environments/nethack/nethack.py` (`env_response`, ~lines 568–1110)
+- Test: `environments/nethack/tests/test_apply_tool_call.py`
+
+**Interfaces:**
+- Consumes: `self._allowed_skill_names` (Task 1), `state["_standard_tier"]` (Task 2).
+- Produces: `async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict) -> MessageContent` — executes one skill against the engine, mutates `state`, writes the trace entry, and returns the composed user content. Task 5 calls this directly.
+
+- [ ] **Step 1: Write the equivalence test**
+
+```python
+# environments/nethack/tests/test_apply_tool_call.py
+import asyncio, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import nethack as m
+import verifiers as vf
+
+
+def _env_and_state():
+    env = m.load_environment(task_spec="full_nle", skill_set="netplay",
+                             n_examples=1, explicit_seeds=[0],
+                             character="Val-hum-neu-fem")
+    state = vf.State({"task": {"tier": "full_nle", "seed": 0}, "info": {}})
+    asyncio.run(env.setup_state(state))
+    return env, state
+
+
+def test_apply_tool_call_returns_rendered_observation():
+    env, state = _env_and_state()
+    content = asyncio.run(env._apply_tool_call(state, "search", {"times": 1}))
+    text = m.content_to_text(content) if hasattr(m, "content_to_text") else str(content)
+    assert "=== STATUS ===" in text
+
+
+def test_gate_still_rejects_withheld_move_through_the_seam():
+    env, state = _env_and_state()
+    content = asyncio.run(env._apply_tool_call(state, "move", {"direction": "N"}))
+    text = m.content_to_text(content) if hasattr(m, "content_to_text") else str(content)
+    assert "is not available" in text
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_apply_tool_call.py -v`
+Expected: FAIL with `AttributeError: 'NetHackVerifiersEnv' object has no attribute '_apply_tool_call'`
+
+- [ ] **Step 3: Move the body into the new method**
+
+Cut everything in `env_response` from the gate branch (Task 1, Step 5) through the trace write, and
+paste it into a new method. Replace the final `return [vf.UserMessage(role="user", content=content)]`
+statements inside the moved body with bare `return content`.
+
+```python
+    async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
+        """Execute one skill against the engine and return the rendered observation.
+
+        This is the whole `env_response` body minus tool-call parsing: the gate,
+        journal short-circuit, registry dispatch, engine stepping, menu drain,
+        terminal detection, reward bookkeeping, banner re-scrub, render, and
+        trace write. Split out so MCP-driven CLI harnesses (which must return the
+        observation from the tool call itself) share one code path with the
+        native harness.
+        """
+        env: NetHackCoreEnv = state["env"]
+        ...  # moved body, unchanged
+        return content
+```
+
+- [ ] **Step 4: Reduce `env_response` to parse + delegate**
+
+```python
+    async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+        skill_name, skill_args = self._parse_tool_call(messages, state)
+        content = await self._apply_tool_call(state, skill_name, skill_args)
+        return [vf.UserMessage(role="user", content=content)]
+```
+
+Extract the parsing preamble (everything before `env = state["env"]`) into
+`_parse_tool_call(self, messages, state) -> tuple[str, dict]`, returning the same
+`(skill_name, skill_args)` the original code computed, including its malformed-JSON recovery.
+
+- [ ] **Step 5: Run the new tests**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_apply_tool_call.py -v`
+Expected: 2 passed
+
+- [ ] **Step 6: Run the full env suite for regressions**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/ -x -q`
+Expected: no new failures versus the pre-refactor baseline. Record the baseline first with
+`git stash && pytest ... -q | tail -3 && git stash pop` if unsure.
+
+- [ ] **Step 7: Run golden parity**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_golden_parity.py -v`
+Expected: PASS — this is the guard that the refactor did not move behavior.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add environments/nethack/nethack.py environments/nethack/tests/test_apply_tool_call.py
+git commit -m "refactor(nethack): extract _apply_tool_call seam from env_response"
+```
+
+---
+
+### Task 5: `self_dispatch` and `obs_mode` on the toolset
+
+**Files:**
+- Modify: `environments/nethack/nethack_v1.py` (`_build_toolset`, `load_taskset`, `NetHackTasksetConfig`)
+- Test: `environments/nethack/tests/test_toolset_self_dispatch.py`
+
+**Interfaces:**
+- Consumes: `NetHackVerifiersEnv._apply_tool_call` (Task 4).
+- Produces: `_build_toolset(v0env, *, self_dispatch: bool = False, obs_mode: str = "push") -> vf.Toolset`; config fields `NetHackTasksetConfig.self_dispatch: bool = False` and `.obs_mode: str = "push"`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# environments/nethack/tests/test_toolset_self_dispatch.py
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import nethack_v1 as m
+
+
+def test_default_toolset_is_harness_driven():
+    ts = m.load_taskset({"task_spec": "full_nle", "n_examples": 1})
+    assert ts.toolsets[0].scope == "rollout"
+
+
+def test_self_dispatch_tools_are_wrapped():
+    cfg = m.NetHackTasksetConfig(task_spec="full_nle", n_examples=1,
+                                 self_dispatch=True,
+                                 env_args={"skill_set": "netplay"})
+    ts = m.load_taskset(cfg)
+    names = {t.__name__ for t in ts.toolsets[0].tools}
+    assert "explore_and_descend" in names
+    assert "move" not in names          # netplay withholds it
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_toolset_self_dispatch.py -v`
+Expected: FAIL — `NetHackTasksetConfig` forbids the extra field `self_dispatch` (`extra="forbid"`).
+
+- [ ] **Step 3: Add the config fields**
+
+In `NetHackTasksetConfig`, after `trace_dir`:
+
+```python
+    # When True, each tool executes the skill and RETURNS the rendered
+    # observation, so MCP-driven CLI agents get self-contained calls. False =
+    # the v0/harness-driven loop where env_response applies the previous call.
+    self_dispatch: bool = False
+    # "push" = every tool result carries the observation; "on_demand" = terse
+    # feedback only, map gated behind an explicit look() call.
+    obs_mode: str = "push"
+```
+
+- [ ] **Step 4: Implement the wrapper in `_build_toolset`**
+
+```python
+def _build_toolset(v0env, *, self_dispatch: bool = False,
+                   obs_mode: str = "push") -> vf.Toolset:
+    ...  # existing _nethack_setup / _nethack_cleanup unchanged
+
+    tools = list(v0env.tools)
+    if self_dispatch:
+        tools = [_self_dispatching(v0env, t, obs_mode) for t in tools]
+
+    return vf.Toolset(
+        tools=tools,
+        setups=[_nethack_setup],
+        cleanups=[_nethack_cleanup],
+        scope="rollout",
+    )
+
+
+def _self_dispatching(v0env, tool, obs_mode: str):
+    """Wrap a schema-only v0 tool adapter into one that actually executes.
+
+    The v0 adapters carry the JSON schema (name/signature/docstring) but do not
+    touch the engine — dispatch lives in env_response. CLI harnesses call tools
+    over MCP and must get the result back from the call itself, so we bind the
+    adapter's identity to `_apply_tool_call`.
+    """
+    import functools
+
+    @functools.wraps(tool)
+    async def _run(state, **kwargs):
+        content = await v0env._apply_tool_call(state, tool.__name__, kwargs)
+        if obs_mode == "on_demand" and tool.__name__ != "look":
+            return _terse(content)
+        return content
+
+    return _run
+
+
+def _terse(content) -> str:
+    """Return only the game messages plus the trailing feedback line.
+
+    `on_demand` withholds the map until the agent asks for it. Used by the
+    visibility sub-experiment (spec §5); `push` is the default and never
+    calls this.
+    """
+    from nethack_harness.prompt.content import content_to_text
+
+    out, in_messages = [], False
+    for line in content_to_text(content).splitlines():
+        if line.startswith("==="):
+            in_messages = line.startswith("=== MESSAGES ===")
+            continue
+        if in_messages and line.strip():
+            out.append(line)
+        elif line.startswith("["):          # feedback from the skill call
+            out.append(line)
+    return "\n".join(out) or "(no message)"
+```
+
+**Scope note for the implementer:** `obs_mode="on_demand"` is plumbing only in this task. The
+`look` tool it refers to does **not** exist in the netplay set, so `on_demand` currently withholds
+the map with no way to request it. That is acceptable — this task ships `push` (the default, and
+the only mode any v1 arm uses) and reserves the flag. Do **not** add a `look` tool here; it belongs
+to the visibility sub-experiment. Add a test asserting `push` is the default, and leave
+`on_demand` covered only by the `_terse` unit test below.
+
+```python
+def test_terse_drops_the_map_but_keeps_messages_and_feedback():
+    from nethack_v1 import _terse
+    text = "=== MAP ===\n#####\n\n=== MESSAGES ===\nYou hit it.\n[search: nothing found]"
+    out = _terse(text)
+    assert "#####" not in out
+    assert "You hit it." in out
+    assert "[search: nothing found]" in out
+```
+
+- [ ] **Step 5: Thread the flags through `load_taskset`**
+
+```python
+        toolsets=[_build_toolset(v0env, self_dispatch=cfg.self_dispatch,
+                                 obs_mode=cfg.obs_mode)],
+```
+
+- [ ] **Step 6: Run tests**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_toolset_self_dispatch.py environments/nethack/tests/test_v1_taskset.py -v`
+Expected: all passed — `test_v1_taskset.py` proves arm 0 is unaffected.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add environments/nethack/nethack_v1.py environments/nethack/tests/test_toolset_self_dispatch.py
+git commit -m "feat(nethack_v1): self-dispatching toolset mode for MCP-driven CLI harnesses"
+```
+
+---
+
+### Task 6: Toolset-side 150-call referee
+
+`max_turns` only binds harnesses we control. The cap must live where every arm passes through.
+
+**Files:**
+- Modify: `environments/nethack/nethack_v1.py`
+- Test: `environments/nethack/tests/test_call_budget.py`
+
+**Interfaces:**
+- Consumes: `_self_dispatching(v0env, tool, obs_mode)` (Task 5).
+- Produces: config field `NetHackTasksetConfig.max_skill_calls: int = 150`; state key `state["skill_calls"]: int`; terminal reason `"call_budget_exhausted"`. **Widens Task 5's signature to `_self_dispatching(v0env, tool, obs_mode, budget)`** — update the call site in `_build_toolset` in the same commit.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# environments/nethack/tests/test_call_budget.py
+import asyncio, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+import nethack_v1 as m
+import verifiers as vf
+
+
+def test_budget_refuses_past_the_cap():
+    cfg = m.NetHackTasksetConfig(task_spec="full_nle", n_examples=1,
+                                 self_dispatch=True, max_skill_calls=3,
+                                 explicit_seeds=[0],
+                                 env_args={"skill_set": "netplay"})
+    ts = m.load_taskset(cfg)
+    tool = next(t for t in ts.toolsets[0].tools if t.__name__ == "search")
+    state = vf.State({"task": {"tier": "full_nle", "seed": 0}, "info": {}})
+    asyncio.run(ts.toolsets[0].setups[0](None, state))
+
+    for _ in range(3):
+        asyncio.run(tool(state, times=1))
+    assert state["skill_calls"] == 3
+
+    out = asyncio.run(tool(state, times=1))
+    assert "budget" in str(out).lower()
+    assert state["skill_calls"] == 3          # refused calls do not count
+    assert state["terminated"] is True
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_call_budget.py -v`
+Expected: FAIL — `max_skill_calls` is not a config field.
+
+- [ ] **Step 3: Add the config field**
+
+```python
+    # Hard per-rollout budget on executed skill calls. Enforced toolset-side so
+    # it binds every harness, including CLI agents whose internal loop we do not
+    # control. One call == one v0 LM turn.
+    max_skill_calls: int = 150
+```
+
+- [ ] **Step 4: Enforce it in the wrapper**
+
+Inside `_run` in `_self_dispatching`, before dispatch:
+
+```python
+        used = int(state.get("skill_calls", 0))
+        if budget > 0 and used >= budget:
+            state["terminated"] = True
+            state["stop_reason"] = "call_budget_exhausted"
+            return f"[Call budget exhausted: {budget} skill calls used. The episode is over.]"
+        state["skill_calls"] = used + 1
+```
+
+Thread `budget` into `_self_dispatching(v0env, tool, obs_mode, budget)` and pass
+`cfg.max_skill_calls` from `_build_toolset`.
+
+- [ ] **Step 5: Run tests**
+
+Run: `PYTHONPATH=environments/nethack pytest environments/nethack/tests/test_call_budget.py -v`
+Expected: 1 passed
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add environments/nethack/nethack_v1.py environments/nethack/tests/test_call_budget.py
+git commit -m "feat(nethack_v1): toolset-side skill-call budget as the cross-arm referee"
+```
+
+---
+
+### Task 7: Seeded-workspace builder
+
+**Files:**
+- Create: `tools/cli_harness_eval/__init__.py`, `tools/cli_harness_eval/workspace.py`
+- Test: `tests/test_cli_workspace.py`
+
+**Interfaces:**
+- Consumes: `nethack_harness.prompt.rendering.SYSTEM_PROMPT`, `environments/nethack/wiki/snapshot.json`.
+- Produces: `build_workspace(dest: Path, *, objective: str) -> Path`, creating `AGENTS.md`, `CLAUDE.md`, `wiki/*.md`, `memory/objective.md`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_cli_workspace.py
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from tools.cli_harness_eval.workspace import build_workspace
+
+
+def test_builds_all_three_affordances(tmp_path):
+    ws = build_workspace(tmp_path / "ws", objective="Descend as deep as you can.")
+    assert (ws / "AGENTS.md").exists()
+    assert (ws / "CLAUDE.md").read_text() == (ws / "AGENTS.md").read_text()
+    assert len(list((ws / "wiki").glob("*.md"))) >= 100
+    assert "Descend" in (ws / "memory" / "objective.md").read_text()
+
+
+def test_agents_md_carries_the_system_prompt(tmp_path):
+    ws = build_workspace(tmp_path / "ws", objective="x")
+    assert "STRATEGY: DESCEND ASAP" in (ws / "AGENTS.md").read_text()
+
+
+def test_no_map_is_seeded(tmp_path):
+    ws = build_workspace(tmp_path / "ws", objective="x")
+    assert not (ws / "map").exists()
+    assert not list(ws.glob("*map*"))
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_cli_workspace.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'tools.cli_harness_eval.workspace'`
+
+- [ ] **Step 3: Implement the builder**
+
+```python
+# tools/cli_harness_eval/workspace.py
+"""Build the sandbox workspace handed to CLI-agent arms.
+
+Each item is the filesystem counterpart of an affordance the native harness
+supplies through prompt and tools, so the arms are capability-matched:
+  AGENTS.md   <- SYSTEM_PROMPT
+  wiki/       <- wiki_lookup / wiki_search
+  memory/     <- Journal (objective + notes)
+No map is seeded: it would duplicate the observation channel and destroy the
+"does the scaffold build its own map notes?" measurement.
+"""
+from __future__ import annotations
+
+import json
+import re
+import shutil
+from pathlib import Path
+
+_ENV = Path(__file__).resolve().parents[2] / "environments" / "nethack"
+_SNAPSHOT = _ENV / "wiki" / "snapshot.json"
+# Filenames each CLI looks for; all get the same bytes.
+_PROMPT_FILES = ("AGENTS.md", "CLAUDE.md")
+
+
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "page"
+
+
+def build_workspace(dest: Path, *, objective: str) -> Path:
+    import sys
+    sys.path.insert(0, str(_ENV))
+    from nethack_harness.prompt.rendering import SYSTEM_PROMPT
+
+    dest = Path(dest)
+    if dest.exists():
+        shutil.rmtree(dest)           # memory/ is wiped per rollout
+    (dest / "wiki").mkdir(parents=True)
+    (dest / "memory").mkdir()
+
+    primer = SYSTEM_PROMPT + (
+        "\n\n=== WORKSPACE ===\n"
+        "`wiki/` holds NetHack reference pages (read-only) — grep it.\n"
+        "`memory/` is yours: keep notes there across turns. `memory/objective.md`"
+        " is your goal.\n"
+    )
+    for name in _PROMPT_FILES:
+        (dest / name).write_text(primer)
+
+    pages = json.loads(_SNAPSHOT.read_text())
+    for page in pages:
+        path = dest / "wiki" / f"{_slug(page['title'])}.md"
+        path.write_text(f"# {page['title']}\n\n{page['body']}\n")
+        path.chmod(0o444)
+
+    (dest / "memory" / "objective.md").write_text(f"# Objective\n\n{objective}\n")
+    return dest
+```
+
+- [ ] **Step 4: Run tests**
+
+Run: `pytest tests/test_cli_workspace.py -v`
+Expected: 3 passed
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tools/cli_harness_eval/__init__.py tools/cli_harness_eval/workspace.py tests/test_cli_workspace.py
+git commit -m "feat(cli-eval): seeded-workspace builder (AGENTS.md, wiki/, memory/)"
+```
+
+---
+
+### Task 8: Vendor the external-harness loader and pin verifiers
+
+**Files:**
+- Create: `vendor/verifiers_1985/README.md`, `vendor/verifiers_1985/loaders.patch`
+- Modify: `environments/nethack/pyproject.toml` (verifiers floor)
+- Test: `tests/test_vendored_loader.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: an installed verifiers whose `verifiers.v1.loaders.harness_class(<id>)` resolves an external top-level module. Task 10 depends on it.
+
+- [ ] **Step 1: Discover which verifiers version ships the Codex harness**
+
+```bash
+pip index versions verifiers 2>/dev/null | head -3
+python - <<'PY'
+import importlib, pkgutil
+m = importlib.import_module("verifiers.v1.packages.harnesses")
+print(sorted(n for _, n, _ in pkgutil.iter_modules(m.__path__)))
+PY
+```
+
+Record the installed version and the module list. If `codex` is absent, upgrade
+(`uv pip install -U verifiers`) and re-run until it appears. Write the resolved version into
+`environments/nethack/pyproject.toml` as the new floor, replacing `verifiers>=0.1.14`.
+
+- [ ] **Step 2: Fetch the PR patch**
+
+```bash
+mkdir -p vendor/verifiers_1985
+gh pr diff 1985 --repo PrimeIntellect-ai/verifiers > vendor/verifiers_1985/loaders.patch
+grep -c "^diff --git" vendor/verifiers_1985/loaders.patch     # expect 12
+```
+
+- [ ] **Step 3: Write the failing test**
+
+```python
+# tests/test_vendored_loader.py
+import pytest
+
+
+def test_external_harness_ids_resolve():
+    from verifiers.v1.loaders import import_harness
+    with pytest.raises(ModuleNotFoundError) as e:
+        import_harness("definitely-not-installed-harness")
+    # The patched loader reports BOTH import candidates.
+    assert "verifiers.v1.harnesses." in str(e.value)
+    assert "definitely_not_installed_harness" in str(e.value)
+```
+
+- [ ] **Step 4: Run test to verify it fails**
+
+Run: `pytest tests/test_vendored_loader.py -v`
+Expected: FAIL — unpatched verifiers reports only one candidate (or `import_harness` is absent).
+
+- [ ] **Step 5: Apply the patch to the installed package**
+
+```bash
+SITE=$(python -c "import verifiers, pathlib; print(pathlib.Path(verifiers.__file__).parent.parent)")
+git apply --directory="$(basename "$SITE")" --exclude='tests/*' --exclude='docs/*' \
+    -p1 vendor/verifiers_1985/loaders.patch || \
+  echo "patch did not apply cleanly — reconcile against the installed version, then re-run"
+```
+
+Record the exact command that worked in `vendor/verifiers_1985/README.md`, along with the
+verifiers version it was applied to, so the run is reproducible.
+
+- [ ] **Step 6: Run test to verify it passes**
+
+Run: `pytest tests/test_vendored_loader.py -v`
+Expected: 1 passed
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add vendor/verifiers_1985/ environments/nethack/pyproject.toml tests/test_vendored_loader.py
+git commit -m "chore(cli-eval): vendor verifiers #1985 external-harness loader; pin version"
+```
+
+---
+
+### Task 9: Codex arm
+
+**Files:**
+- Create: `tools/cli_harness_eval/configs/codex.toml`, `tools/cli_harness_eval/configs/control.toml`
+- Test: `tests/test_arm_configs.py`
+
+**Interfaces:**
+- Consumes: Tasks 5–8.
+- Produces: two loadable `SingleAgentEnvConfig` TOMLs. Task 11's launcher reads them by name.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_arm_configs.py
+import pathlib, tomllib
+CFG = pathlib.Path(__file__).resolve().parents[1] / "tools" / "cli_harness_eval" / "configs"
+
+
+def test_every_arm_pins_the_same_fixed_factors():
+    arms = {p.stem: tomllib.loads(p.read_text()) for p in CFG.glob("*.toml")}
+    assert arms, "no arm configs found"
+    seeds = {tuple(a["taskset"]["explicit_seeds"]) for a in arms.values()}
+    models = {a["agent"]["harness"]["model"] for a in arms.values()}
+    chars = {a["taskset"]["env_args"]["character"] for a in arms.values()}
+    assert len(seeds) == 1 and len(models) == 1 and len(chars) == 1
+    assert models == {"z-ai/glm-5.2"}
+
+
+def test_cli_arms_self_dispatch_and_control_does_not():
+    ctl = tomllib.loads((CFG / "control.toml").read_text())
+    cdx = tomllib.loads((CFG / "codex.toml").read_text())
+    assert ctl["taskset"]["self_dispatch"] is False
+    assert cdx["taskset"]["self_dispatch"] is True
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_arm_configs.py -v`
+Expected: FAIL with `AssertionError: no arm configs found`
+
+- [ ] **Step 3: Write `control.toml`**
+
+```toml
+# Arm 0 — the control: our harness, native tools, harness-driven loop.
+[taskset]
+id = "nethack"
+task_spec = "full_nle"
+self_dispatch = false
+max_skill_calls = 150
+explicit_seeds = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+n_examples = 16
+
+[taskset.env_args]
+skill_set = "netplay"
+character = "Val-hum-neu-fem"
+compact_obs = false
+
+[agent.harness]
+id = "nethack"
+model = "z-ai/glm-5.2"
+```
+
+- [ ] **Step 4: Write `codex.toml`**
+
+```toml
+# Arm 1 — Codex CLI, driving the same toolset over MCP.
+[taskset]
+id = "nethack"
+task_spec = "full_nle"
+self_dispatch = true
+obs_mode = "push"
+max_skill_calls = 150
+explicit_seeds = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+n_examples = 16
+
+[taskset.env_args]
+skill_set = "netplay"
+character = "Val-hum-neu-fem"
+compact_obs = false
+
+[agent.harness]
+id = "codex"
+model = "z-ai/glm-5.2"
+
+[agent.harness.sandbox]
+scope = "rollout"
+network_access = true
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `pytest tests/test_arm_configs.py -v`
+Expected: 2 passed
+
+- [ ] **Step 6: Confirm how the toolset is exposed over MCP, and where the URL comes from**
+
+The framework — not us — serves toolsets to CLI harnesses over MCP; the PR fixture shows
+`async def launch(self, ctx, trace, runtime, endpoint, secret, mcp_urls)`. Determine the concrete
+contract for the pinned version before writing any harness that consumes it:
+
+```bash
+python - <<'PY'
+import inspect
+from verifiers.v1.packages.harnesses.cli import CLIHarness
+from verifiers.v1.utils import mcp_proxy_utils as mp
+print(inspect.signature(CLIHarness.__init__))
+print([n for n in dir(mp) if not n.startswith("_")])
+PY
+```
+
+Record in `tools/cli_harness_eval/configs/README.md`: how a `Toolset` becomes an MCP endpoint,
+whether the URL arrives via `launch(mcp_urls=...)` or an env var in the sandbox, and the exact
+name. Task 10's `mcp_url` parameter must match what you find here.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add tools/cli_harness_eval/configs/ tests/test_arm_configs.py
+git commit -m "feat(cli-eval): control and Codex arm configs"
+```
+
+---
+
+### Task 10: Prime Agent external harness
+
+Prime Agent supports **only** remote `"http"` MCP servers, and exposes them as a Python skill in
+its IPython kernel rather than as agent tools (`docs/MCP_INTEGRATIONS.md`).
+
+**Files:**
+- Create: `harnesses/nethack-prime-agent/pyproject.toml`
+- Create: `harnesses/nethack-prime-agent/nethack_prime_agent/__init__.py`
+- Create: `tools/cli_harness_eval/configs/prime_agent.toml`
+- Test: `tests/test_prime_agent_harness.py`
+
+**Interfaces:**
+- Consumes: Task 8's patched loader; `CLIHarness` from the pinned verifiers.
+- Produces: an installable distribution named `nethack-prime-agent` whose module `nethack_prime_agent` exports exactly one `Harness` subclass, `PrimeAgentHarness`, resolvable by `harness.id = "nethack-prime-agent"`.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_prime_agent_harness.py
+def test_module_exports_exactly_one_harness():
+    import nethack_prime_agent as m
+    from verifiers.v1 import Harness
+    exported = [getattr(m, n) for n in m.__all__]
+    harnesses = [o for o in exported if isinstance(o, type) and issubclass(o, Harness)]
+    assert len(harnesses) == 1
+    assert harnesses[0].__name__ == "PrimeAgentHarness"
+
+
+def test_id_resolves_through_the_loader():
+    from verifiers.v1.loaders import harness_class
+    assert harness_class("nethack-prime-agent").__name__ == "PrimeAgentHarness"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_prime_agent_harness.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'nethack_prime_agent'`
+
+- [ ] **Step 3: Write the distribution metadata**
+
+```toml
+# harnesses/nethack-prime-agent/pyproject.toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nethack-prime-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nethack_prime_agent"]
+```
+
+- [ ] **Step 4: Write the harness**
+
+```python
+# harnesses/nethack-prime-agent/nethack_prime_agent/__init__.py
+"""Prime Agent harness: drives the NetHack toolset through Prime Agent's
+kernel-side MCP integration.
+
+Prime Agent supports only remote "http" MCP servers, and surfaces them as a
+Python skill imported into its IPython kernel rather than as agent tools — so
+the agent calls `await nethack.explore_and_descend(...)`. Same server, same 15
+tools; only the integration path differs from Codex.
+"""
+import json
+
+from verifiers.v1 import HarnessConfig
+from verifiers.v1.packages.harnesses.cli import CLIHarness
+
+__all__ = ["PrimeAgentHarness", "PrimeAgentHarnessConfig"]
+
+_SETTINGS = "/app/.prime/agent/settings.json"
+
+
+class PrimeAgentHarnessConfig(HarnessConfig):
+    mcp_bearer_env: str = "NETHACK_MCP_TOKEN"
+    agent_workdir: str = "/app"
+
+
+class PrimeAgentHarness(CLIHarness):
+    # Config specialization. PR #1985 documents the generic form
+    # `Harness[SomeConfig]`; in verifiers 0.1.14 `CLIHarness` is NOT subscriptable
+    # and the specialization is declared with this ClassVar instead. Check which
+    # form the pinned version accepts (Task 8, Step 1) and use that one — if
+    # `CLIHarness[PrimeAgentHarnessConfig]` imports cleanly, prefer it and drop
+    # this line.
+    config_type = PrimeAgentHarnessConfig
+
+    def __init__(self, *, mcp_url: str = "", **kwargs):
+        settings = json.dumps(
+            {
+                "mcpServers": {
+                    "nethack": {
+                        "type": "http",
+                        "url": mcp_url,
+                        "bearerTokenEnvVar": "NETHACK_MCP_TOKEN",
+                    }
+                }
+            },
+            indent=2,
+        )
+        super().__init__(
+            command="prime-agent -p --model $VF_MODEL @AGENTS.md 'Play NetHack. "
+                    "Use the nethack skill; descend as deep as you can.'",
+            files={_SETTINGS: settings},
+            **kwargs,
+        )
+```
+
+- [ ] **Step 5: Install it editable and run the tests**
+
+Run:
+```bash
+uv pip install -e harnesses/nethack-prime-agent
+pytest tests/test_prime_agent_harness.py -v
+```
+Expected: 2 passed. If `test_id_resolves_through_the_loader` fails, Task 8's patch is not applied
+to the active interpreter — re-run Task 8, Step 5.
+
+- [ ] **Step 6: Write `prime_agent.toml`**
+
+Copy `codex.toml` verbatim and change only the harness block:
+
+```toml
+[agent.harness]
+id = "nethack-prime-agent"
+model = "z-ai/glm-5.2"
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add harnesses/ tools/cli_harness_eval/configs/prime_agent.toml tests/test_prime_agent_harness.py
+git commit -m "feat(cli-eval): Prime Agent external harness plugin"
+```
+
+---
+
+### Task 11: Launcher, aggregation, and the GLM billing fix
+
+**Files:**
+- Create: `tools/cli_harness_eval/launch_cell.sh`
+- Modify: `configs/endpoints.toml` (GLM team billing)
+- Modify: `tools/encoding_eval/aggregate_run.py` → extend for `turns_used`
+- Test: `tests/test_cli_aggregate.py`
+
+**Interfaces:**
+- Consumes: Tasks 3, 9, 10.
+- Produces: `launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]`; `outputs/cli_harness_eval/<run>/<arm>/table.md`.
+
+- [ ] **Step 1: Fix GLM team billing first**
+
+`z-ai/glm-5.2` currently sits under `pinference-glm`, which carries no `X-Prime-Team-ID`, so it
+bills the $0 personal balance and **hangs** rather than erroring. Add the model to the funded
+block in `configs/endpoints.toml`:
+
+```toml
+[[endpoints]]
+id   = "prime-team"
+url  = "https://api.pinference.ai/api/v1"
+key  = "PI_API_KEY"
+headers = { "X-Prime-Team-ID" = "cmotasmp5005ppyp07dcoh50u" }
+models = ["google/gemini-3-flash-preview", "google/gemini-3.1-pro-preview",
+          "google/gemini-3.5-flash", "z-ai/glm-5.2"]
+```
+
+- [ ] **Step 2: Verify billing before anything else runs**
+
+```bash
+curl -s https://api.pinference.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $PI_API_KEY" \
+  -H "X-Prime-Team-ID: cmotasmp5005ppyp07dcoh50u" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"hi"}],"max_tokens":8}' \
+  | head -c 300
+```
+Expected: a completion. If you see `insufficient_funds`, stop — every later step will hang, not fail.
+
+- [ ] **Step 3: Write the launcher**
+
+```bash
+#!/usr/bin/env bash
+# Launch ONE arm of the CLI-harness comparison.
+# Every arm must go through THIS script so the fixed factors never drift.
+#   tools/cli_harness_eval/launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]
+set -euo pipefail
+
+ARM="${1:?usage: launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]}"
+OUTDIR="${2:?usage: launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]}"
+MAX_CALLS="${3:-150}"
+N="${4:-16}"
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO"
+export PYTHONPATH=".:environments/nethack"
+export PI_API_KEY="${PI_API_KEY:-$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.prime/config.json')))['api_key'])")}"
+export NETHACK_MCP_TOKEN="${NETHACK_MCP_TOKEN:?set a bearer token for the MCP server}"
+
+CFG="tools/cli_harness_eval/configs/${ARM}.toml"
+[ -f "$CFG" ] || { echo "no such arm: $ARM ($CFG)"; exit 2; }
+
+mkdir -p "$OUTDIR/trace"
+echo "[launch_cell] arm=${ARM} max_calls=${MAX_CALLS} n=${N} out=${OUTDIR}"
+
+exec .venv/bin/vf eval --config "$CFG" \
+  --set "taskset.max_skill_calls=${MAX_CALLS}" \
+  --set "taskset.n_examples=${N}" \
+  --set "taskset.trace_dir=${OUTDIR}/trace" \
+  --output-dir "$OUTDIR"
+```
+
+Then `chmod +x tools/cli_harness_eval/launch_cell.sh`.
+
+- [ ] **Step 4: Write the aggregation test**
+
+```python
+# tests/test_cli_aggregate.py
+import json, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from tools.encoding_eval.aggregate_run import _trace_rollouts
+
+
+def test_turns_used_is_read_from_traces(tmp_path):
+    cell = tmp_path / "codex"
+    (cell / "trace").mkdir(parents=True)
+    lines = [
+        {"max_dlvl_reached": 1, "skill_calls": 1, "status": {"hitpoints": 12, "experience_level": 1}},
+        {"max_dlvl_reached": 3, "skill_calls": 2, "status": {"hitpoints": 0, "experience_level": 2}},
+    ]
+    (cell / "trace" / "r0.ndjson").write_text("\n".join(json.dumps(x) for x in lines))
+    rows = _trace_rollouts(str(cell))
+    assert rows[0][0] == 3      # max dlvl
+    assert rows[0][1] is True   # died
+```
+
+- [ ] **Step 5: Run test to verify it fails, then extend `_trace_rollouts`**
+
+Run: `pytest tests/test_cli_aggregate.py -v` — expect FAIL if `skill_calls` is unhandled.
+
+In `tools/encoding_eval/aggregate_run.py`, change `_trace_rollouts` to carry the call count:
+
+```python
+def _trace_rollouts(cell_dir):
+    """Per rollout: (max_dlvl, died, max_xp_level, turns_used)."""
+    out = []
+    for f in sorted(glob.glob(os.path.join(cell_dir, "trace", "*.ndjson"))):
+        md, died, mx, calls = 1, False, 1, 0
+        for line in open(f):
+            try:
+                t = json.loads(line)
+            except ValueError:
+                continue
+            md = max(md, t.get("max_dlvl_reached") or t.get("dlvl") or 1)
+            calls = max(calls, int(t.get("skill_calls") or 0))
+            st = t.get("status")
+            if isinstance(st, dict):
+                if st.get("hitpoints") == 0:
+                    died = True
+                mx = max(mx, st.get("experience_level") or 1)
+        out.append((md, died, mx, calls))
+    return out
+```
+
+Then update every unpacking site of `_trace_rollouts(...)` from 3-tuples to 4-tuples, and add a
+`turns_used` column (mean of the fourth element) to the table renderer next to `Alive@cap`.
+
+- [ ] **Step 6: Run tests**
+
+Run: `pytest tests/test_cli_aggregate.py -v`
+Expected: 1 passed
+
+- [ ] **Step 7: Smoke every arm before fanning out**
+
+```bash
+for arm in control codex prime_agent; do
+  tools/cli_harness_eval/launch_cell.sh "$arm" "outputs/cli_harness_eval/smoke/$arm" 20 1
+done
+```
+Expected per arm: engine reached, workspace seeded (CLI arms), observation rendered, `skill_calls > 0`,
+`move` executed = 0. **All three must pass before any n=16 run.**
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add tools/cli_harness_eval/launch_cell.sh configs/endpoints.toml \
+        tools/encoding_eval/aggregate_run.py tests/test_cli_aggregate.py
+git commit -m "feat(cli-eval): arm launcher, turns_used aggregation, GLM team billing"
+```
+
+---
+
+## Run procedure (after Task 11)
+
+1. Smoke all three arms at n=1 / 20 calls. Any failure stops the fan-out.
+2. Fan out: `launch_cell.sh <arm> outputs/cli_harness_eval/run1/<arm> 150 16` per arm.
+3. Aggregate: `PYTHONPATH=.:environments/nethack python tools/encoding_eval/aggregate_run.py outputs/cli_harness_eval/run1`.
+4. Verify: independent pass over all 48 traces against the A1–A16 contract in
+   `docs/experiments/exp1-trace-assumptions.md`, plus `move` executed = 0 in every trace.
+   For the CLI arms additionally audit for **out-of-band state reads** (spec §9.4): grep each
+   agent's shell transcript for reads outside the workspace — any hit on the engine, level files,
+   or repo invalidates that rollout. The workspace is the only legitimate filesystem.
+5. Report paired per-seed deltas and an exact sign test across the 16 seeds. Marginal SEs at n=16
+   are wide; never quote them alone.
+
+---
+
+### Task 12: Port `nethack_v1.py` to the verifiers 0.2.x v1 API
+
+**Runs BEFORE Task 9.** Added 2026-07-25 after Task 8 discovered a plan defect: Task 8 Step 1
+assumed "upgrade until `codex` appears" was a version bump. It is an API port. Decision recorded:
+port to 0.2.x rather than pin to 0.1.14.
+
+**Why this is not optional.** No verifiers release has both a built-in Codex harness and a working
+`nethack_v1.py`. Verified: `0.2.0` is the *only* release between `0.1.14` and `0.2.1`, and it has
+the same break. 0.2.x is where the built-in `codex`, `claude_code`, `bash`, and `null` harnesses
+live, and where PR #1985's external-harness loader applies.
+
+**Files:**
+- Modify: `environments/nethack/nethack_v1.py`
+- Modify: `environments/nethack/tests/test_v1_taskset.py`, `test_toolset_self_dispatch.py`,
+  `test_call_budget.py` (construction sites only — assertions must keep their meaning)
+- Modify: `environments/nethack/pyproject.toml` (verifiers floor)
+
+**Interfaces:**
+- Consumes: `_apply_tool_call` (Task 4), `_self_dispatching` / `_terse` (Task 5), the call budget
+  (Task 6). Their *logic* is independent of the constructor shape and must survive unchanged.
+- Produces: `load_taskset`, `load_harness`, `load_v1_environment` with unchanged names and
+  meanings, built on the 0.2.x API.
+
+**What changed in 0.2.x (verified against the installed package, not guessed):**
+
+| 0.1.14 | 0.2.x |
+|---|---|
+| `vf.Toolset(tools=…, setups=…, cleanups=…, scope=…)` | `Toolset(config)`; subclasses `ServerBase`; config fields `colocated`, `runtime`, `url` |
+| `vf.Env(taskset=…, harness=…)` | `Environment(config)`; `EnvConfig(taskset, harness, timeout, retries, max_turns, max_input_tokens)` |
+| `vf.Taskset(source=…, rewards=…, toolsets=…)` | `Taskset(config)` |
+| `vf.Harness(...)` | `Harness(config)` |
+| `verifiers.v1.packages.harnesses` | `verifiers.v1.harnesses` |
+
+**Toolsets are now servers.** `Toolset(ServerBase)` with `colocated`/`runtime`/`url` is how 0.2.x
+exposes tools over the wire — which is the mechanism Tasks 9/10 need for MCP. Read the installed
+source and follow its intended pattern; do not fight it back into the 0.1.14 shape.
+
+- [ ] **Step 1: Read the 0.2.x source and write down the target shape**
+
+```bash
+V=.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1
+sed -n 1,80p $V/toolset.py; sed -n 1,60p $V/taskset.py; sed -n 1,60p $V/env.py
+sed -n 1,60p $V/harnesses/codex/harness.py
+```
+
+Record in the report: how a Toolset declares its tools, how setup/cleanup hooks attach, how a
+Taskset declares rewards and attaches toolsets, and how `Environment` is constructed. Cite
+file:line. This step is the task — the edits follow from it.
+
+- [ ] **Step 2: Run the v1 suite to capture the exact failures**
+
+Run: `PYTHONPATH="$ENG:.:environments/nethack" .venv-cli-eval/bin/python -m pytest environments/nethack/tests/ tests/ -q`
+Expected: 10 failures, all in the v1 path. That list is your worklist.
+
+- [ ] **Step 3: Port `_build_toolset`**
+
+Preserve exactly: per-rollout engine lifecycle (setup calls the v0 `setup_state`), the cleanup that
+drops non-serializable state, `self_dispatch`, `obs_mode`, the call budget, and the explicit
+`__signature__` that exposes `state` for runtime injection.
+
+- [ ] **Step 4: Port `load_taskset` / `load_harness` / `load_v1_environment`**
+
+Keep the names and the `NetHackTasksetConfig` fields (`self_dispatch`, `obs_mode`,
+`max_skill_calls`, `explicit_seeds`, `task_spec`, …). Callers in Task 9's TOML depend on them.
+
+- [ ] **Step 5: Port `NetHackHarness`**
+
+`base_program` reproduces the v0 rollout loop. If 0.2.x changed the harness authoring contract
+(e.g. `launch(ctx, trace, runtime, endpoint, secret, mcp_urls)`), adapt to it and say so in the
+report — that signature is what Task 10's external plugin must also implement.
+
+- [ ] **Step 6: Update the test construction sites**
+
+Only the construction changes. Every assertion must keep its meaning — especially
+`test_call_budget.py`'s refusal semantics and `test_toolset_self_dispatch.py`'s signature test.
+Weakening an assertion to make it pass is a defect, not a port.
+
+- [ ] **Step 7: Green the suite**
+
+Run: `PYTHONPATH="$ENG:.:environments/nethack" .venv-cli-eval/bin/python -m pytest environments/nethack/tests/ tests/ -q`
+Expected: 0 failures. Baseline on 0.1.14 was 166 passing; report the new count and account for any
+difference.
+
+- [ ] **Step 8: Update the verifiers floor and commit**
+
+```bash
+git add environments/nethack/nethack_v1.py environments/nethack/tests/ environments/nethack/pyproject.toml
+git commit -m "port(nethack_v1): move the v1 taskset to the verifiers 0.2.x API"
+```
+
+---
+
+### Task 13: Claude Code arm — boot the MCP path before anything else
+
+**Supersedes Task 9.** The Codex arm is dropped (`codex/harness.py:50` `SUPPORTS_MCP = False # TODO`,
+still false on `main` and in `0.2.2.dev31`); Claude Code replaces it.
+
+**Restructured boot-first.** Research found **no worked example anywhere** of a CLI-agent harness
+paired with a stateful custom toolset: verifiers' own e2e tests pair stateful `Toolset`s only with
+the in-house `null` harness, and the single test running `claude-code`/`codex` uses a tool-less
+shell task. `prime-environments` has zero hits. So the risk here is not config polish — it is
+whether the combination boots at all. Prove it plays before writing arm configs.
+
+**Files:**
+- Create: `tools/cli_harness_eval/configs/{control,claude_code}.toml`
+- Create: `tools/cli_harness_eval/configs/README.md` (the runtime + MCP-exposure account)
+- Create: `tests/test_tools_scripts.py` (pytest wrapper over the `tools/` verification scripts)
+- Create: `environments/nethack/tests/test_cross_route_trace_equivalence.py`
+
+**Interfaces:**
+- Consumes: `load_taskset` / `load_harness` / `load_v1_environment` and `NetHackTasksetConfig`
+  (Task 12); `build_workspace` (Task 7); the toolset referee (Task 6).
+- Produces: two loadable arm configs and a proven-booting MCP path for Task 10 to copy.
+
+- [ ] **Step 1: Determine the runtime — this gates everything**
+
+This cluster has **no Docker or Podman**; only `apptainer`/`singularity`. Upstream PR #2102
+(merged 2026-07-22) makes third-party harnesses refuse the bare subprocess runtime via
+`NEEDS_CONTAINER`; our pinned 0.2.1 carries that check only at *Task* level (`task.py:227`,
+`env.py:242`), so subprocess may still work here.
+
+Establish which of these is true, with evidence:
+(a) `claude_code` runs under the subprocess runtime on 0.2.1;
+(b) it requires a container → we must use a Prime remote sandbox (`PrimeConfig`), which costs
+    credits and needs the funded team id.
+
+```bash
+grep -rn "NEEDS_CONTAINER\|SubprocessConfig\|class .*Runtime" \
+  .venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/runtimes/*.py | head -20
+```
+
+Record the answer in `configs/README.md`. If (b), **stop and report** — that is a cost decision
+for the human partner, not one to make silently.
+
+- [ ] **Step 2: Boot the tool server standalone and list what it advertises**
+
+Before involving any CLI, prove the toolset serves. Start the NetHack toolset as an MCP server and
+enumerate its tools. Confirm the names match what Claude Code will see —
+`mcp__<TOOL_PREFIX>__<method_name>` — and that **`move` is absent** and
+`explore_and_descend` present. Record the exact `TOOL_PREFIX` and URL shape.
+
+- [ ] **Step 3: One real rollout, small budget**
+
+`n=1`, `explicit_seeds=[0]`, `max_skill_calls=20`, `character="Val-hum-neu-fem"`,
+`task_spec="full_nle"`, model `z-ai/glm-5.2`.
+
+**This is the acceptance gate for the whole experiment.** All of these must hold:
+- the workspace was seeded (`AGENTS.md`, `wiki/`, `memory/objective.md` present);
+- the agent issued at least one `mcp__…` tool call;
+- `skill_calls` **accumulated over the state channel** (not stuck at 0 or 1 — the toolset-side
+  referee is a novel pattern with no upstream validation, so prove it on real data);
+- a rendered observation came back as the tool result;
+- `move` executed = 0;
+- the trace file was written.
+
+If GLM 5.2 hangs rather than erroring, suspect billing — see Task 11 Step 1, and stop.
+
+- [ ] **Step 4: Cross-route trace equivalence (design doc §10, deferred here from Task 12)**
+
+One rollout per route (legacy-bridge control vs native toolset), same seed, same forced skill
+sequence. Assert equality of `reward`, the four reward metrics, `num_turns`, and `stop_condition`.
+The engine-state half already exists in `environments/nethack/tests/test_cross_route_equivalence.py`.
+
+- [ ] **Step 5: Put `tools/` under a test runner**
+
+Nothing re-runs the `tools/` verification scripts, which is exactly how a one-line dataset change
+silently disabled `_verify_gate.py` — the experiment's own acceptance check. Add
+`tests/test_tools_scripts.py` shelling out to `tools/encoding_eval/_verify_gate.py` and
+`tools/exp1d_obs/verify_1d.py`, asserting exit 0.
+
+- [ ] **Step 6: Write the two arm configs**
+
+`control.toml` (legacy bridge; `self_dispatch` unset) and `claude_code.toml`
+(native taskset, `self_dispatch=true`, `obs_mode="push"`, `max_skill_calls=150`,
+`explicit_seeds=[0..15]`, `character="Val-hum-neu-fem"`, model `z-ai/glm-5.2`). Both must pin the
+same seeds, model, and character — Task 11's `test_arm_configs.py` asserts exactly that.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add tools/cli_harness_eval/configs/ tests/test_tools_scripts.py \
+        environments/nethack/tests/test_cross_route_trace_equivalence.py
+git commit -m "feat(cli-eval): Claude Code arm — proven MCP boot, arm configs, tools/ under test"
+```
+
+---
+
+### Task 14: Scoring correctness — stop on death, and make the traces measurable
+
+**Splits from Task 11** (with Task 15). Everything here is env/taskset-side and touches **all three
+arms**, including the control — so treat arm-0 fidelity as the binding constraint.
+
+**Why this exists.** The committed arm-2 acceptance rollout died at call 6 and was scored
+`died = 0`, with 7 of its 12 calls draining into a tombstone `--More--`. Two detectors both missed:
+`_detect_terminal_outcome` reads the raw obs and did not match, and the fallback at
+`nethack.py:1024-1026` waits on NLE's `terminated`, which never arrives because NetHack's death
+sequence parks on a prompt chain the 8-iteration auto-dismiss loop (`nethack.py:955`) cannot
+outlast. Meanwhile `hp == 0` sits in the status of every turn and nothing consults it — even though
+`tools/encoding_eval/aggregate_run.py` already detects death exactly that way when post-processing.
+
+**Files:**
+- Modify: `environments/nethack/nethack.py` (terminal detection in `_apply_tool_call`)
+- Modify: `environments/nethack/nethack_harness/helpers.py` (`_write_trace_entry` — timestamps)
+- Modify: `tools/cli_harness_eval/configs/{control,claude_code}.toml` (`trace_dir`)
+- Test: `environments/nethack/tests/test_death_termination.py`
+
+**Interfaces:**
+- Produces: rollouts terminate at `hp == 0`; every trace line carries a monotonic timestamp;
+  `trace_dir` absolute in all three arm configs. Task 15's aggregator consumes all three.
+
+- [ ] **Step 1: Write the failing test**
+
+Drive a rollout to `hp == 0` (set it via the env's `modify` hook — `modify={"hp": 1}` then take
+damage, or poke the state directly) and assert: `state["died"] is True`, `state["terminated"] is
+True`, and that a subsequent tool call does **not** step the engine (turn counter frozen).
+
+- [ ] **Step 2: Run it, confirm it fails**
+
+Expected: `died` stays False and the engine keeps accepting calls — the current behaviour.
+
+- [ ] **Step 3: Terminate on zero HP**
+
+In `_apply_tool_call`, after `_detect_terminal_outcome(last_obs, state)` and beside the existing
+NLE-`terminated` fallback, add an HP check. `hitpoints == 0` in the shaped status is authoritative
+for death; set `state["died"] = True`, `state["terminated"] = True`, and record
+`death_dlvl`. Keep the existing detectors — this is an additional path, not a replacement.
+
+**Arm-0 constraint:** the control runs this same code through the legacy bridge. Confirm
+`environments/nethack/tests/test_golden_parity.py` and `test_v1_taskset.py` still pass, and say in
+the report whether any previously-passing rollout now ends earlier. Ending earlier on a dead
+character is the *intent*, but it must be a stated, measured change, not a silent one.
+
+- [ ] **Step 4: Add per-turn timestamps**
+
+`_write_trace_entry` currently emits no time field, so the latency growth curve cannot be measured
+(verified: zero timestamped lines in both committed acceptance NDJSONs). Add a monotonic wall-clock
+field to every trace line. Task 15 uses it to report seconds/call and to detect superlinear growth
+as context grows.
+
+- [ ] **Step 5: Make `trace_dir` absolute in the remaining two configs**
+
+`prime_agent.toml` was fixed in Task 10. `control.toml` and `claude_code.toml` still hold relative
+paths, which resolve inside the tool server's `/tmp/vf-<id>` workdir and are deleted at teardown
+**silently** — so the per-turn NDJSON would be lost on the real runs.
+
+- [ ] **Step 6: Green the suite and commit**
+
+```bash
+git add environments/nethack/nethack.py environments/nethack/nethack_harness/helpers.py \
+        environments/nethack/tests/test_death_termination.py \
+        tools/cli_harness_eval/configs/control.toml tools/cli_harness_eval/configs/claude_code.toml
+git commit -m "fix(nethack): terminate on death; timestamp traces; absolute trace_dir"
+```
+
+---
+
+### Task 15: Launcher, aggregation, and the cross-arm results table
+
+**Splits from Task 11** (with Task 14). This is the last build task before the smoke runs.
+
+**Files:**
+- Create: `tools/cli_harness_eval/launch_cell.sh`
+- Modify: `tools/encoding_eval/aggregate_run.py` (or a thin `tools/cli_harness_eval/aggregate.py`)
+- Test: `tests/test_arm_configs.py`, `tests/test_cli_aggregate.py`
+
+- [ ] **Step 1: Arm-config parity test**
+
+Assert all three TOMLs pin identical `model` (`z-ai/glm-5.2`), `explicit_seeds` `[0..15]`,
+`character` `Val-hum-neu-fem`, `task_spec` `full_nle`, `skill_set` `netplay`, and that every
+`trace_dir` is absolute. **Note the configs use different key shapes** — control nests under
+`[args]`, the CLI arms under `[taskset]` — so read both.
+
+- [ ] **Step 2: The launcher**
+
+`launch_cell.sh <ARM> <OUTDIR> [MAX_CALLS] [N]`, resolving `tools/cli_harness_eval/configs/<ARM>.toml`,
+refusing an unknown arm, and echoing the resolved settings before running. Mirrors
+`tools/encoding_eval/launch_cell.sh` so the fixed factors cannot drift between arms.
+
+- [ ] **Step 3: Aggregation — the columns that survive scrutiny**
+
+Per arm over its rollouts:
+- **Depth** — `max_dlvl_reached` (mean ± SE). The primary axis.
+- **BALROG %** — via `nethack_harness.prompt.balrog.balrog_progress`.
+- **Died** — **must NOT use `metrics.died`** on the CLI arms. Task 10's artifact showed a rollout
+  dead from turn 6 scored `died = 0`. Derive from `hitpoints == 0` in the trace, as
+  `aggregate_run.py:51` already does. Task 14 fixed live termination, but historical traces and any
+  path the fix misses still need the trace-derived value.
+- **Actions used** — normalize on **measured** counts, never nominal 150: `total_tool_calls` for the
+  control, `skill_calls` for the CLI arms. The arms are not budget-matched (control burns turns on
+  no-tool-call replies and drops extra parallel tool calls; the CLI arms get exactly 150 executed
+  skills). Report the measured number, and state the asymmetry in the table's notes.
+- **Cost per rollout** — the cross-arm efficiency column. Compute from token counts for the two
+  intercepted arms using one GLM 5.2 price table. The Prime Agent arm's model calls are **not**
+  intercepted, so its token split is unavailable — mark it so rather than estimating. Do not invert
+  cost into tokens: one equation, two unknowns, and prompt caching breaks it further.
+- **Seconds per call** — from the trace `t_wall` field, reported as first-half vs second-half means
+  so latency growth is visible. Measured on the acceptance artifacts: ~17s → ~37s over 12-20 calls.
+- **Post-death drain** — calls issued after `hitpoints` first hits 0. Wasted budget and spend; it
+  should be ~0 after Task 14 and is the regression signal if it is not.
+
+- [ ] **Step 4: Decide what `outputs/` is tracked**
+
+Four untracked `outputs/` trees exist from the proving runs. Acceptance artifacts under
+`tools/cli_harness_eval/acceptance/` are committed deliberately; bulk run output should be
+gitignored. Make it explicit either way.
+
+- [ ] **Step 5: Green the suite and commit**
+
+---
+
+### Task 16: Vendor NetPlay's real skill layer
+
+**Decided by the human partner: bite-for-bite identical NetPlay code**, not a reimplementation.
+
+**Why.** Research established our 18-tool set is not NetPlay's action surface: NetPlay exposes ~31
+skills, we never implement 20 of them, 6 of ours have no NetPlay counterpart, and the shared names
+diverge semantically — our `attack(direction)` is a bump (`skills.py:330` is literally
+`move(...)`), while NetPlay's `melee_attack(x,y)` pursues a target until it dies; our
+`explore_and_descend` caps its search, while NetPlay's `explore_level` runs until exploration is
+provably exhausted. Those two gaps plausibly explain why 8 of 16 exp1 rollouts never left dlvl 1.
+
+**Feasibility, verified — this is smaller than it first looked.** `netplay/nethack_agent/skills.py`
+is 696 lines with **zero** `autoascend` references; autoascend is vendored in that repo but the
+LLM-facing skill layer does not use it. Imports are `netplay.*`, `nle.env`, `nle.nethack`, `numpy`.
+Both licenses are **MIT** (`LICENSE`, `autoascend/LICENSE`), so vendoring with attribution is clean.
+
+**Source:** `https://github.com/CommanderCero/NetPlay`
+
+**The only real adaptation is the engine seam.** They import `from nle.env import NLE` and
+`from nle.nethack import actions, glyph_is_pet`; we run our own fork behind `nethack_core`, and
+`nle` is not installed. `nethack_core.actions` already mirrors NLE's enums (`Command`,
+`CompassDirection`, `CompassDirectionLonger`, `MiscAction`, `MiscDirection`, `TextCharacters`).
+
+- [ ] **Step 1: Vendor the skill layer verbatim**
+
+Copy under `environments/nethack/vendor/netplay/`, preserving both `LICENSE` files and a
+`PROVENANCE.md` recording the upstream repo, commit SHA, and what was changed:
+`netplay/nethack_agent/{skills,pathfinding,tracking,describe,agent,descriptors,skill_selection}.py`,
+`netplay/nethack_utils/{glyphs,monster,monflag,screen_symbols,nle_wrapper}.py`,
+`netplay/core/{skill,skill_repository,descriptor}.py`.
+**Do not rewrite logic.** Adapt imports only; every behavioural line stays as upstream wrote it.
+
+- [ ] **Step 2: Resolve the `nle` dependency**
+
+Prefer installing `nle` into `.venv-cli-eval` purely for its constants (`nle.nethack.actions`,
+`glyph_is_pet`) if that works without pulling a second live engine. If it does not, write a thin
+`nle` shim re-exporting the `nethack_core` equivalents. Whichever route, record why. The env seam
+(`NLE.step`, observation access) binds to our `NetHackCoreEnv`.
+
+- [ ] **Step 3: Expose them as a new skill set — do not replace the existing one**
+
+Register the ported skills in `nethack_harness/tools/skills.py` behind
+`skill_set="netplay_true"`, leaving the current `netplay` set untouched. That keeps the three
+proven arms runnable and lets us A/B the action surface deliberately.
+Cover: `ALL_COMMAND_SKILLS`, `set_avoid_monster_flag`, `melee_attack`, `explore_level`, `move_to`,
+`go_to`, `press_key`, `type_text` (per `netplay/__init__.py:9-18`).
+
+- [ ] **Step 4: Prove one skill end-to-end**
+
+`melee_attack` and `explore_level` are the two that matter. Drive each against a real engine on a
+pinned seed and assert it moves the game — not a mock.
+
+- [ ] **Step 5: Keep the suite green**
+
+The 208 existing tests must still pass; `.venv-cli-eval` stays stock apart from any deliberate
+`nle` install, which must be recorded.
+
+---
+
+### Task 17: Repair the observation layer
+
+**Goal stated by the human partner: reach parity with or beat NetPlay/BALROG. Every bug below must
+be caught by a regression test that fails before the fix.** A fix without a failing-first test does
+not count as done — this class of defect survived an entire prior experiment undetected.
+
+Source: `.superpowers/sdd/2026-07-25-cli-harness-eval/research-prompt-quality.md`.
+
+These live in `nethack_harness/prompt/rendering.py` and `nethack_core`'s extractors, shared by
+**all three arms**, so `test_golden_parity.py` and `test_v1_taskset.py` must stay green and any
+behaviour change to the control must be stated and quantified.
+
+- [ ] **Bug 1 (highest impact) — the coordinate frames disagree by one row.**
+
+`VISIBLE FEATURES` emits **tty-row** coordinates while `Pos:` and every skill (`move_to`,
+`a_star`, `descend`) use **map** coordinates, which are tty-row minus one. Verified on the
+committed artifact `tools/cli_harness_eval/acceptance/task13_claude_code_seed0.turns.ndjson`
+(turn 2):
+
+```
+"stairs UP at (50,18)"  ->  raw_grid[18][50] == '<'   # tty frame
+"Pos: (75,13)"          ->  raw_grid[14][75] == '@'   # map frame (tty-1)
+```
+
+So an agent that reads `stairs DOWN at (x,y)` off the prompt and calls `move_to(x, y)` targets one
+row **below** the stairs. Unify on the map frame (`extract_visible_features` emitting `y-1`, or the
+equivalent at the render seam — pick one and make it the single source of truth).
+
+**Required test:** for every feature the renderer emits as `<name> at (x,y)`, assert the underlying
+`chars[y][x]` is that feature's glyph. Drive it on a real seeded engine, not a fixture. This test
+makes the entire class of frame bug impossible to reintroduce.
+
+- [ ] **Bug 2 — `(` and `)` are swapped in `_FEATURE_GLYPHS`**, so weapons are reported as tools
+  and tools as weapons. Test: assert each glyph maps to its NetHack meaning.
+
+- [ ] **Bug 3 — the "only exit is a door" hint is routinely false.** The `re.search` sees only the
+  first of three coordinates, so the hint fires when other exits exist. Test: a room with multiple
+  exits must not produce the single-exit hint.
+
+- [ ] **Bug 4 — seven sites advertise `move`, which `skill_set="netplay"` does not publish.** The
+  agent is told to use a tool it cannot call (exp1 measured 232 rejected `move` attempts under
+  ASCII). Remove or gate every mention so the advertised surface matches the published surface.
+  **Test:** every tool named in the rendered system prompt must exist in the exposed set for that
+  `skill_set` — a generic assertion, so it also catches future drift.
+
+- [ ] **Bug 5 — `Character: unknown (unknown, unknown)`** persists all rollout despite
+  `character="Val-hum-neu-fem"` being pinned. The agent never learns it is a Valkyrie. Test:
+  a pinned character surfaces in the rendered observation.
+
+- [ ] **Bug 6 — monsters are unnamed and have no distance/bearing.** We emit a bare `B`; NetPlay
+  and BALROG emit species plus distance. `extract_hostiles_in_sight` already carries the glyph
+  data. Test: a known monster renders with its species name.
+
+- [ ] **Bug 7 — closed-loop skills have runaway budgets.** `explore_and_descend` spends 400
+  in-game steps per call (three calls returned 0 floors: ~1,600 game turns to Dlvl 3, by which
+  point the hero is Weak from hunger), and a single `move_to` toward an unreachable tile consumed
+  **611 seconds** of wall-clock in the smoke2 prime_agent rollout. Add a step/time bound and a
+  fast unreachable-target exit. **Test:** `move_to` toward an unreachable tile returns promptly
+  and reports failure rather than churning.
+
+- [ ] **Verification: measure, do not assume.** After the fixes, re-run
+  `tools/cli_harness_eval/run_sweep.sh smoke3 20 1` and compare depth and BALROG % against
+  smoke2's table (`control 3.00 / claude_code 1.00 / prime_agent 2.00`). Report the delta. n=1 is
+  noise, so do not claim improvement from it — the claim to support is only that nothing regressed
+  and the coordinate assertions now hold on live data.
+
+**Note for the writeup:** exp1's published numbers were produced with Bug 1 live. Its
+encoding-ranking conclusions may still hold (the bug is encoding-independent), but its absolute
+depths understate what the harness can do.
+
+---
+
+### Task 18: Strip to BALROG-minimal, and clamp the tool surface
+
+**Why.** `research-sota-methods.md` established our prompt hypothesis backwards. BALROG's entire
+objective scaffolding is two sentences — *"Explore the environment to find the stairs down to the
+next level."* / *"Your goal is to get as far as possible in the game."* — and
+`get_instruction_prompt(task=None)` **ignores** its `task` argument; the progression metric is never
+shown to the agent. NetPlay's default objective is `"Win the game."` **We already give more goal
+structure than either**, and NetPlay's own ablation moved depth **2.60 → 2.00** when tactical goal
+text was added. More scaffolding is measurably worse.
+
+The trace analyses agree from the other side: across 1,173 Claude Code calls, `recall` and
+`pin_objective` were **never** called and the wiki tools twice. The scaffolding is unused overhead.
+
+- [ ] **Step 1 — reduce `SYSTEM_PROMPT` to the factual minimum.**
+
+Keep only what the agent cannot derive: the `=== COORDINATES ===` frame paragraph (hard-won in
+Task 17), the glyph key, and the action list. **Delete** the STRATEGY PRIMER prose, the
+DESCEND ASAP section, the STAY ALIVE sermon, and the pitfalls list. Append BALROG's two objective
+sentences verbatim in place of our pinned-objective machinery.
+
+Keep a copy of the old prompt as `SYSTEM_PROMPT_VERBOSE` so the A/B is one config flag, not a
+`git revert`. **Test:** the rendered prompt is under a stated character budget and contains no
+strategy prose; both variants still name only tools that the active `skill_set` publishes (the
+generic assertion from Task 17 Bug 4).
+
+- [ ] **Step 2 — drop the journal and hint blocks for the CLI arms.**
+
+Per the human partner: Claude Code and Prime Agent manage their own reasoning and memory
+internally; our `=== JOURNAL ===` block, the `HINT ===` ladder, and the `add_note`/`recall`/
+`pin_objective` tools are redundant scaffolding for them. Gate them off for `self_dispatch=True`
+arms; the control keeps them (it is the v0 baseline and must not drift). **Test:** a self-dispatch
+rendered observation contains no JOURNAL or HINT block; a control one still does.
+
+- [ ] **Step 3 — clamp Claude Code's shell.**
+
+Set `disabled_tools = ["Bash"]` in `claude_code.toml`. The arm made **zero** Bash/Edit/Read calls
+across all five run1 rollouts, so this costs nothing measurable and removes the out-of-band path.
+Leave `Read` so the workspace (`wiki/`, `memory/`) stays reachable — that is the capability match
+for the control's wiki tools. **Test:** the rendered `--disallowedTools` argv contains `Bash`.
+
+- [ ] **Step 4 — Prime Agent: document that it cannot be clamped, and why.**
+
+Its only tool is `ipython`, a full Python interpreter with no denylist — in run1 it reached
+`glob('/scratch/**', recursive=True)` and printed `NETHACK_MCP_TOKEN` into its own trace. There is
+no config that prevents this. Record it in `configs/README.md` as a **known unenforced constraint**
+with the apptainer follow-up named (this cluster has `apptainer`/`singularity` but no Docker).
+Do **not** pretend a config fixes it.
+
+- [ ] **Step 5 — rotate and re-scope the secret handling.** Add `outputs/**/*.log` to
+`.gitignore` (a run1 log currently contains the leaked token and is NOT ignored), and confirm no
+tracked file contains it.
+
+### Task 19: Diagnose the mid-action cutoffs and the stray `^M`
+
+- [ ] **The cutoffs.** Three of five Prime Agent rollouts ended `agent_completed` **mid-action, on
+a tool call that never received a response** — no completion text, one still hunting dlvl 1's
+stairs. Budgets were nowhere near exhausted (107-130 of 400 calls; 34-42 min against a 7200 s
+timeout). The only invariant is wall-time, suggesting an internal Prime Agent session/idle limit.
+**Prove or disprove it**, and if it is a configurable limit, raise it. A clean negative is a
+result — say so rather than guessing.
+
+- [ ] **The stray `^M`.** `Unknown command '^M'` appeared 32× in one rollout and 12× in another —
+a carriage return left in NetHack's input buffer after certain `move_to` calls. The agent invented
+its own workaround (*"call engrave_elbereth to unstick the game"*) and burned an 18-turn streak on
+it. Do **both**: find why the CR is emitted and stop it, and make the engine swallow a stray CR as
+a no-op so it can never again surface as an "unknown command" to the agent. **Test:** a `move_to`
+sequence that previously left a CR no longer produces `Unknown command`.

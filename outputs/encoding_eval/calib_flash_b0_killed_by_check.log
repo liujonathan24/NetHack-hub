@@ -1,0 +1,194 @@
+[calib] model=google/gemini-3-flash-preview variant=B0 compact_obs=false skill_set=netplay_true
+[calib] max_turns=400 n=5 seeds=[0,1,2,3,4]
+[calib] out=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0
+2026-07-26 12:24:13 - verifiers.utils.eval_utils - INFO - Automatically determined concurrency=5
+2026-07-26 12:24:13 - verifiers.utils.eval_utils - INFO - Using num_workers=5 env server worker(s), per-worker concurrency: 1 (total 5)
+2026-07-26 12:24:13 - verifiers.serve.client.env_client.ZMQEnvClient - INFO - Waiting for env server nethack (tcp://127.0.0.1:32821) to become healthy (timeout=10m)
+2026-07-26 12:24:15 - verifiers.serve.server.env_server.ZMQEnvServer - INFO - Initializing ZMQEnvServer to serve nethack (env_args={'task_spec': 'full_nle', 'variant': 'B0', 'compact_obs': False, 'skill_set': 'netplay_true', 'map_detail': 'full', 'max_turns': 400, 'character': 'Val-hum-neu-fem', 'explicit_seeds': [0, 1, 2, 3, 4], 'trace_dir': '/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace'}, extra_env_kwargs={'concurrency': 1}, num_workers=5)
+2026-07-26 12:24:15 - verifiers.serve.server.env_server.ZMQEnvServer - INFO - ZMQEnvServer started on tcp://127.0.0.1:32821
+2026-07-26 12:24:15 - verifiers.serve.server.env_router.EnvRouter - INFO - Started worker (id=0, name=nethack-0, address=ipc:///tmp/vf-e84b5b3845bd-nethack-0, pid=1730264)
+2026-07-26 12:24:15 - verifiers.serve.server.env_router.EnvRouter - INFO - Started worker (id=1, name=nethack-1, address=ipc:///tmp/vf-e84b5b3845bd-nethack-1, pid=1730265)
+2026-07-26 12:24:15 - verifiers.serve.server.env_router.EnvRouter - INFO - Started worker (id=2, name=nethack-2, address=ipc:///tmp/vf-e84b5b3845bd-nethack-2, pid=1730266)
+2026-07-26 12:24:15 - verifiers.serve.server.env_router.EnvRouter - INFO - Started worker (id=3, name=nethack-3, address=ipc:///tmp/vf-e84b5b3845bd-nethack-3, pid=1730267)
+2026-07-26 12:24:15 - verifiers.serve.server.env_router.EnvRouter - INFO - Started worker (id=4, name=nethack-4, address=ipc:///tmp/vf-e84b5b3845bd-nethack-4, pid=1730268)
+2026-07-26 12:24:16 - verifiers.serve.client.env_client.ZMQEnvClient - INFO - Env server nethack (tcp://127.0.0.1:32821) became healthy (was startup)
+2026-07-26 12:24:16 - verifiers.serve.client.env_client.ZMQEnvClient - INFO - Env server nethack (tcp://127.0.0.1:32821) is healthy
+2026-07-26 12:24:16 - verifiers.envs.environment.NetHackVerifiersEnv - WARNING - eval_dataset is not set, falling back to train dataset
+2026-07-26 12:24:16 - verifiers.envs.environment.NetHackVerifiersEnv - INFO - Saving results to /scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/evals/nethack--google--gemini-3-flash-preview/90d06743
+Processing 5 groups (5 total rollouts):   0%|          | 0/5 [00:00<?, ?it/s, reward=?]2026-07-26 12:24:18 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 12:24:18 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 12:24:18 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 12:24:18 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 12:24:18 - verifiers.utils.env_utils - INFO - Loading environment: nethack
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using provided args: trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, variant=B0, skill_set=netplay_true, character=Val-hum-neu-fem, max_turns=400, explicit_seeds=[0, 1, 2, 3, 4], compact_obs=False, map_detail=full, task_spec=full_nle
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using default args: continual_lives=5, bootstrap_dir=None, sub_lm_model=None, history_keep_full=5, level_blob=None, refine=False, refine_interval=20, n_examples=256, belief_state_interval=25, summarize_and_reset=False, journal_render_max_chars=2000, history_drop_after=100, continual=False, interface='skill', refiner_model=None, cell_schema=None, refiner=None, tune=None, modify=None, seed=0, subgoal_proposer=None, sub_lm=None, pin_objective_on_setup=True
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using provided args: explicit_seeds=[0, 1, 2, 3, 4], map_detail=full, character=Val-hum-neu-fem, task_spec=full_nle, variant=B0, compact_obs=False, max_turns=400, trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, skill_set=netplay_true
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using default args: continual=False, journal_render_max_chars=2000, summarize_and_reset=False, refiner_model=None, continual_lives=5, cell_schema=None, refine_interval=20, refiner=None, level_blob=None, subgoal_proposer=None, refine=False, seed=0, tune=None, history_keep_full=5, bootstrap_dir=None, modify=None, sub_lm=None, history_drop_after=100, interface='skill', sub_lm_model=None, belief_state_interval=25, n_examples=256, pin_objective_on_setup=True
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using provided args: task_spec=full_nle, explicit_seeds=[0, 1, 2, 3, 4], trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, skill_set=netplay_true, compact_obs=False, max_turns=400, variant=B0, character=Val-hum-neu-fem, map_detail=full
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using default args: history_drop_after=100, history_keep_full=5, pin_objective_on_setup=True, cell_schema=None, sub_lm_model=None, refine=False, journal_render_max_chars=2000, seed=0, subgoal_proposer=None, refiner=None, sub_lm=None, continual=False, modify=None, refiner_model=None, level_blob=None, continual_lives=5, bootstrap_dir=None, summarize_and_reset=False, refine_interval=20, interface='skill', tune=None, n_examples=256, belief_state_interval=25
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using provided args: skill_set=netplay_true, character=Val-hum-neu-fem, explicit_seeds=[0, 1, 2, 3, 4], trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, compact_obs=False, variant=B0, task_spec=full_nle, max_turns=400, map_detail=full
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using default args: pin_objective_on_setup=True, n_examples=256, interface='skill', level_blob=None, cell_schema=None, seed=0, belief_state_interval=25, bootstrap_dir=None, continual_lives=5, refine=False, sub_lm_model=None, subgoal_proposer=None, sub_lm=None, history_keep_full=5, refiner_model=None, journal_render_max_chars=2000, refiner=None, refine_interval=20, modify=None, tune=None, continual=False, history_drop_after=100, summarize_and_reset=False
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-1 on ipc:///tmp/vf-e84b5b3845bd-nethack-1
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-1
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-0 on ipc:///tmp/vf-e84b5b3845bd-nethack-0
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-0
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-2 on ipc:///tmp/vf-e84b5b3845bd-nethack-2
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-2
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-3 on ipc:///tmp/vf-e84b5b3845bd-nethack-3
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-3
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using provided args: map_detail=full, explicit_seeds=[0, 1, 2, 3, 4], variant=B0, task_spec=full_nle, character=Val-hum-neu-fem, skill_set=netplay_true, trace_dir=/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/calib_flash_b0/trace, max_turns=400, compact_obs=False
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Using default args: sub_lm_model=None, interface='skill', history_drop_after=100, tune=None, continual_lives=5, belief_state_interval=25, cell_schema=None, journal_render_max_chars=2000, sub_lm=None, modify=None, n_examples=256, history_keep_full=5, refiner_model=None, bootstrap_dir=None, refine_interval=20, summarize_and_reset=False, seed=0, pin_objective_on_setup=True, level_blob=None, subgoal_proposer=None, refine=False, refiner=None, continual=False
+2026-07-26 12:24:19 - verifiers.utils.env_utils - INFO - Successfully loaded environment 'nethack'
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Initialized worker nethack-4 on ipc:///tmp/vf-e84b5b3845bd-nethack-4
+2026-07-26 12:24:19 - verifiers.utils.thread_utils - INFO - Scaled default executor and 0 registered executor(s) ()
+2026-07-26 12:24:19 - verifiers.serve.server.env_worker.EnvWorker - INFO - Starting worker nethack-4
+2026-07-26 12:24:25 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 0 (W0: ?, W1: ?, W2: ?, W3: ?, W4: ?)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=4ms max=12ms (n=100)
+  W0     | no stats yet
+  W1     | no stats yet
+  W2     | no stats yet
+  W3     | no stats yet
+  W4     | no stats yet
+2026-07-26 12:24:35 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 5 (W0: 1, W1: 1, W2: 1, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=12ms (n=200)
+  W0     | Lag: min=-0ms mean=8ms median=1ms p90=1ms p99=154ms max=343ms (n=92)
+  W1     | Lag: min=-0ms mean=3ms median=1ms p90=1ms p99=28ms max=166ms (n=97)
+  W2     | Lag: min=-0ms mean=6ms median=1ms p90=1ms p99=140ms max=181ms (n=94)
+  W3     | Lag: min=-0ms mean=4ms median=1ms p90=1ms p99=78ms max=111ms (n=96)
+  W4     | Lag: min=-0ms mean=4ms median=1ms p90=1ms p99=72ms max=99ms (n=96)
+2026-07-26 12:24:45 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 5 (W0: 1, W1: 1, W2: 1, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=12ms (n=300)
+  W0     | Lag: min=-0ms mean=13ms median=1ms p90=1ms p99=391ms max=735ms (n=176)
+  W1     | Lag: min=-0ms mean=10ms median=1ms p90=1ms p99=182ms max=1s (n=181)
+  W2     | Lag: min=-0ms mean=13ms median=1ms p90=1ms p99=275ms max=947ms (n=176)
+  W3     | Lag: min=-0ms mean=2ms median=1ms p90=1ms p99=68ms max=111ms (n=195)
+  W4     | Lag: min=-1ms mean=3ms median=1ms p90=1ms p99=72ms max=107ms (n=194)
+2026-07-26 12:24:55 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 5 (W0: 1, W1: 1, W2: 1, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=12ms (n=401)
+  W0     | Lag: min=-0ms mean=23ms median=1ms p90=1ms p99=729ms max=844ms (n=250)
+  W1     | Lag: min=-0ms mean=31ms median=1ms p90=1ms p99=1s max=1s (n=230)
+  W2     | Lag: min=-0ms mean=10ms median=1ms p90=1ms p99=220ms max=947ms (n=273)
+  W3     | Lag: min=-0ms mean=2ms median=1ms p90=1ms p99=48ms max=111ms (n=295)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=46ms max=107ms (n=294)
+2026-07-26 12:25:05 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 5 (W0: 1, W1: 1, W2: 1, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=12ms (n=501)
+  W0     | Lag: min=-0ms mean=17ms median=1ms p90=1ms p99=634ms max=844ms (n=349)
+  W1     | Lag: min=-1ms mean=33ms median=1ms p90=1ms p99=1s max=1s (n=301)
+  W2     | Lag: min=-1ms mean=8ms median=1ms p90=1ms p99=189ms max=947ms (n=369)
+  W3     | Lag: min=-0ms mean=1ms median=1ms p90=1ms p99=35ms max=111ms (n=394)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=44ms max=107ms (n=393)
+2026-07-26 12:25:15 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 5 (W0: 1, W1: 1, W2: 1, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=12ms (n=600)
+  W0     | Lag: min=-0ms mean=13ms median=1ms p90=1ms p99=519ms max=844ms (n=449)
+  W1     | Lag: min=-1ms mean=31ms median=1ms p90=1ms p99=1s max=1s (n=381)
+  W2     | Lag: min=-1ms mean=7ms median=1ms p90=1ms p99=165ms max=947ms (n=466)
+  W3     | Lag: min=-0ms mean=1ms median=1ms p90=1ms p99=9ms max=111ms (n=494)
+  W4     | Lag: min=-1ms mean=3ms median=1ms p90=1ms p99=45ms max=523ms (n=487)
+Processing 5 groups (5 total rollouts):  20%|██        | 1/5 [01:05<04:22, 65.59s/it, reward=?]Processing 5 groups (5 total rollouts):  20%|██        | 1/5 [01:05<04:22, 65.59s/it, reward=2]2026-07-26 12:25:25 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 5 (W0: 1, W1: 1, W2: 1, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=33ms (n=701)
+  W0     | Lag: min=-0ms mean=11ms median=1ms p90=1ms p99=482ms max=844ms (n=548)
+  W1     | Lag: min=-1ms mean=36ms median=1ms p90=1ms p99=1s max=1s (n=443)
+  W2     | Lag: min=-1ms mean=7ms median=1ms p90=1ms p99=166ms max=947ms (n=562)
+  W3     | Lag: min=-0ms mean=1ms median=1ms p90=1ms p99=3ms max=111ms (n=593)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=44ms max=523ms (n=586)
+2026-07-26 12:25:35 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 4 (W0: 1, W1: 1, W2: 0, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=33ms (n=801)
+  W0     | Lag: min=-1ms mean=9ms median=1ms p90=1ms p99=406ms max=844ms (n=648)
+  W1     | Lag: min=-1ms mean=30ms median=1ms p90=1ms p99=1s max=1s (n=540)
+  W2     | Lag: min=-1ms mean=6ms median=1ms p90=1ms p99=152ms max=947ms (n=661)
+  W3     | Lag: min=-1ms mean=1ms median=1ms p90=1ms p99=3ms max=111ms (n=692)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=38ms max=523ms (n=685)
+2026-07-26 12:25:46 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 4 (W0: 1, W1: 1, W2: 0, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=33ms (n=902)
+  W0     | Lag: min=-1ms mean=8ms median=1ms p90=1ms p99=254ms max=844ms (n=747)
+  W1     | Lag: min=-1ms mean=28ms median=1ms p90=1ms p99=1s max=1s (n=627)
+  W2     | Lag: min=-1ms mean=5ms median=1ms p90=1ms p99=147ms max=947ms (n=761)
+  W3     | Lag: min=-1ms mean=1ms median=1ms p90=1ms p99=2ms max=111ms (n=792)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=35ms max=523ms (n=784)
+2026-07-26 12:25:56 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 4 (W0: 1, W1: 1, W2: 0, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=33ms (n=1000)
+  W0     | Lag: min=-1ms mean=7ms median=1ms p90=1ms p99=143ms max=844ms (n=847)
+  W1     | Lag: min=-1ms mean=27ms median=1ms p90=1ms p99=1s max=1s (n=710)
+  W2     | Lag: min=-1ms mean=5ms median=1ms p90=1ms p99=140ms max=947ms (n=860)
+  W3     | Lag: min=-1ms mean=1ms median=1ms p90=1ms p99=1ms max=111ms (n=891)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=28ms max=523ms (n=884)
+2026-07-26 12:26:06 - verifiers.serve.server.env_router.EnvRouter - INFO - Active tasks: 4 (W0: 1, W1: 1, W2: 0, W3: 1, W4: 1)
+  Server | Lag: min=-1ms mean=0ms median=-0ms p90=1ms p99=1ms max=33ms (n=1000)
+  W0     | Lag: min=-1ms mean=6ms median=1ms p90=1ms p99=132ms max=844ms (n=946)
+  W1     | Lag: min=-1ms mean=26ms median=1ms p90=1ms p99=1s max=1s (n=795)
+  W2     | Lag: min=-1ms mean=4ms median=1ms p90=1ms p99=114ms max=947ms (n=960)
+  W3     | Lag: min=-1ms mean=1ms median=1ms p90=1ms p99=1ms max=111ms (n=991)
+  W4     | Lag: min=-1ms mean=2ms median=1ms p90=1ms p99=28ms max=523ms (n=983)
+Processing 5 groups (5 total rollouts):  20%|██        | 1/5 [01:52<07:30, 112.61s/it, reward=2]
+2026-07-26 12:26:09 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Cancelling 1 active tasks on worker nethack-1
+2026-07-26 12:26:09 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 12:26:09 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 12:26:09 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 12:26:09 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 12:26:09 - verifiers.utils.process_utils - INFO - Death pipe closed — parent is gone, sending SIGTERM to self
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-1
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Cancelling 1 active tasks on worker nethack-4
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Cancelling 1 active tasks on worker nethack-3
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-4
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-3
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-2
+Exception ignored in: <function ResourceTracker.__del__ at 0x14cfe0298360>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'
+Exception ignored in: <function ResourceTracker.__del__ at 0x153db02cc360>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'
+Exception ignored in: <function ResourceTracker.__del__ at 0x15467cafc360>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'
+Exception ignored in: <function ResourceTracker.__del__ at 0x14c7439e0360>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Cancelling 1 active tasks on worker nethack-0
+2026-07-26 12:26:09 - verifiers.serve.server.env_worker.EnvWorker - INFO - Shut down worker nethack-0
+Exception ignored in: <function ResourceTracker.__del__ at 0x1509ebe20360>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'
+2026-07-26 12:26:09 - verifiers.serve.server.env_router.EnvRouter - INFO - Router shut down
+2026-07-26 12:26:09 - verifiers.serve.server.env_server.ZMQEnvServer - INFO - ZMQEnvServer shut down
+Exception ignored in: <function ResourceTracker.__del__ at 0x15345b380360>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'
+Exception ignored in: <function ResourceTracker.__del__ at 0x14d6494d2e80>
+Traceback (most recent call last):
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 80, in __del__
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 89, in _stop
+  File "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/.venv-cli-eval/lib/python3.12/site-packages/multiprocess/resource_tracker.py", line 102, in _stop_locked
+AttributeError: '_thread.RLock' object has no attribute '_recursion_count'

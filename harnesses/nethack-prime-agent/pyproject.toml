@@ -1,0 +1,29 @@
+# The Prime Agent arm, packaged as an *external* verifiers harness plugin.
+#
+# Stock verifiers 0.2.1 resolves a non-bundled plugin already: `_import_plugin`
+# (`verifiers/v1/loaders.py:33-45`) probes `verifiers.v1.harnesses.<module>` and
+# falls back to the bare top-level module, and `env_module` normalizes the id's
+# hyphens to underscores. So `harness.id = "nethack-prime-agent"` imports
+# `nethack_prime_agent`. Nothing in verifiers' site-packages is patched -- see
+# `tests/test_vendored_loader.py`.
+#
+#   uv pip install -e harnesses/nethack-prime-agent
+#
+# (Or simply put this directory on PYTHONPATH; the loader only needs the module
+# to be importable.)
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nethack-prime-agent"
+version = "0.1.0"
+description = "Prime Agent harness for the NetHack verifiers toolset (CLI-harness eval, arm 2)."
+requires-python = ">=3.11"
+# `verifiers` is deliberately not declared: this plugin is only ever installed
+# into an environment that already pins its own verifiers build, and a version
+# range here would let pip resolve a different one underneath the experiment.
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["nethack_prime_agent"]

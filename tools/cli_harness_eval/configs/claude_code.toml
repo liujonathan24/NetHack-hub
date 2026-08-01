@@ -1,0 +1,114 @@
+# Arm 1: Claude Code driving the same game over MCP.
+#
+#   eval @ tools/cli_harness_eval/configs/claude_code.toml
+#
+# The native 0.2.1 taskset (`nethack_v1`) serves the gated NetHack skill set as
+# an MCP tool server; `claude_code` (SUPPORTS_MCP = True) is handed its URL via
+# `--mcp-config --strict-mcp-config`, so the agent sees the tools as
+# `mcp__nethack__<skill>` and nothing else. Proven booting end-to-end in
+# Task 13; see configs/README.md for the runtime determination and the exact
+# advertised tool names.
+#
+# Requires on PYTHONPATH: the engine repo (NetHackHarness), the repo root, and
+# environments/nethack -- the tool server is launched as `python -m nethack_v1`
+# with the parent's environment inherited (`v1/mcp/launch.py:208`).
+#
+# PINNED IDENTICALLY TO control.toml: model, character, seeds, task_spec and
+# skill set. The action budget is nominally 150 on both arms but is NOT exactly
+# equivalent — this arm gets exactly 150 executed skills, the control arm at
+# most 150 (see control.toml's `max_turns` note). Task 11 normalizes on the
+# measured counts: `skill_calls` here, `total_tool_calls` there.
+
+model = "z-ai/glm-5.2"
+num_tasks = 16
+num_rollouts = 1
+rich = false
+push = false
+
+[taskset]
+id = "nethack_v1"
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+n_examples = 16
+interface = "skill"
+variant = "B0"           # uncompressed ASCII (exp1's deepest + cheapest cell)
+map_detail = "full"
+# Self-dispatch is the only v1 mode: a 0.2.x toolset is an MCP server, so the
+# tool call itself both executes the skill and returns the observation.
+self_dispatch = true
+obs_mode = "push"
+# The cross-arm referee, enforced toolset-side so it binds a CLI agent whose
+# internal loop we do not control. Exactly 150 executed skills: the counter
+# advances only when a call reaches the engine, and concurrent calls are
+# serialized (`NetHackToolset._with_state`) so a batched turn cannot overrun it.
+max_skill_calls = 150
+max_turns = 200
+# Per-turn NDJSON, one file per rollout — the same channel the acceptance
+# artifact under `tools/cli_harness_eval/acceptance/` was cut from. Without this
+# the only record of what the agent saw is the trace's tool results.
+#
+# ABSOLUTE ON PURPOSE. `trace_dir` is resolved by the TOOL SERVER process, whose
+# cwd is its own runtime workdir (`/tmp/vf-<id>`), and that directory is deleted
+# at teardown — so a relative value silently discards the entire per-turn record
+# with no error. Measured (Task 10, arm 2): two otherwise identical rollouts
+# produced no file (relative) and 12 lines (absolute). `prime_agent.toml`
+# already carries the fix; `control.toml` gets it in the same commit.
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/cli_harness_eval/claude_code/turns"
+# Seed AGENTS.md / CLAUDE.md, wiki/ and memory/ into the agent's workdir --
+# the filesystem counterpart of the affordances the control arm gets through
+# its system prompt, wiki tools and Journal.
+seed_workspace = true
+# The tool server gets its own runtime, isolating the (C-extension) game
+# process from whatever the agent's shell does to its own workdir.
+colocated = false
+
+[taskset.env_args]
+skill_set = "netplay_true"           # the netplay gate: `move` is never published
+
+[harness]
+id = "claude_code"
+# Task 18 Step 3: Bash is disallowed. Under `--bare` (which this pinned
+# harness always passes) Claude Code advertises Bash / Edit / Read plus the
+# MCP resource helpers -- no WebFetch, no WebSearch. The arm made ZERO
+# Bash/Edit/Read calls across all five run1 rollouts (analysis-claude-code.md
+# §3), so withholding Bash costs nothing measurable and removes the
+# out-of-band host-shell path (configs/README.md §5.1/§7: the subprocess
+# runtime gives a real, unconfined host shell, and there is no container
+# runtime on this cluster to sandbox it instead). Read stays: it is the
+# capability-match for the control arm's wiki tools and Journal, and the
+# workspace primer tells the agent to grep `wiki/` and keep notes in
+# `memory/` via Edit -- Edit is also left enabled so that write path works.
+disabled_tools = ["Bash"]
+# NO `sandbox` TOGGLE HERE, ON PURPOSE. The Prime Agent arm can be wrapped in a
+# `bwrap` mount-namespace sandbox (see prime_agent.toml's `harness.sandbox`)
+# because `PrimeAgentHarnessConfig.binary` is a plain string this repo's own
+# harness plugin injects into argv. Stock verifiers' `ClaudeCodeHarness`
+# (`v1/harnesses/claude_code/harness.py`) hard-codes its binary path (`CLAUDE_BIN`)
+# with no `binary` field and no other command-prefix hook -- there is no way to
+# reach it without patching the installed `verifiers` package, which must stay
+# stock. So this arm is NOT filesystem-sandboxed; `disabled_tools = ["Bash"]`
+# above remains its only clamp, and it is weaker (a tool-surface denylist, not
+# isolation -- Read/Edit/the MCP client itself still run against the real,
+# unconfined host filesystem). See configs/README.md §7.3 for the full account
+# and what closing this gap would require (an external harness plugin
+# subclassing ClaudeCodeHarness, the same route `nethack-prime-agent` uses).
+
+[harness.runtime]
+# Verified in Task 13 step 1: `NEEDS_CONTAINER` is a *Task*-level flag in the
+# pinned 0.2.1 (`v1/task.py:227`), `NetHackTask` does not set it, and no
+# Harness-level check exists yet -- so a third-party CLI harness runs on the
+# subprocess runtime here. This machine has no Docker/Podman (apptainer only).
+type = "subprocess"
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
+
+# Provider transients must not kill a rollout. Prime intermittently returns
+# `finish_reason: "error"`, which verifiers' ModdedChatCompletion schema rejects
+# (it allows only stop|length|tool_calls|content_filter|function_call); pydantic
+# raises inside the interception server and the harness exits 1. Measured: 1 of
+# 20 rollouts lost this way. The default is max_retries=0, so one hiccup is fatal.
+[retries.rollout]
+max_retries = 2

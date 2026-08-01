@@ -74,7 +74,14 @@ FULL_GAME_SPEC = GameSpec(
     nle_task="NetHackScore-v0",
     des_file=None,
     max_episode_steps=100_000,
-    description="The full game. Ascend.",
+    # Rendered every turn as `Objective:` in the JOURNAL block. It used to read
+    # "The full game. Ascend." — NetHack jargon for "win", but to a language
+    # model sitting next to a glyph key that says "`<` stairs UP (NOT down)" it
+    # reads as an instruction to go UP, which is the opposite of the task.
+    description=(
+        "Descend as deep into the dungeon as you can and survive; ultimately "
+        "win the game (retrieve the Amulet of Yendor and escape)."
+    ),
     success_criterion="ascended",
 )
 
@@ -165,6 +172,8 @@ _patch_verifiers_message_from_response()
 # ---------- extracted modules (re-exported for back-compat) ----------
 from nethack_harness.prompt.rendering import (
     SYSTEM_PROMPT,
+    SYSTEM_PROMPT_VERBOSE,
+    render_system_prompt as _render_system_prompt,
     _strip_blank_rows,
     _glyph_run_encode,
     _inventory_fingerprint,
@@ -184,6 +193,7 @@ from nethack_harness.prompt.rendering import (
     _paint_frontiers_on_map,
     format_observation_as_chat,
 )
+from nethack_harness.prompt.interactive_state import detect_blocking_ui
 from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
@@ -206,6 +216,8 @@ from nethack_harness.helpers import (
     _maybe_belief_state_summary,
     _maybe_distill,
     _to_action_indices,
+    _cr_would_be_unknown_command,
+    CARRIAGE_RETURN,
     scout_reward,
     descent_reward,
     success_reward,
@@ -255,6 +267,14 @@ def _normalize_cell_schema(cell_schema) -> set:
     return {t for t in (str(x).strip().lower() for x in tokens) if t in _VALID_CELL_ATTRS}
 
 
+# Sentinel key `_parse_tool_call` uses to hand "the model emitted no tool call
+# at all" across to `_apply_tool_call` through the `skill_args` dict, since
+# that case has no real skill_name/skill_args to dispatch. Shared as a
+# constant (not a literal duplicated in both methods) so the two ends of the
+# handoff can't silently drift apart.
+_NO_TOOL_CALL_SENTINEL = "__no_tool_call__"
+
+
 class NetHackVerifiersEnv(vf.StatefulToolEnv):
     """
     Per-rollout state: a live NetHackCoreEnv plus character + cumulative scout count.
@@ -280,7 +300,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         sub_lm=None,
         subgoal_proposer=None,
         # Compaction knobs (survey rec). Set via load_environment kwargs.
-        compact_obs: bool = True,
+        compact_obs: bool = False,   # exp1 ran uncompacted; see load_environment
         history_keep_full: int = 5,
         history_drop_after: int = 100,
         belief_state_interval: int = 25,
@@ -290,7 +310,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # periodic self-refinement turns that prompt the agent to revise its
         # objective and record a lesson note (no NLE step consumed when the
         # agent calls pin_objective/add_note). See docs/PROMPTING_SURVEY.md.
-        variant: str = "B1",
+        variant: str = "B0",         # uncompressed ASCII; see load_environment
         # Detail level for the structured-map variants (JSON/TOON): "full"
         # emits rich entity attrs + RLE grid; "minimal" trims to kind/coord/desc.
         # Threaded onto state["map_detail"] for the per-turn template to read.
@@ -365,16 +385,36 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_state otherwise makes the journal non-empty on turn 1. Default
         # True preserves the always-pinned-objective behavior.
         pin_objective_on_setup: bool = True,
+        # Task 18 Step 2: True for the CLI-agent arms (nethack_v1's MCP toolset
+        # always sets this — self_dispatch=False has no v1 path at all), False
+        # for the control arm (the v0 legacy bridge never passes it). Threaded
+        # into state["_self_dispatch"] in setup_state, where
+        # rendering.format_observation_as_chat reads it to drop the JOURNAL
+        # block and the HINT ladder for the CLI arms while leaving the control
+        # arm's rendering byte-identical to pre-Task-18 behavior.
+        self_dispatch: bool = False,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
         self.pin_objective_on_setup = pin_objective_on_setup
+        self.self_dispatch = self_dispatch
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
         self._setup_character = setup_character
         self._allowed_skill_names = set(allowed_skill_names or ())
+        # BALROG's 80-command surface (tools/balrog_actions.py) makes NetHack's
+        # own prompts part of the agent's job: `bal_eat` opens "What do you want
+        # to eat?" and the agent answers it next turn with `bal_d`-style keys.
+        # The auto-dismiss loop below would ESC that prompt shut before the
+        # agent ever saw it, so `bal_eat` could never actually eat and the arm
+        # would score badly for a reason that has nothing to do with encoding.
+        # --More-- acknowledgement is NOT disabled: BALROG runs `skip_more:
+        # True`, so both harnesses skip those automatically.
+        self._balrog_raw_prompts = any(
+            n.startswith("bal_") for n in self._allowed_skill_names
+        )
         # Pluggable LM backends. Both default to None → the rollout-time code
         # falls back to the deterministic Offline* implementations. Swap in
         # prime-rl-backed clients by passing them here from load_environment.
@@ -579,10 +619,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_visited_tiles"].setdefault(int(_bl[12]), set()).add((_hx, _hy))
         except (KeyError, IndexError, TypeError, AttributeError):
             pass
-        # Track every (x, y) at which `>` was seen on the visible map. Needed
-        # because once the player steps ONTO `>`, the @ overlay hides it and
-        # extract_visible_features stops finding the tile — without memory,
-        # the agent oscillates on/off the stairs without realizing to descend.
+        # Track every (depth, x, y) at which `>` was seen on the visible map.
+        # Needed because once the player steps ONTO `>`, the @ overlay hides it
+        # and the feature extractor stops finding the tile — without memory, the
+        # agent oscillates on/off the stairs without realizing to descend. Keyed
+        # by depth: this set is never cleared, and (x,y) means a different tile
+        # on every floor (see rendering._remember_stairs_down).
         state["_seen_stairs_down"] = set()
         # Wave-2 Track B: visited-frontier memory. Tracks (level_key, (x,y)) →
         # consecutive turns the agent has been within 1 step of this frontier
@@ -609,6 +651,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["_descent_salient"] = _obs_flags.get("_descent_salient", False)
         state["_e1_obs"] = _obs_flags.get("_e1_obs", False)
         state["_e2_obs"] = _obs_flags.get("_e2_obs", False)
+        # Task 18 Step 2: gates the JOURNAL block + HINT ladder off for the
+        # CLI-agent arms (see the constructor's self_dispatch docstring).
+        state["_self_dispatch"] = self.self_dispatch
         state["last_reward"] = 0.0
         state["terminated"] = False
         state["journal"] = Journal()
@@ -649,7 +694,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         return state
 
-    async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+    def _parse_tool_call(self, messages: vf.Messages, state: vf.State) -> tuple[str, dict]:
         # Parse the assistant's tool call from messages[-1].
         # In v0 we expect native function calling (OpenAI tool format).
         assistant_msg = messages[-1]
@@ -658,11 +703,18 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             tool_calls = assistant_msg.get("tool_calls") or []
         else:
             tool_calls = getattr(assistant_msg, "tool_calls", None) or []
+        # Stashed for the trace write in `_apply_tool_call`, which no longer
+        # shares this method's local scope now that parsing and applying are
+        # split. MCP-driven callers that invoke `_apply_tool_call` directly
+        # (bypassing this method) simply leave these unset; the trace write
+        # degrades gracefully (see `_write_trace_entry`'s None handling).
+        state["_last_assistant_msg"] = assistant_msg
+        state["_last_tool_calls"] = tool_calls
         if not tool_calls:
             # Filter harness-owned skills from the suggestion list — they
             # don't appear in the actual tool schema sent to the model.
             agent_tools = [s for s in list_skills() if s not in ("menu_option", "inventory_item")]
-            return [vf.UserMessage(role="user", content="You must call a tool. Available tools: " + ", ".join(agent_tools))]
+            return "", {_NO_TOOL_CALL_SENTINEL: "You must call a tool. Available tools: " + ", ".join(agent_tools)}
 
         # Apply the first tool call (NetHack is turn-based; we ignore multi-call this turn).
         # Verifiers passes tool calls in two shapes depending on version:
@@ -701,6 +753,76 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             except (ValueError, TypeError):
                 # Malformed JSON — same recovery path.
                 skill_args = {}
+        return skill_name, skill_args
+
+    async def env_response(self, messages: vf.Messages, state: vf.State) -> vf.Messages:
+        skill_name, skill_args = self._parse_tool_call(messages, state)
+        content = await self._apply_tool_call(state, skill_name, skill_args)
+        return [vf.UserMessage(role="user", content=content)]
+
+    def _render_obs_text(self, state: vf.State, journal=None) -> str:
+        """`spec.turn_template`, prefixed with a blocking-UI warning when one applies.
+
+        Every per-turn render goes through here. The `=== MAP ===` block is
+        built from the glyph plane (`prompt/ascii_map.py`), which has no
+        representation for an open menu or prompt — so without this prefix an
+        agent that opens the inventory sees an unchanged, normal-looking map
+        while the game clock is frozen, and repeats the identical observation
+        forever. Measured: 3 of 5 `b80_b0` seeds burned 2,499 calls each at
+        game time 1 this way. See `prompt/interactive_state.py`.
+        """
+        obs_text = self.spec.turn_template(
+            state["structured_obs"],
+            state["journal"] if journal is None else journal,
+            state,
+            compact=self.compact_obs,
+            journal_max_chars=self.journal_render_max_chars,
+        )
+        warning = detect_blocking_ui(state.get("raw_obs"))
+        return f"{warning}\n{obs_text}" if warning else obs_text
+
+    async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
+        """Execute one skill against the engine and return the rendered observation.
+
+        This is the whole `env_response` body minus tool-call parsing: the gate,
+        journal short-circuit, registry dispatch, engine stepping, menu drain,
+        terminal detection, reward bookkeeping, banner re-scrub, render, and
+        trace write. Split out so MCP-driven CLI harnesses (which must return the
+        observation from the tool call itself) share one code path with the
+        native harness.
+        """
+        # `_parse_tool_call` encodes "the model emitted no tool call at all" as
+        # this sentinel (there is no skill to apply, so nothing below — the
+        # gate, dispatch, engine stepping — applies). Surface the same
+        # "must call a tool" text the pre-split env_response returned verbatim.
+        if skill_name == "" and _NO_TOOL_CALL_SENTINEL in skill_args:
+            return skill_args[_NO_TOOL_CALL_SENTINEL]
+
+        # Dead character: refuse to step the engine. The native verifiers
+        # rollout loop already stops calling in via `is_completed` once
+        # `state["terminated"]` is set, but the MCP-exposed toolset (Claude
+        # Code, Prime Agent) calls `_apply_tool_call` directly, per tool
+        # call, with no such gate in between — that is exactly how the
+        # committed arm-2 acceptance rollout burned 7 of its 12 calls on a
+        # tombstone `--More--` screen after dying at call 6. Once
+        # `state["died"]` is set (by the zero-HP check or either terminal
+        # detector below), every further call is a no-op against the engine:
+        # no `env.step`, no turn-counter advance, no reward.
+        if state.get("died"):
+            content = self.spec.turn_template(
+                state["structured_obs"], state["journal"], state,
+                compact=self.compact_obs,
+                journal_max_chars=self.journal_render_max_chars,
+            )
+            content = compose_user_content(
+                content,
+                ["[Your character is dead. The game is over; no further actions are possible.]"],
+            )
+            _write_trace_entry(
+                self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
+                [], 0.0, content_to_text(content), obs_content=content,
+            )
+            return content
 
         env: NetHackCoreEnv = state["env"]
 
@@ -714,16 +836,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # compass tools ARE in the exposed set). No NLE step is consumed.
         if self._allowed_skill_names and skill_name not in self._allowed_skill_names:
             avail = ", ".join(sorted(self._allowed_skill_names))
-            obs_text = self.spec.turn_template(
-                state["structured_obs"], state["journal"], state,
-                compact=self.compact_obs,
-                journal_max_chars=self.journal_render_max_chars,
-            )
+            obs_text = self._render_obs_text(state)
             content = compose_user_content(
                 obs_text,
                 [f"[Tool {skill_name!r} is not available. Call one of: {avail}]"],
             )
-            return [vf.UserMessage(role="user", content=content)]
+            return content
 
         # dir8 baseline: rewrite north/northeast/.../northwest calls to
         # move(direction=...) so the existing dispatcher handles them.
@@ -805,13 +923,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             journal: Journal = state["journal"]
             feedback = result.journal_op(journal)
             state["scout_delta"] = 0  # no exploration happened
-            obs_text = self.spec.turn_template(
-                state["structured_obs"], journal, state,
-                compact=self.compact_obs,
-                journal_max_chars=self.journal_render_max_chars,
-            )
+            obs_text = self._render_obs_text(state, journal)
             content = compose_user_content(obs_text, [f"[{feedback}]"] if feedback else [])
-            return [vf.UserMessage(role="user", content=content)]
+            return content
 
         # Capture pre-step scout set size so scout_reward can return a per-step delta
         # rather than a cumulative count. See onboarding/scout_reward.md.
@@ -850,24 +964,31 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             terminated = bool(result.pre_terminated)
             truncated = bool(result.pre_truncated)
             action_indices = []
+            # `action_indices == []` means the loop below never runs, so
+            # scout_tiles_seen / _visited_tiles would otherwise never see this
+            # call at all (scout_reward is structurally zero for every
+            # pre_executed skill). `pre_visible_obs` is opt-in (defaults to
+            # None): only netplay_true's `run_netplay_skill` sets it, so the
+            # hand-written `netplay` set's own pre_executed skill
+            # (explore_and_descend) does not go through this branch and its
+            # behaviour is unchanged.
+            for step_obs in (getattr(result, "pre_visible_obs", None) or []):
+                _record_scout_and_visited(state, step_obs)
+        cr_swallowed = 0
         for step_i, action in enumerate(action_indices):
+            # Swallow a stray carriage return. A CR that lands in command
+            # context is never anything but `Unknown command '^M'.` on the top
+            # line, which then persists in the observation for many turns and
+            # has demonstrably sent agents chasing an imaginary "stuck input
+            # buffer" (see `_cr_would_be_unknown_command`). Dropping it here --
+            # the single funnel every skill's keystrokes pass through -- makes
+            # it a no-op instead. A CR that a prompt is waiting for is untouched.
+            if action == CARRIAGE_RETURN and _cr_would_be_unknown_command(last_obs):
+                cr_swallowed += 1
+                continue
             last_obs, r, terminated, truncated, info = env.step(action)
             total_reward += r
-            # Scout reward: count newly-revealed dungeon tiles.
-            for (x, y), ch in _iterate_visible_tiles(last_obs):
-                if ch not in (b" ", b"\x00"):
-                    state["scout_tiles_seen"].add((state["max_dlvl_reached"], x, y))
-            # Sub-experiment 1b: record the hero's current tile into the per-level
-            # visited set (drives visited_grid). Keyed by the hero's ACTUAL depth
-            # (blstats[12]) so descent turns file under the level the template
-            # will read (max_dlvl_reached lags until later in env_response).
-            try:
-                _vb = last_obs.blstats
-                state["_visited_tiles"].setdefault(int(_vb[12]), set()).add(
-                    (int(_vb[0]), int(_vb[1]))
-                )
-            except (AttributeError, IndexError, TypeError, KeyError):
-                pass
+            _record_scout_and_visited(state, last_obs)
             if terminated or truncated:
                 break
             # Status-aware halt: check after each step (cheap — just blstats).
@@ -888,6 +1009,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                     if "[yn" in msg or "--More--" in msg:
                         halt_reason = "prompt opened mid-sequence"
                         break
+
+        # Observability: a non-zero count means a skill tried to feed the engine
+        # a CR in command context. It is harmless now, but it still points at a
+        # skill that is emitting keystrokes it does not need.
+        state["cr_swallowed_total"] = int(state.get("cr_swallowed_total", 0)) + cr_swallowed
 
         scout_after = len(state["scout_tiles_seen"])
         state["scout_delta"] = scout_after - scout_before
@@ -922,6 +1048,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # intended action. MORE/CR (13) acknowledges them.
             has_more = any("--More--" in m for m in (so.messages or [])) or _obs_tty_has_more(last_obs)
             if so.menu is None and so.inventory_prompt is None and yn is None and not has_more:
+                break
+            # Under the BALROG raw-command surface, answering menus / item
+            # prompts / y-n questions is the AGENT's job (see
+            # `_balrog_raw_prompts` in __init__). Only --More-- is still
+            # acknowledged for it, matching BALROG's own `skip_more: True`.
+            if self._balrog_raw_prompts and not has_more:
                 break
             if yn is not None:
                 ans = yn["answer"]
@@ -986,6 +1118,21 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # be confused for a death here.)
         if terminated and not state["ascended"] and not state["died"]:
             state["died"] = True
+            state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+        # Zero-HP fallback: neither detector above catches a death whose
+        # message screen never reaches the marker scan and whose NLE
+        # `terminated` flag never fires — e.g. NetHack's death sequence parks
+        # on a prompt chain (Final Attributes -> possessions -> tombstone)
+        # that the env's own auto-dismiss loop cannot outlast, or a raw state
+        # poke (`modify={"hp": 0}`) that bypasses the engine's death codepath
+        # entirely. `hitpoints == 0` in the shaped status is authoritative
+        # for death regardless of how the game got there: this is an
+        # ADDITIONAL path, not a replacement for the two detectors above, so
+        # a real ascension or a message-detected death still short-circuits
+        # first via the `state["died"]`/`state["ascended"]` guards.
+        if not state["ascended"] and not state["died"] and s.get("hitpoints", 1) == 0:
+            state["died"] = True
+            state["terminated"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.
@@ -1205,11 +1352,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
 
         # Build the per-turn user message from the spec's turn template.
-        obs_text = self.spec.turn_template(
-            state["structured_obs"], state["journal"], state,
-            compact=self.compact_obs,
-            journal_max_chars=self.journal_render_max_chars,
-        )
+        obs_text = self._render_obs_text(state)
         prefix_parts = []
         # Per-turn hooks declared by the spec (P self-refinement directive; CH
         # refiner + sub-agent triggers). Each mutates prefix_parts/state in
@@ -1234,12 +1377,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             prefix_parts.append(f"[{result.feedback}]")
         content = compose_user_content(obs_text, prefix_parts)
         # Per-turn trace (NDJSON) for replay/debugging. No-op when trace_dir
-        # is unset; never raises.
+        # is unset; never raises. assistant_msg/tool_calls are stashed on
+        # `state` by `_parse_tool_call` (see comment there) since this method
+        # no longer shares that method's local scope.
         _write_trace_entry(
-            self, state, assistant_msg, tool_calls,
+            self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
             action_indices, total_reward, content_to_text(content), obs_content=content,
         )
-        return [vf.UserMessage(role="user", content=content)]
+        return content
 
     async def is_completed(self, state: vf.State) -> bool:
         # Game-over (death/ascension/NLE truncation) ends the rollout.
@@ -1365,6 +1510,31 @@ def _iterate_visible_tiles(obs):
             yield (x, y), bytes([int(chars[y, x])])
 
 
+def _record_scout_and_visited(state: dict, obs) -> None:
+    """Fold one observation's visible tiles + hero position into `state`.
+
+    Factored out of the env_response step loop so the SAME bookkeeping can be
+    replayed over a closed-loop skill's `pre_visible_obs` (see
+    SkillResult.pre_visible_obs / run_netplay_skill), which never goes through
+    that loop because `pre_executed=True` skills report `action_indices=[]`.
+    """
+    # Scout reward: count newly-revealed dungeon tiles.
+    for (x, y), ch in _iterate_visible_tiles(obs):
+        if ch not in (b" ", b"\x00"):
+            state["scout_tiles_seen"].add((state["max_dlvl_reached"], x, y))
+    # Sub-experiment 1b: record the hero's current tile into the per-level
+    # visited set (drives visited_grid). Keyed by the hero's ACTUAL depth
+    # (blstats[12]) so descent turns file under the level the template
+    # will read (max_dlvl_reached lags until later in env_response).
+    try:
+        _vb = obs.blstats
+        state["_visited_tiles"].setdefault(int(_vb[12]), set()).add(
+            (int(_vb[0]), int(_vb[1]))
+        )
+    except (AttributeError, IndexError, TypeError, KeyError):
+        pass
+
+
 # ----- Wave-2 Track B: visited-frontier memory + deadlock-breaker -----
 #
 # Knobs (kept module-level so tests can monkeypatch):
@@ -1472,8 +1642,20 @@ def _build_task_dataset(n_examples: int, seed_base: int, explicit_seeds: Optiona
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Task: {spec.description}\nSuccess: {spec.success_criterion}\n\nBegin."},
             ],
-            "task": {"tier": spec.name, "seed": seed_val},
-            "info": {"tier": spec.name, "spec_description": spec.description},
+            # NB: no `task` column. `task` is a RESERVED rollout-input field in
+            # verifiers (>=0.1.14): `flatten_task_input` (verifiers/types.py)
+            # treats `input["task"]` — or `input["info"]["task"]` — as THE
+            # canonical rollout payload and REPLACES the whole input with it, so
+            # a row carrying `task={"tier":..,"seed":..}` loses its `prompt` and
+            # `init_state` then raises KeyError('prompt'). The per-rollout seed
+            # therefore rides in `info`, which `setup_state` already reads as its
+            # fallback (`task.get("seed", info.get("seed", ...))`). Callers that
+            # build a state by hand with an explicit `task` dict still work.
+            "info": {
+                "tier": spec.name,
+                "seed": seed_val,
+                "spec_description": spec.description,
+            },
         })
     return Dataset.from_list(rows)
 
@@ -1514,13 +1696,21 @@ def load_environment(
     # objective at setup → enables the no-memory arm (empty journal). See the
     # env constructor for the full rationale.
     pin_objective_on_setup: bool = True,
+    # Task 18: A/B the BALROG-minimal prompt (default) against the pre-Task-18
+    # strategy-heavy one via one config flag instead of a git revert.
+    verbose_prompt: bool = False,
+    # Task 18 Step 2: True for the CLI-agent arms (nethack_v1 sets this
+    # unconditionally — see NetHackVerifiersEnv's self_dispatch docstring).
+    # Gates the per-turn JOURNAL block and HINT ladder off for them; the
+    # control arm's default (False) keeps both, unchanged from pre-Task-18.
+    self_dispatch: bool = False,
     subgoal_proposer=None,
-    compact_obs: bool = True,
+    compact_obs: bool = False,
     history_keep_full: int = 5,
     history_drop_after: int = 100,
     belief_state_interval: int = 25,
     journal_render_max_chars: int = 2000,
-    variant: str = "B1",
+    variant: str = "B0",
     # Sub-experiment 1b (JSON cell-content ablation): per-cell SPATIAL/
     # EXPLORATION attributes to enrich the JSON map with, drawn from
     # {"seen","visited","reach"}. Pass as a JSON list (["seen","visited"]) or a
@@ -1602,18 +1792,17 @@ def load_environment(
     _overlay_cfg = _harness_overlay.apply_overlay(_sys.modules[__name__])
     # Resolve the prompt recipe AFTER the overlay so the spec carries the
     # (possibly-overlaid) system prompt. SYSTEM_PROMPT here is this module's
-    # global, which apply_overlay just mutated in place.
-    spec = resolve_spec(variant, SYSTEM_PROMPT)
+    # global, which apply_overlay just mutated in place. verbose_prompt swaps
+    # in the pre-Task-18 SYSTEM_PROMPT_VERBOSE instead (see load_environment's
+    # docstring for the A/B).
+    _base_system_prompt = SYSTEM_PROMPT_VERBOSE if verbose_prompt else SYSTEM_PROMPT
+    spec = resolve_spec(variant, _base_system_prompt)
     # Decouple the teacher refiner from the obs format: when refine=True on a
     # non-CH variant, attach the CH refiner bundle (hooks + system inject +
     # run_macro tool) onto the resolved spec so the tool gets exposed below and
     # the env's spec carries the refiner hooks. (CH already carries it.)
     if bool(refine) and variant != "CH":
         spec = attach_refiner(spec)
-    dataset = _build_task_dataset(
-        n_examples, seed, explicit_seeds=explicit_seeds,
-        system_prompt=spec.system_prompt,
-    )
     _reward_funcs = _harness_overlay.apply_reward_weights(
         [scout_reward, descent_reward, success_reward, ascension_reward], _overlay_cfg,
     )
@@ -1639,6 +1828,25 @@ def load_environment(
     # The exact set of tool names offered to the model — used to gate
     # hallucinated tool calls in env_response (see allowed_skill_names).
     _allowed_skill_names = {getattr(t, "__name__", "") for t in tool_callables} - {""}
+
+    # Gate the system prompt on the tools we just resolved, so the advertised
+    # surface cannot exceed the published one. Under `skill_set="netplay"` no
+    # `move` adapter exists, yet the hand-written prompt told the agent to call
+    # it — exp1 measured 232 rejected `move` attempts. The prompt is now
+    # assembled from this set (see rendering.render_system_prompt), the way
+    # NetPlay and BALROG both build theirs. Overlays that REPLACE the prompt
+    # wholesale are left alone: they are the author's own text, not ours.
+    from nethack_harness.prompt import rendering as _rendering
+    if interface == "skill" and spec.system_prompt == _base_system_prompt:
+        import dataclasses as _dc
+        spec = _dc.replace(
+            spec,
+            system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
+        )
+    dataset = _build_task_dataset(
+        n_examples, seed, explicit_seeds=explicit_seeds,
+        system_prompt=spec.system_prompt,
+    )
 
     # Sub-experiment 1c: when a sub_lm_model id is given (and no explicit
     # sub_lm object was passed), build a real Prime-backed Sub-LM so
@@ -1680,6 +1888,7 @@ def load_environment(
         setup_character=character,
         allowed_skill_names=_allowed_skill_names,
         pin_objective_on_setup=pin_objective_on_setup,
+        self_dispatch=self_dispatch,
         **kwargs,
     )
 
@@ -1687,6 +1896,7 @@ def load_environment(
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "SYSTEM_PROMPT_VERBOSE",
     "GameSpec",
     "FULL_GAME_SPEC",
     "PRIMITIVES_GAME_SPEC",
