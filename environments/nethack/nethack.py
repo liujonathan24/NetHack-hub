@@ -194,9 +194,12 @@ from nethack_harness.prompt.rendering import (
     format_observation_as_chat,
 )
 from nethack_harness.prompt.interactive_state import detect_blocking_ui
+from nethack_core import trace_schema as TS
 from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
+    TurnRecorder,
+    build_tool_result,
     _drop_before_last_belief,
     _refinement_directive,
     _ch_build_window,
@@ -792,20 +795,78 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         return f"{warning}\n{obs_text}" if warning else obs_text
 
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
+        """Instrument one LM turn, run it, and write exactly one trace record.
+
+        The trace write used to live at the bottom of the turn body, which meant
+        every early return (hallucinated tool, journal-only call, no tool call at
+        all) produced an LM turn with NO trace record -- so `len(records)` could
+        not be reconciled with `metrics.num_turns` even before the max_turns
+        off-by-one. Hoisting it here makes the invariant structural: one call to
+        this method == one record, whatever the body does.
+
+        The `TurnRecorder` context wraps the WHOLE body so it captures engine
+        steps taken anywhere inside it, including inside closed-loop skills.
+        """
+        state["_trace_lm_turn"] = int(state.get("_trace_lm_turn", 0)) + 1
+        tt = state["_turn_trace"] = {
+            "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
+        }
+        clock_before = _game_clock(state)
+        rec = TurnRecorder(state.get("env"))
+        with rec:
+            content = await self._apply_tool_call_inner(state, skill_name, skill_args)
+        clock_after = _game_clock(state)
+        obs_text = content_to_text(content)
+        # Stash what the model was last SHOWN, so the end-of-rollout flush (the
+        # final, never-applied tool call) can record the observation that call
+        # was actually made against.
+        state["_last_rendered_user_message"] = obs_text
+        result = build_tool_result(
+            name=skill_name or None,
+            arguments=skill_args if isinstance(skill_args, dict) else None,
+            feedback=tt.get("feedback") or "",
+            status=tt.get("status"),
+            clock_before=clock_before, clock_after=clock_after,
+            engine_steps=len(rec.actions), reward=tt.get("reward") or 0.0,
+            game_message=rec.messages[-1] if rec.messages else "",
+        )
+        _write_trace_entry(
+            self, state, state.get("_last_assistant_msg"),
+            state.get("_last_tool_calls") or [],
+            tt.get("action_indices") or [], tt.get("reward") or 0.0,
+            obs_text, obs_content=content,
+            actions=rec.action_record(), tool_results=[result],
+            all_messages=rec.messages,
+            # `applied` = "this LM turn was dispatched by the harness". It is
+            # False only for the end-of-rollout flush, whose tool call the
+            # rollout loop never handed to us at all. A dispatched call that
+            # took zero engine steps (no path found, hallucinated tool) is still
+            # applied=True: `actions.n == 0` is what says nothing ran, and that
+            # is a different fact.
+            applied=True,
+        )
+        return content
+
+    async def _apply_tool_call_inner(self, state: vf.State, skill_name: str, skill_args: dict):
         """Execute one skill against the engine and return the rendered observation.
 
         This is the whole `env_response` body minus tool-call parsing: the gate,
         journal short-circuit, registry dispatch, engine stepping, menu drain,
-        terminal detection, reward bookkeeping, banner re-scrub, render, and
-        trace write. Split out so MCP-driven CLI harnesses (which must return the
-        observation from the tool call itself) share one code path with the
-        native harness.
+        terminal detection, reward bookkeeping, banner re-scrub and render. Split
+        out so MCP-driven CLI harnesses (which must return the observation from
+        the tool call itself) share one code path with the native harness.
+
+        Trace bookkeeping is the caller's job; this body only leaves breadcrumbs
+        in `state["_turn_trace"]` at each of its several return points.
         """
+        tt = state.setdefault("_turn_trace", {})
         # `_parse_tool_call` encodes "the model emitted no tool call at all" as
         # this sentinel (there is no skill to apply, so nothing below — the
         # gate, dispatch, engine stepping — applies). Surface the same
         # "must call a tool" text the pre-split env_response returned verbatim.
         if skill_name == "" and _NO_TOOL_CALL_SENTINEL in skill_args:
+            tt["status"] = "no_tool_call"
+            tt["feedback"] = "model emitted no tool call this turn"
             return skill_args[_NO_TOOL_CALL_SENTINEL]
 
         # Dead character: refuse to step the engine. The native verifiers
@@ -838,6 +899,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 state["died"] = False
                 state["terminated"] = False
             state["_stuck_n"] = 0
+            tt["feedback"] = _res.feedback or ""
             content = self.spec.turn_template(
                 state["structured_obs"], state["journal"], state,
                 compact=self.compact_obs,
@@ -855,10 +917,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 content,
                 ["[Your character is dead. The game is over; no further actions are possible.]"],
             )
-            _write_trace_entry(
-                self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
-                [], 0.0, content_to_text(content), obs_content=content,
-            )
+            tt["status"] = "dead"
+            tt["feedback"] = "character is dead; call refused without touching the engine"
             return content
 
         env: NetHackCoreEnv = state["env"]
@@ -873,6 +933,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # compass tools ARE in the exposed set). No NLE step is consumed.
         if self._allowed_skill_names and skill_name not in self._allowed_skill_names:
             avail = ", ".join(sorted(self._allowed_skill_names))
+            tt["status"] = "rejected"
+            tt["feedback"] = f"tool {skill_name!r} is not in this rollout's exposed set"
             obs_text = self._render_obs_text(state)
             content = compose_user_content(
                 obs_text,
@@ -974,6 +1036,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if result.journal_op is not None:
             journal: Journal = state["journal"]
             feedback = result.journal_op(journal)
+            tt["status"] = "no_op"
+            tt["feedback"] = feedback or "journal op; no engine step by design"
             state["scout_delta"] = 0  # no exploration happened
             obs_text = self._render_obs_text(state, journal)
             content = compose_user_content(obs_text, [f"[{feedback}]"] if feedback else [])
@@ -1470,19 +1534,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if result.feedback:
             prefix_parts.append(f"[{result.feedback}]")
         content = compose_user_content(obs_text, prefix_parts)
-        # Per-turn trace (NDJSON) for replay/debugging. No-op when trace_dir
-        # is unset; never raises. assistant_msg/tool_calls are stashed on
-        # `state` by `_parse_tool_call` (see comment there) since this method
-        # no longer shares that method's local scope.
-        _write_trace_entry(
-            self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
-            action_indices, total_reward, content_to_text(content), obs_content=content,
-        )
+        # Trace breadcrumbs for the caller (`_apply_tool_call`), which owns the
+        # single per-turn NDJSON write. `action_indices` is kept for the legacy
+        # field only; the authoritative command stream comes from the caller's
+        # TurnRecorder, which also saw the steps this loop did not take (menu
+        # drain, deadlock-breaker, and every step inside a pre_executed skill).
+        tt["action_indices"] = list(action_indices or [])
+        tt["reward"] = float(total_reward)
+        tt["feedback"] = result.feedback or ""
         return content
 
     async def is_completed(self, state: vf.State) -> bool:
         # Game-over (death/ascension/NLE truncation) ends the rollout.
         if bool(state.get("terminated")):
+            self._flush_final_trace_entry(state, "terminated")
             return True
         # Also honor the verifiers per-rollout LM-turn cap (`max_turns`). Without
         # this, the override silently bypassed the base class's
@@ -1492,8 +1557,89 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if getattr(self, "max_turns", -1) and self.max_turns > 0:
             if await self.max_turns_reached(state):
                 state["is_truncated"] = True
+                self._flush_final_trace_entry(state, "max_turns_reached")
                 return True
         return False
+
+    def _flush_final_trace_entry(self, state: vf.State, stop_reason: str) -> None:
+        """Write the trace record for the LM turn the rollout never applied.
+
+        THE OFF-BY-ONE. `verifiers`' rollout loop is
+        `while not is_completed(state): get_prompt_messages() -> env_response()
+        -> get_model_response() -> trajectory.append()`. So the model's LAST
+        assistant message is generated and counted (`num_turns`,
+        `total_tool_calls` both read the trajectory) and only THEN does
+        `is_completed` fire -- `env_response` never runs for it, so the writer
+        never saw it. Measured: `num_turns=100 / total_tool_calls=100` against
+        99 NDJSON records, on every rollout, always short by exactly one.
+
+        We do NOT execute that final call to make the numbers line up: stepping
+        the engine past the cap would change the game the metrics describe.
+        Instead we record it as what it is -- `applied: false`, tool result
+        `status: "not_applied"`, action record `recorded: false` with a reason --
+        against the observation it was made from (the last one we rendered).
+        `len(records) == num_turns == total_tool_calls` after this, and no
+        record claims an action that never ran.
+        """
+        if state.get("_trace_final_written"):
+            return
+        state["_trace_final_written"] = True
+        if not getattr(self, "trace_dir", None):
+            return
+        try:
+            traj = state.get("trajectory") or []
+            if not traj:
+                return
+            completion = traj[-1].get("completion") if isinstance(traj[-1], dict) \
+                else getattr(traj[-1], "completion", None)
+            msgs = completion if isinstance(completion, list) else []
+            assistant, calls = None, []
+            for m in msgs:
+                role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+                if role != "assistant":
+                    continue
+                assistant = m
+                calls = (m.get("tool_calls") if isinstance(m, dict)
+                         else getattr(m, "tool_calls", None)) or []
+            if assistant is None:
+                return
+            name, args = None, None
+            if calls:
+                # Same two shapes `_write_trace_entry` normalizes: OpenAI-style
+                # `{"function": {...}}` and verifiers' flat `ToolCall`.
+                first = calls[0]
+                fn = (first.get("function") if isinstance(first, dict)
+                      else getattr(first, "function", None)) or first
+                name = (fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None))
+                args = (fn.get("arguments") if isinstance(fn, dict)
+                        else getattr(fn, "arguments", None))
+                # `tool_results[i]["arguments"]` is a dict on every other path
+                # (the harness has already parsed them); keep it one type.
+                if isinstance(args, str):
+                    import json as _json
+                    try:
+                        parsed = _json.loads(args)
+                        args = parsed if isinstance(parsed, dict) else {"_raw": args}
+                    except (ValueError, TypeError):
+                        args = {"_raw": args}
+            result = build_tool_result(
+                name=name, arguments=args,
+                feedback=f"rollout ended ({stop_reason}) before this call was applied",
+                status="not_applied" if calls else "no_tool_call",
+                clock_before=_game_clock(state), clock_after=_game_clock(state),
+                engine_steps=0, reward=0.0, game_message="",
+            )
+            _write_trace_entry(
+                self, state, assistant, calls, [], 0.0,
+                state.get("_last_rendered_user_message", ""),
+                actions=TS.empty_action_record(
+                    f"tool call was never applied: rollout ended ({stop_reason})"),
+                tool_results=[result], all_messages=[], applied=False,
+                lm_turn=int(state.get("_trace_lm_turn", 0)) + 1,
+                turn=int(state.get("turn_count", 0)) + 1,
+            )
+        except Exception:
+            pass
 
     async def get_prompt_messages(self, state: vf.State):
         """Override the verifiers default to compact older user-message content
@@ -1539,6 +1685,25 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
 
 # ---------- frontier blacklist (kept here: tests monkeypatch these on the nethack module) ----------
+
+def _game_clock(state) -> Optional[int]:
+    """The in-game turn counter (`status["time"]`), or None if unreadable.
+
+    Sampled either side of a turn, this is the only honest test of "did
+    anything actually happen": the vendored NetPlay skills report `completed`
+    without inspecting the result, so a `move_to` that stopped dead against a
+    wall and a `move_to` that crossed the level are indistinguishable by status
+    alone. See `helpers.classify_tool_result`.
+    """
+    try:
+        so = state.get("structured_obs")
+        if so is None:
+            return None
+        val = (so.status or {}).get("time")
+        return None if val is None else int(val)
+    except Exception:
+        return None
+
 
 def _obs_tty_has_more(obs) -> bool:
     """True if a --More-- prompt is visible on the top tty rows.
@@ -2028,6 +2193,9 @@ __all__ = [
     "format_observation_as_chat",
     "_continual_reset",
     "_write_trace_entry",
+    "TurnRecorder",
+    "build_tool_result",
+    "_game_clock",
     "_drop_before_last_belief",
     "_refinement_directive",
     "_ch_build_window",
