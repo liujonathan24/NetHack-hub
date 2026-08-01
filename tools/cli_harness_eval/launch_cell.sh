@@ -104,6 +104,47 @@ OUT_ABS="$(cd "${OUTDIR}" && pwd)"
 # sweep was protected.
 export PYTHONPATH="${REPO}/tools/pycompat:${ENG}:${REPO}:${REPO}/environments/nethack${PYTHONPATH:+:${PYTHONPATH}}"
 
+# --- engine preflight --------------------------------------------------------
+# The one factor this script did NOT pin was the ENGINE. Two measured incidents,
+# both of which produced results that looked fine:
+#
+#   1. A session checked `third_party/NetHack` out to 66c84e6 while the engine
+#      repo pinned fefd557. ~30 engine-dependent tests then failed with what
+#      read as engine LOGIC bugs -- test_engine_env's
+#      test_snapshot_restore_branching_via_env failed
+#      `assert not np.array_equal(glyphs_a, glyphs_b)`, i.e. two BRANCHED games
+#      returning byte-identical maps. No traceback mentioned the submodule.
+#
+#   2. With the pointer restored, the COMPILED artifact was still from the other
+#      source line: src/src/nle.c at 2026-07-31 18:52 vs libnethack.so at
+#      2026-07-22 04:26, a 230h gap. Every rollout ctypes-loads that .so; a
+#      source checkout does not rebuild it and nothing warns. Under the
+#      concurrency this sweep runs at, that silently corrupts a whole sweep.
+#
+# `results/run_provenance.json` recorded the HARNESS commit only, so neither
+# incident was recoverable after the fact. The preflight now (a) prints a
+# greppable engine fingerprint into every cell's log, (b) drops that fingerprint
+# into the cell's output dir next to the resolved config, and (c) REFUSES to
+# launch when the .so is older than the newest tracked build input, when the
+# submodule is dirty, or when it sits off the pinned commit.
+#
+# ALLOW_STALE_ENGINE=1 bypasses the refusal, loudly. Legitimate uses exist -- a
+# box where the engine cannot be rebuilt, or deliberately reproducing an old
+# run's binary -- but the run is then not reproducible from any commit, so the
+# bypass shouts it on stderr rather than passing quietly.
+#
+# The venv interpreter is used when present because the real .so resolution goes
+# through `nethack_core._engine.library_path()` (there are at least two
+# libnethack.so on disk and only the build/ one is loaded); a bare python3 that
+# cannot import nethack_core degrades to "unknown", which never blocks.
+PY_BIN="$(dirname "${EVAL_BIN}")/python"
+[ -x "$PY_BIN" ] || PY_BIN=python3
+"$PY_BIN" "${REPO}/tools/cli_harness_eval/engine_provenance.py" \
+  --check --json "${OUT_ABS}/engine_provenance.json" || {
+  echo "launch_cell: refusing to launch ${ARM} -> ${OUT_ABS} (see above)." >&2
+  exit 4
+}
+
 if [ "$ARM" = "control" ]; then
   # `[args]` is an untyped free-form dict (verifiers v1 EnvConfig.args: dict
   # = {}); a scalar override like `--args.max_turns 150` lands as the STRING
