@@ -24,11 +24,15 @@ SkillResult protocol. No NetPlay behaviour is reimplemented here.
 
 from __future__ import annotations
 
+import logging
+import os
 import pathlib
 import sys
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # The vendored tree is a sys.path *root* so that upstream's own absolute imports
 # (netplay.*, nle.*, nle_language_wrapper, gradio) resolve without editing a
@@ -48,6 +52,59 @@ from nethack_harness.helpers import (  # noqa: E402
     CARRIAGE_RETURN,
     _cr_would_be_unknown_command,
 )
+
+# ---------------------------------------------------------------------------
+# Swallowed exceptions must not be silent.
+#
+# This module is full of `except Exception: return []`-shaped guards, and they
+# are right to exist: a bug in a guard must never abort a skill that was
+# working, mid-rollout, on a paid run. But "total" was implemented as
+# "invisible", and that cost us the spoiling-food interrupt -- `_spoiling_now`
+# raised `AttributeError: message` on EVERY call for months and reported the
+# same `[]` a healthy game with no corpses reports (docs/HARNESS_DEFECTS.md
+# 3.2). A defensive except that hides a programming error is not defensive.
+#
+# So: still swallow, but count and log. `swallowed_exceptions()` is readable
+# from a sweep at the end of a batch; the first occurrence of each
+# (site, exception type) also logs at WARNING with a traceback, and repeats
+# drop to DEBUG so a per-step guard cannot flood the log.
+#
+# `NETHACK_STRICT_SKILL_ERRORS=1` re-raises instead of swallowing. Tests set it
+# so a regression of this exact class fails loudly instead of degrading into a
+# quiet no-op.
+# ---------------------------------------------------------------------------
+
+#: "<site>:<ExceptionType>" -> count, for the life of the process.
+_SWALLOWED: dict[str, int] = {}
+
+
+def _strict_errors() -> bool:
+    return os.environ.get("NETHACK_STRICT_SKILL_ERRORS", "") in ("1", "true", "True")
+
+
+def _swallowed(where: str, exc: BaseException) -> None:
+    """Record (and optionally re-raise) an exception a guard is about to eat."""
+    if _strict_errors():
+        raise exc
+    key = f"{where}:{type(exc).__name__}"
+    seen = _SWALLOWED.get(key, 0)
+    _SWALLOWED[key] = seen + 1
+    if seen == 0:
+        logger.warning("swallowed %s in %s: %s", type(exc).__name__, where, exc,
+                       exc_info=True)
+    else:
+        logger.debug("swallowed %s in %s (x%d): %s",
+                     type(exc).__name__, where, seen + 1, exc)
+
+
+def swallowed_exceptions() -> dict:
+    """Snapshot of `"<site>:<ExceptionType>" -> count`. Empty is the good case."""
+    return dict(_SWALLOWED)
+
+
+def reset_swallowed_exceptions() -> None:
+    """Zero the swallowed-exception counters (per-batch sweeps, tests)."""
+    _SWALLOWED.clear()
 
 
 # Upstream netplay/__init__.py:9-18, verbatim in content and order.
@@ -257,6 +314,21 @@ def _spoiling_now(core_env):
 
     Deliberately cheap and total: any failure means "nothing urgent", because a
     bug here must never be able to abort a skill that was working.
+
+    THE BUG THIS USED TO HAVE (docs/HARNESS_DEFECTS.md 3.2). It passed a
+    three-field `_RawView` (chars/glyphs/blstats) into `shape()`, which reads
+    `.message` first -- so every call raised `AttributeError`, the bare
+    `except` below turned that into `[]`, and the interrupt NEVER fired in any
+    rollout. "Nothing urgent" and "this function is broken" were the same
+    return value, which is why it took months to notice. Now the swallow is
+    counted and logged (`_swallowed`), and `_raw_view` hands over a complete
+    observation.
+
+    Relationship to `prompt/corpse_age.py`: that module owns all the rot
+    arithmetic and the kill log; it decides what is urgent
+    (`urgent_corpses`, URGENT_WINDOW = 5 turns of edibility left) and renders
+    the inventory annotation. This function only asks it, mid-macro, and does
+    not re-derive any threshold of its own.
     """
     try:
         from nethack_core.observations import shape as _shape
@@ -264,11 +336,31 @@ def _spoiling_now(core_env):
         raw = _raw_view(core_env)
         if raw is None:
             return []
+        # Fast path. This runs after EVERY engine step of a macro (up to 100
+        # per agent turn) and `shape()` costs ~220 us, so skip it outright when
+        # the raw inventory bytes contain no corpse at all -- which is the vast
+        # majority of steps. `urgent_corpses` reads nothing but the inventory,
+        # so this cannot change the answer.
+        inv = getattr(raw, "inv_strs", None)
+        if isinstance(inv, np.ndarray) and inv.dtype == np.uint8:
+            if b"corpse" not in inv.tobytes().lower():
+                return []
         so = _shape(raw, getattr(core_env, "_character", None))
         gt = (so.status or {}).get("time")
         return urgent_corpses(so.inventory, core_env, gt)
-    except Exception:
+    except Exception as exc:
+        _swallowed("_spoiling_now", exc)
         return []
+
+
+#: Every field of a `CoreObservation`, in the order `NetHackCoreEnv` declares
+#: them. `shape()` reads message / inv_strs / inv_letters / inv_glyphs /
+#: tty_chars / chars / glyphs / blstats -- a view carrying only the first three
+#: of those is not a substitute for an observation, it is a trap.
+_VIEW_FIELDS = (
+    "tty_chars", "tty_colors", "tty_cursor", "glyphs", "chars", "colors",
+    "message", "inv_strs", "inv_letters", "inv_glyphs", "blstats", "misc",
+)
 
 
 class _RawView:
@@ -279,16 +371,40 @@ class _RawView:
     `.glyphs` / `.blstats` silently sees `None` and returns empty -- which is
     how the pet guard came to no-op while reporting success, letting
     `melee_attack` kill the pet it was written to protect.
+
+    It now carries EVERY key the env publishes, not just those three: the
+    three-field version made `shape(view)` raise `AttributeError: message`,
+    which is defect 3.2 (the inert spoiling-food interrupt). Fields the env
+    does not publish are simply absent, so `getattr(view, f, None)` still works
+    and anything that genuinely requires them still fails loudly.
     """
 
-    __slots__ = ("chars", "glyphs", "blstats")
+    __slots__ = _VIEW_FIELDS
 
-    def __init__(self, chars, glyphs, blstats):
+    def __init__(self, chars=None, glyphs=None, blstats=None, **fields):
         self.chars, self.glyphs, self.blstats = chars, glyphs, blstats
+        for name, value in fields.items():
+            setattr(self, name, value)
+
+    def __getattr__(self, name):  # only called for unset __slots__ entries
+        raise AttributeError(
+            f"{type(self).__name__} has no {name!r}: the env did not publish it "
+            f"(observation_keys). Do not paper over this with a default -- "
+            f"whatever needs it needs a real observation.")
 
 
 def _raw_view(core_env):
-    """Best-effort CoreObservation-shaped view; None if unavailable."""
+    """Best-effort CoreObservation-shaped view; None if unavailable.
+
+    Prefers the env's own `_last_observation`, which IS a `CoreObservation`
+    (`nethack_core/env.py:140`) and therefore complete. The list form is only
+    the public `last_observation` property re-projecting that same object
+    through `observation_keys`, so rebuilding a partial view from it threw away
+    fields for no reason.
+    """
+    obs = getattr(core_env, "_last_observation", None)
+    if obs is not None and not isinstance(obs, (list, tuple)):
+        return obs
     raw = getattr(core_env, "last_observation", None)
     if raw is None:
         return None
@@ -296,9 +412,13 @@ def _raw_view(core_env):
         return raw                      # already a CoreObservation
     try:
         ks = list(core_env.observation_keys)
-        return _RawView(raw[ks.index("chars")], raw[ks.index("glyphs")],
-                        raw[ks.index("blstats")])
-    except Exception:
+        fields = {k: raw[i] for i, k in enumerate(ks)
+                  if k in _VIEW_FIELDS and i < len(raw)}
+        if not {"chars", "glyphs", "blstats"} <= set(fields):
+            raise KeyError(f"observation_keys lacks chars/glyphs/blstats: {ks}")
+        return _RawView(**fields)
+    except Exception as exc:
+        _swallowed("_raw_view", exc)
         return None
 
 
@@ -327,8 +447,10 @@ def _refuse_attack(core_env, kwargs):
     editing vendored code.
     """
     try:
+        # Not counted: a skill called without x/y is a normal control path,
+        # not a bug (`kwargs.get` -> None -> TypeError).
         tx, ty = int(kwargs.get("x")), int(kwargs.get("y"))
-    except Exception:
+    except (TypeError, ValueError):
         return None
     try:
         from nethack_harness.prompt.features import visible_monsters
@@ -345,7 +467,12 @@ def _refuse_attack(core_env, kwargs):
                     f"REFUSED: {m.name} at ({tx},{ty}) is peaceful. Attacking it "
                     f"makes it and its allies hostile and is usually fatal. "
                     f"Leave it alone."))
-    except Exception:
+    except Exception as exc:
+        # Counted: this guard is the ONLY thing standing between `melee_attack`
+        # and the pet/shopkeeper it force-fights (1.2). If it starts raising it
+        # must not degrade quietly into "nothing to refuse" -- that is the same
+        # failure shape as 3.2.
+        _swallowed("_refuse_attack", exc)
         return None
     return None
 
@@ -434,10 +561,11 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                 _so = _shape(_o, getattr(core_env, "_character", None))
                 note_kills({"env": core_env}, _so.messages or [],
                            (_so.status or {}).get("time"))
-            except Exception:
+            except Exception as exc:
+                _swallowed("run_netplay_skill.kill_log.step", exc)
                 continue
-    except Exception:
-        pass
+    except Exception as exc:
+        _swallowed("run_netplay_skill.kill_log", exc)
 
     feedback = " ".join(t for t in thoughts if t).strip() or "No effect."
 
@@ -461,8 +589,8 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
             _msgs = [m for m in (_shp(_last, getattr(core_env, "_character", None)).messages or []) if m]
             if _msgs and _msgs[-1] not in feedback:
                 feedback = f"{feedback} GAME: {_msgs[-1]}".strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        _swallowed("run_netplay_skill.game_message", exc)
 
     # Two cleanups on the vendored event text before the agent sees it.
     #
@@ -491,8 +619,8 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
         feedback = _re.sub(
             r"Changed dungeon level from \((\d+),\s*(\d+)\) to \((\d+),\s*(\d+)\)",
             _lvl, feedback)
-    except Exception:
-        pass
+    except Exception as exc:
+        _swallowed("run_netplay_skill.feedback_cleanup", exc)
 
     # NOTE: a `_fight_fallback` used to sit here, silently converting the
     # "There is no monster at (x,y)" failure into an `F<dir>` attack. It is

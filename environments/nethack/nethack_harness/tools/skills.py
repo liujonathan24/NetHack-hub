@@ -2113,8 +2113,78 @@ def wiki_search(env: NetHackCoreEnv, obs: StructuredObservation, query: str, k: 
 # the map row y corresponds to tty row y+1 (row 0 is the top message line).
 _MAP_MAX_X = 78
 _MAP_MAX_Y = 20
-_REVEAL_MAX_W = 40   # cap the revealed rectangle so a huge box can't blow up
-_REVEAL_MAX_H = 20   # the prompt; larger requests are clamped, not rejected.
+
+#: Largest rectangle `reveal` will return, as INCLUSIVE cell counts (79 x 21 =
+#: the whole map).
+#:
+#: WHY THESE NUMBERS. The previous values were `_REVEAL_MAX_W = 40` /
+#: `_REVEAL_MAX_H = 20`, undocumented, applied to the *exclusive* difference
+#: `x2 - x1` -- so a caller asking for the full width (`x1=0, x2=78`) silently
+#: received 41 of 79 columns and was told nothing (docs/HARNESS_DEFECTS.md
+#: 3.3). Under BBOX / SPARSE_ONDEMAND, `reveal` is the agent's ONLY map access,
+#: so that halved the map and corrupted every measurement of whether on-demand
+#: delivery works.
+#:
+#: The cap was written to stop "a huge box" blowing up the prompt, but the
+#: request is already clamped to the map grid before it is applied, so the
+#: worst case a caller can reach is the map itself. Measured on a live game
+#: (seed 0, Val-hum-neu-fem, reveal_map=1.0): a full 79x21 reveal renders
+#: 1,807 characters -- against 1,328 for the `=== MAP ===` section that a
+#: full-map variant sends on EVERY turn, and 2,613 for the whole observation.
+#: So the thing the cap was protecting against costs about one extra map
+#: section, once, only when the agent explicitly asks. That is the trade, and
+#: it is worth it: half a map is not a map.
+#:
+#: The clamping machinery is kept (rather than deleted) so that lowering these
+#: for an experiment stays possible -- but any clamp is now COUNTED and
+#: STATED in the returned text.
+_REVEAL_MAX_COLS = _MAP_MAX_X + 1   # 79
+_REVEAL_MAX_ROWS = _MAP_MAX_Y + 1   # 21
+
+#: Defensive character backstop. Sized from the measurement above (1,807 for a
+#: full map) plus room for the clamp notice, so it can no longer fire on a
+#: legitimate full-width request -- it exists only for a future grid larger
+#: than we expect. Truncation is stated in the text and counted.
+_REVEAL_MAX_CHARS = 2400
+
+#: How often `reveal` shrank what the caller asked for, and why. Module-level
+#: and process-wide, because that is the only scope a skill can reach: skills
+#: are handed `(env, obs)`, and a sweep reads this out of the worker with
+#: `skills.reveal_clamp_counts()` at the end of a batch. Per-episode counts are
+#: mirrored onto the env (`env._reveal_clamps`) for anything that has one.
+#: The same events are also visible in the traces, because each one appends a
+#: `NOTE:` line to the tool feedback that gets recorded verbatim -- nobody
+#: should have to be running this process to find out that it happened.
+_REVEAL_CLAMP_COUNTS: dict[str, int] = {
+    "calls": 0,          # every reveal call that got as far as the clamps
+    "out_of_range": 0,   # asked outside the 79x21 grid
+    "too_wide": 0,       # wider than _REVEAL_MAX_COLS
+    "too_tall": 0,       # taller than _REVEAL_MAX_ROWS
+    "truncated": 0,      # hit _REVEAL_MAX_CHARS
+}
+
+
+def reveal_clamp_counts() -> dict:
+    """Snapshot of the `reveal` clamp counters (see `_REVEAL_CLAMP_COUNTS`)."""
+    return dict(_REVEAL_CLAMP_COUNTS)
+
+
+def reset_reveal_clamp_counts() -> None:
+    """Zero the `reveal` clamp counters (per-batch sweeps, tests)."""
+    for k in _REVEAL_CLAMP_COUNTS:
+        _REVEAL_CLAMP_COUNTS[k] = 0
+
+
+def _count_reveal_clamp(env, reason: str) -> None:
+    _REVEAL_CLAMP_COUNTS[reason] = _REVEAL_CLAMP_COUNTS.get(reason, 0) + 1
+    try:
+        per_env = getattr(env, "_reveal_clamps", None)
+        if per_env is None:
+            per_env = {}
+            env._reveal_clamps = per_env
+        per_env[reason] = per_env.get(reason, 0) + 1
+    except Exception:
+        pass  # a counter must never be able to break the skill it measures
 
 
 @registry.register("reveal", schema={
@@ -2122,8 +2192,10 @@ _REVEAL_MAX_H = 20   # the prompt; larger requests are clamped, not rejected.
         "Reveal a rectangular region of the dungeon map as ASCII (for the "
         "bounding-box observation mode, where the map is otherwise hidden). "
         "Coordinates are map cells: x = column 0-78, y = row 0-20, inclusive. "
-        "Returns the sub-rectangle as text; consumes NO game turn. Oversized "
-        "or out-of-range requests are clamped to the grid."
+        "The FULL map (x1=0, y1=0, x2=78, y2=20) is a valid request and "
+        "returns all 79 columns. Returns the sub-rectangle as text; consumes "
+        "NO game turn. Out-of-range requests are clamped to the grid, and any "
+        "clamping is stated in the reply."
     ),
     "parameters": {
         "x1": {"type": "integer", "description": "Left column (0-78)."},
@@ -2151,16 +2223,40 @@ def reveal(env: NetHackCoreEnv, obs: StructuredObservation,
         x1, x2 = x2, x1
     if y1 > y2:
         y1, y2 = y2, y1
-    # Clamp to the map grid.
+    asked = (x1, y1, x2, y2)
+    _count_reveal_clamp(env, "calls")   # the denominator of any clamp rate
+    # Every reduction of the caller's rectangle appends a sentence here. An
+    # agent that gets back less than it asked for MUST be told, or it reads a
+    # half map as the whole dungeon -- which is exactly how the 40-column cap
+    # survived unnoticed for months.
+    notes: list[str] = []
+    # Clamp to the map grid. After this the rectangle is bounded by the map, so
+    # it can never be "huge" in the sense the old size cap was worried about.
     x1 = max(0, min(_MAP_MAX_X, x1))
     x2 = max(0, min(_MAP_MAX_X, x2))
     y1 = max(0, min(_MAP_MAX_Y, y1))
     y2 = max(0, min(_MAP_MAX_Y, y2))
-    # Bound the rectangle size.
-    if x2 - x1 > _REVEAL_MAX_W:
-        x2 = x1 + _REVEAL_MAX_W
-    if y2 - y1 > _REVEAL_MAX_H:
-        y2 = y1 + _REVEAL_MAX_H
+    if (x1, y1, x2, y2) != asked:
+        _count_reveal_clamp(env, "out_of_range")
+        notes.append(
+            f"you asked for x1={asked[0]},y1={asked[1]} to "
+            f"x2={asked[2]},y2={asked[3]}, which reaches outside the map; "
+            f"clamped to the grid (x 0-{_MAP_MAX_X}, y 0-{_MAP_MAX_Y})")
+    # Bound the rectangle size. With the caps at the full map dimensions this
+    # is a no-op for every reachable request; it fires only if someone lowers
+    # them, and then it says so.
+    if x2 - x1 + 1 > _REVEAL_MAX_COLS:
+        x2 = x1 + _REVEAL_MAX_COLS - 1
+        _count_reveal_clamp(env, "too_wide")
+        notes.append(
+            f"width capped at {_REVEAL_MAX_COLS} columns, so columns "
+            f"{x2 + 1}-{asked[2]} are NOT shown; call again for them")
+    if y2 - y1 + 1 > _REVEAL_MAX_ROWS:
+        y2 = y1 + _REVEAL_MAX_ROWS - 1
+        _count_reveal_clamp(env, "too_tall")
+        notes.append(
+            f"height capped at {_REVEAL_MAX_ROWS} rows, so rows "
+            f"{y2 + 1}-{asked[3]} are NOT shown; call again for them")
     grid = np.asarray(tty)
     # Map row y = tty row y+1; slice rows [y1+1 .. y2+1], cols [x1 .. x2].
     sub = grid[y1 + 1: y2 + 2, x1: x2 + 1]
@@ -2169,8 +2265,17 @@ def reveal(env: NetHackCoreEnv, obs: StructuredObservation,
         line = "".join(chr(int(c)) if int(c) else " " for c in row)
         rows.append(f"y{y1 + i:>2}: {line}")
     body = f"reveal (x{x1}-{x2}, y{y1}-{y2}):\n" + "\n".join(rows)
-    if len(body) > 1600:  # defensive char cap
-        body = body[:1600] + " ...(truncated)"
+    if len(body) > _REVEAL_MAX_CHARS:  # defensive char cap
+        body = body[:_REVEAL_MAX_CHARS] + " ...(truncated)"
+        _count_reveal_clamp(env, "truncated")
+        notes.append(f"output truncated at {_REVEAL_MAX_CHARS} characters")
+    if notes:
+        # Appended AFTER the character cap on purpose: the one line that says
+        # the view is incomplete is the last thing that should ever be dropped.
+        # Keep "reveal (x" as the first token -- `helpers._STATUS_MARKERS`
+        # classifies the tool result from it, and "reveal: " ahead of it would
+        # be read as a failure. This is a partial success, not a failure.
+        body += "\nNOTE: partial view -- " + "; ".join(notes) + "."
     return SkillResult(actions=[], feedback=body, interrupted=True)
 
 
