@@ -129,7 +129,7 @@ context_window = 1048576
 # 2026-08-01, Prime Intellect CPU sandbox: OFF, matching prime_agent.toml. Not a
 # bwrap failure -- this host permits namespaces and bwrap works; we are choosing
 # not to wrap. Keep the two arms' values identical or the b80 comparison drifts.
-sandbox = false
+sandbox = true
 
 [harness.runtime]
 # Same determination as arm 1: `NEEDS_CONTAINER` is Task-level in the pinned

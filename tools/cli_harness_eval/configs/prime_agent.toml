@@ -158,7 +158,7 @@ context_window = 1048576
 # Separately, in m3 seed 1 the agent used this kernel to `pip install nle` and
 # play 200+ unmeasured games when the MCP server crashed -- contained to the
 # workspace at the time BY this sandbox.
-sandbox = false
+sandbox = true
 
 [harness.runtime]
 # Same determination as arm 1: `NEEDS_CONTAINER` is Task-level in the pinned
