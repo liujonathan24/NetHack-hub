@@ -441,10 +441,23 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # block and the HINT ladder for the CLI arms while leaving the control
         # arm's rendering byte-identical to pre-Task-18 behavior.
         self_dispatch: bool = False,
+        # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
+        # setup_state the turn file for this rollout's seed is replayed
+        # byte-for-byte through the freshly seeded engine, so the agent starts
+        # exactly where the recorded session stopped -- with the UNSPENT part
+        # of the budget (set max_turns/MAX_CALLS to the remainder when
+        # launching). The conversation is NOT restored: both CLI scaffolds run
+        # without session persistence (claude_code passes
+        # --no-session-persistence; prime_agent's own auto-resume is a fresh
+        # chat by design), so the first observation instead carries a RESUMED
+        # note with the old session's tail. Replay integrity is verified
+        # against the recorded end state and fails loudly on divergence.
+        resume_from: Optional[str] = None,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
+        self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         self._setup_tune = setup_tune
@@ -755,6 +768,74 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                         load_components(state, json.load(f))
             except Exception:
                 pass  # bootstrap failures must never break a rollout
+
+        # --- Resume-from-trace (see the constructor's resume_from note) -----
+        if getattr(self, "_resume_from", None):
+            import glob as _glob, json as _json, os as _os
+            _rroot = self._resume_from
+            _cand = (_glob.glob(_os.path.join(_rroot, "turns", f"{seed}_*.ndjson"))
+                     or _glob.glob(_os.path.join(_rroot, f"{seed}_*.ndjson")))
+            if not _cand:
+                raise RuntimeError(
+                    f"resume_from: no turn file for seed {seed} under {_rroot}")
+            _tf = max(_cand, key=_os.path.getmtime)
+            _recs = [_json.loads(_l) for _l in open(_tf) if _l.strip()]
+            if not _recs:
+                raise RuntimeError(f"resume_from: {_tf} holds no turn records")
+            _bad = [r["turn"] for r in _recs
+                    if not (r.get("actions") or {}).get("replayable", False)]
+            if _bad:
+                raise RuntimeError(
+                    f"resume_from: turn(s) {_bad[:5]} of {_tf} are not replayable")
+            _obs = state["raw_obs"]
+            for _r in _recs:
+                for _b in ((_r.get("actions") or {}).get("bytes") or []):
+                    _obs, _r2, _t2, _tr2, _i2 = env.step(int(_b))
+                    if _t2 or _tr2:
+                        raise RuntimeError(
+                            f"resume_from: episode ended mid-replay of {_tf} "
+                            f"(turn {_r['turn']}) -- the recorded session did "
+                            "not end here, so this is replay divergence")
+            state["raw_obs"] = _obs
+            _scrub_intro_banner(state["raw_obs"])
+            state["structured_obs"] = shape_observation(state["raw_obs"], character)
+            # Verify the reconstruction against the recorded end state. dlvl
+            # and hp together are a strong fingerprint; matching every turn
+            # boundary was verified offline for all candidate seeds.
+            _bl = state["raw_obs"].blstats
+            _last = _recs[-1]
+            for _name, _got, _want in (("dlvl", int(_bl[12]), _last.get("dlvl")),
+                                       ("hp", int(_bl[10]), _last.get("hp"))):
+                if _want is not None and int(_want) != _got:
+                    raise RuntimeError(
+                        f"resume_from: replay divergence on {_name} "
+                        f"(replayed {_got}, recorded {_want}) for {_tf}")
+            state["max_dlvl_reached"] = max(
+                [int(r.get("max_dlvl_reached") or 1) for r in _recs] + [int(_bl[12])])
+            state["_frontier_prev_dlvl"] = int(_bl[12])
+            state["_visited_tiles"].setdefault(int(_bl[12]), set()).add(
+                (int(_bl[0]), int(_bl[1])))
+            # The NetPlay tracker never saw the replayed steps; force re-init.
+            try:
+                from nethack_harness.tools.netplay_true import reset_agent_cache
+                reset_agent_cache()
+            except Exception:
+                pass
+            _tail = []
+            for _r in _recs[-3:]:
+                _am = _r.get("assistant_message") or ""
+                if isinstance(_am, dict):
+                    _am = _am.get("content") or ""
+                _am = " ".join(str(_am).split())
+                if _am:
+                    _tail.append(f"(their turn {_r['turn']}) {_am[:220]}")
+            state["_resume_notice"] = (
+                f"RESUMED SESSION: this game continues a previous session that "
+                f"used {len(_recs)} calls. You are NOT starting fresh -- the "
+                f"dungeon, your position, HP and inventory are exactly as that "
+                f"session left them (check STATUS; use reveal to reorient). "
+                + ("Final notes from that session: " + " | ".join(_tail)
+                   if _tail else ""))
 
         # Materialize this rollout's turn file NOW, empty, so the stall
         # watchdog can see the rollout from second zero. The watchdog watches
@@ -1731,6 +1812,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             prefix_parts.append(loop_hint)
         if halt_reason:
             prefix_parts.append(f"[autohalt: {halt_reason}]")
+        # One-shot resume banner (setup_state's resume_from hook). Rendered
+        # ahead of everything else on the first post-resume turn only.
+        _rnote = state.pop("_resume_notice", None)
+        if _rnote:
+            prefix_parts.insert(0, f"[{_rnote}]")
         # Post-skill prompt/menu cleanup, deliberately NOT under the autohalt
         # label -- a closed prompt is not an interrupted plan.
         _dn = state.pop("_dismiss_notice", None)
@@ -2257,6 +2343,12 @@ def load_environment(
             variant="CH" always implies refine=True.
     """
     explicit_seeds = kwargs.pop("explicit_seeds", None)
+    # The CLI arms' ENV_ARGS override path flattens every leaf to a dotted
+    # scalar, so a list like [3] arrives here as the STRING "[3]" (measured:
+    # int('[') ValueError in _build_task_dataset). Accept the JSON form.
+    if isinstance(explicit_seeds, str):
+        import json as _json
+        explicit_seeds = _json.loads(explicit_seeds)
     # NETHACK_HARNESS overlay: mutates SYSTEM_PROMPT (consumed by _build_task_dataset
     # below) plus returns a HarnessConfig used to filter tools / re-weight rewards.
     # No-op when the env var is unset → bit-identical default behavior.

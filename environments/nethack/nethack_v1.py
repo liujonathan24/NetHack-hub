@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
 import time
 import inspect
 import random
@@ -813,10 +814,69 @@ class NetHackTaskset(vf.Taskset[NetHackTask, NetHackTasksetConfig]):
             toolset=cfg.toolset_config(), seed_workspace=cfg.seed_workspace
         )
         rng = random.Random(cfg.seed)
-        if cfg.explicit_seeds is not None:
+        env_args = dict(cfg.env_args or {})
+        # Seed pinning via ENV_ARGS. `env_args` is the opaque per-cell override
+        # channel (launch_cell.sh's ENV_ARGS), and an operator who writes
+        # `ENV_ARGS='{"explicit_seeds":[4], "resume_from":...}'` means "run
+        # THESE seeds". Previously the v1 rows were seeded ONLY from the
+        # taskset-level `explicit_seeds` field (the TOML's pinned [0..15]), so
+        # the ENV_ARGS pin reached the v0 kwargs and did nothing to row
+        # selection: `--num_tasks 1` ran seed 0 regardless. With resume_from
+        # that mismatch surfaced as the tool server dying in setup_task
+        # ("resume_from: no turn file for seed 0") behind a 180s opaque
+        # ToolsetError, because the server's stderr lives in a runtime workdir
+        # that teardown deletes. env_args wins over the taskset field: the TOML
+        # field is the sweep default, ENV_ARGS the per-cell override. The
+        # string form ("[4]") is how dotted CLI overrides deliver it.
+        env_seed_pin = env_args.get("explicit_seeds")
+        if env_seed_pin is not None:
+            if isinstance(env_seed_pin, str):
+                try:
+                    env_seed_pin = json.loads(env_seed_pin)
+                except json.JSONDecodeError as e:
+                    raise ValueError(
+                        "env_args.explicit_seeds is not valid JSON: "
+                        f"{env_seed_pin!r}"
+                    ) from e
+            if not isinstance(env_seed_pin, (list, tuple)):
+                raise ValueError(
+                    "env_args.explicit_seeds must be a list of seeds, got "
+                    f"{type(env_seed_pin).__name__}: {env_seed_pin!r}"
+                )
+            seeds = [int(s) for s in env_seed_pin]
+        elif cfg.explicit_seeds is not None:
             seeds = [int(s) for s in cfg.explicit_seeds]
         else:
             seeds = [rng.randint(0, 2**31 - 1) for _ in range(cfg.n_examples)]
+        # Resume fail-fast, in the DRIVER. The tool server verifies the replay
+        # anyway (nethack.py setup_state), but a server-side crash costs the
+        # 180s port-file timeout per retry and its traceback dies with the
+        # runtime workdir. A row whose seed has no source turn file can never
+        # resume, so refuse to build the taskset at all -- instantly and in a
+        # process whose stderr the operator actually sees.
+        resume_from = env_args.get("resume_from")
+        if resume_from:
+            import glob as _glob
+            import os as _os
+
+            missing = [
+                s
+                for s in seeds
+                if not (
+                    _glob.glob(
+                        _os.path.join(str(resume_from), "turns", f"{s}_*.ndjson")
+                    )
+                    or _glob.glob(_os.path.join(str(resume_from), f"{s}_*.ndjson"))
+                )
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"resume_from: no turn file under {resume_from} for "
+                    f"seed(s) {missing} -- these rollouts could never resume. "
+                    "Pin exactly the seeds that have recorded traces "
+                    "(ENV_ARGS '{\"explicit_seeds\": [...]}' or "
+                    "--taskset.explicit_seeds)."
+                )
         for i, seed_val in enumerate(seeds):
             yield NetHackTask(
                 NetHackTaskData(
