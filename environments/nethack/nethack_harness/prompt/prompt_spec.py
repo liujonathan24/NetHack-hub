@@ -741,6 +741,17 @@ def _build_registry(system_prompt: str) -> dict:
         # _bbox_min_template.
         "BBOX_MIN": canonical("BBOX_MIN", turn_template=_bbox_min_template,
                               obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # BBOX_MIN + the adaptive objective hint in LAG (explore) mode: every
+        # observation opens by naming the BALROG axis that is BEHIND. Chosen
+        # for exp4 as the metric-side answer to the exp3b death pattern -- 10
+        # of 15 deaths at XL 1, diving with a level-1 character -- because
+        # under LAG the hint keeps pointing at experience until XL catches up
+        # with depth, which is exactly the survival discipline a hand-written
+        # prompt would have tried to impose, minus the hand-writing.
+        "BBOX_MIN_GUIDE_LAG": canonical(
+            "BBOX_MIN_GUIDE_LAG",
+            turn_template=_guided(_bbox_min_template, "lag"),
+            obs=ObsSpec(setup_flags={"_bbox_map": True})),
         # Entity-only map: terrain dropped, and ADJACENT / VISIBLE FEATURES /
         # VISIBLE MONSTERS folded into it so there is exactly one place state
         # lives. SPARSE always shows it; SPARSE_ONDEMAND withholds it behind

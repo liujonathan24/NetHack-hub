@@ -516,6 +516,19 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
 
     wrapped.step = _tracking_step
     thoughts: list[str] = []
+
+    def _hp_now():
+        """`(hp, max_hp)` from the engine's latest observation; (None, None)
+        when unreadable -- the interrupt must never break a skill."""
+        try:
+            bl = getattr(wrapped.last_raw, "blstats", None)
+            if bl is None:
+                return None, None
+            return int(bl[10]), int(bl[11])  # NLE blstats: 10=hp, 11=max_hp
+        except Exception:
+            return None, None
+
+    hp_start, _mx = _hp_now()
     try:
         strategy = agent._execute_skill(skill, kwargs)
         strategy = agent._skip_more_messages(strategy)
@@ -540,6 +553,56 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                     "[INTERRUPTED: " + "; ".join(_urgent) +
                     ". Stopped early so you can eat before it spoils.]")
                 break
+            # --- HP-drop interrupt (exp4 fix 2) --------------------------
+            # The exp3b death autopsy's clearest artifact: HP tails like
+            # 16->16->16->0 -- a rollout at full health on one observation and
+            # dead on the next, because a closed-loop skill gave a monster
+            # dozens of free attacks between decisions. NetPlay's own low-HP
+            # interrupt exists but fires too late and not on every path. Break
+            # the macro the moment HP crosses 50% of max OR falls >=25% of max
+            # within this one skill, so the agent gets a decision BEFORE the
+            # death, not a report after it.
+            _hp, _hpmax = _hp_now()
+            if _hp is not None and _hpmax:
+                # "Crossed" means crossed DURING this skill: a skill that
+                # STARTS below half (the agent knowingly acting while hurt --
+                # fleeing, praying, fighting back) must not be re-interrupted
+                # on its first step or low HP becomes unactionable.
+                _crossed_half = (_hp * 2 < _hpmax
+                                 and hp_start is not None and hp_start * 2 >= _hpmax)
+                _big_drop = hp_start is not None and (hp_start - _hp) * 4 >= _hpmax
+                if _hp > 0 and (_crossed_half or _big_drop):
+                    # Name the THREAT in the interrupt itself. Measured on exp4:
+                    # after this interrupt Claude Code's next call was
+                    # melee_attack/pray 12/22 times, while Prime Agent's was
+                    # `reveal` 10/11 -- under BBOX_MIN it cannot see what is
+                    # hitting it without buying the entity feed, so it spent a
+                    # call re-orienting at every danger moment. Embedding
+                    # ADJACENT + VISIBLE MONSTERS here removes that forced
+                    # extra call for the minimal encodings and is a no-op
+                    # burden for the full ones (a dozen tokens of redundancy).
+                    _threat = ""
+                    try:
+                        from nethack_core.observations import shape as _shape2
+                        from nethack_harness.prompt.features import monsters_in_sight as _mis
+                        _so2 = _shape2(wrapped.last_raw, getattr(core_env, "_character", None))
+                        _adj = getattr(_so2, "adjacent", None) or {}
+                        if _adj:
+                            _order = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+                            _threat += " ADJACENT: " + " ".join(
+                                f"{d}={_adj.get(d, '?')}" for d in _order) + "."
+                        _mons = _mis(wrapped.last_raw)
+                        if _mons:
+                            _threat += " VISIBLE MONSTERS: " + "; ".join(_mons[:4]) + "."
+                    except Exception:
+                        pass  # the interrupt must fire even if the threat scan fails
+                    thoughts.append(
+                        f"[INTERRUPTED: HP {_hp}/{_hpmax} -- "
+                        f"{'below half' if _crossed_half else 'dropped fast'} "
+                        f"during this skill. Something is hitting you.{_threat} "
+                        f"Decide now: fight back, retreat, pray, or engrave "
+                        f"Elbereth.]")
+                    break
     except Exception as e:  # a skill raising must not kill the rollout
         thoughts.append(f"Skill raised {type(e).__name__}: {e}")
     finally:

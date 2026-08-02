@@ -120,6 +120,19 @@ GAME_SPECS: dict[str, "GameSpec"] = {
     PRIMITIVES_GAME_SPEC.name: PRIMITIVES_GAME_SPEC,
 }
 
+#: The NetPlay skills that open a "What do you want to <verb>?" item prompt and
+#: can answer it themselves via `item_letter` -- the vendored
+#: `create_inventory_command` set (drop, read, put_on, remove, takeoff, wield,
+#: wear, apply, eat, drink, tip, dip) plus `zap`, whose signature also takes
+#: item_letter. Used by the post-skill dismissal notice to tell the agent HOW
+#: to retry instead of just that its prompt was closed. Published np_ names;
+#: see netplay_true.NETPLAY_TRUE_TOOL_NAMES.
+_DISMISSAL_ITEM_SKILLS = frozenset({
+    "np_wear", "np_wield", "np_takeoff", "np_put_on", "np_remove",
+    "np_eat", "np_drink", "np_read", "np_drop", "np_apply",
+    "np_zap", "np_dip", "np_tip",
+})
+
 
 # ---------- verifiers 0.1.14 compat shim ----------
 #
@@ -713,6 +726,29 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             except Exception:
                 pass  # bootstrap failures must never break a rollout
 
+        # Materialize this rollout's turn file NOW, empty, so the stall
+        # watchdog can see the rollout from second zero. The watchdog watches
+        # `turns/*.ndjson` mtimes; a rollout that hangs BEFORE its first trace
+        # write has no file and is therefore invisible to it -- measured
+        # 2026-08-02: a retry wedged pre-first-turn sat undetected for the full
+        # 2h rollout timeout while the 300s stall timeout stood idle. The
+        # run_id is stamped into state exactly as `_write_trace_entry` builds
+        # it, so the lazy path reuses this file rather than creating a second.
+        # An empty file is harmless downstream: `select_turn_files` drops
+        # "no turn rows" files at aggregation.
+        if getattr(self, "trace_dir", None):
+            try:
+                import os as _os, time as _time
+                from pathlib import Path as _Path
+                out_dir = _Path(self.trace_dir)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                seeds = state["env"].current_seeds if state.get("env") else (0, 0)
+                run_id = f"{seeds[0]}_{_os.getpid()}_{int(_time.time())}"
+                state["_trace_run_id"] = run_id
+                (out_dir / f"{run_id}.ndjson").touch()
+            except Exception:
+                pass  # tracing must never break a rollout
+
         return state
 
     def _parse_tool_call(self, messages: vf.Messages, state: vf.State) -> tuple[str, dict]:
@@ -905,6 +941,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # withholds the entity/message blocks except on `reveal` turns, and
         # this is how its template knows which turn it is rendering.
         state["_last_skill_name"] = skill_name or ""
+        # One yes-answer attempt per TURN (see the skill-initiated confirm
+        # branch in the dismissal loop); reset here so the next turn's skill
+        # gets its own attempt.
+        state.pop("_confirm_yes_tried", None)
         # `_parse_tool_call` encodes "the model emitted no tool call at all" as
         # this sentinel (there is no skill to apply, so nothing below — the
         # gate, dispatch, engine stepping — applies). Surface the same
@@ -1201,6 +1241,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         esc_action = esc_idx_list[0] if esc_idx_list else (more_idx_list[0] if more_idx_list else None)
         y_action = y_idx_list[0] if y_idx_list else esc_action
         n_action = n_idx_list[0] if n_idx_list else esc_action
+        # What KINDS of thing the loop closes, for the notice below. A one-line
+        # item prompt, a --More-- acknowledgement and a real menu are three
+        # different situations to the agent and must not share one label.
+        saw_prompt, saw_more, saw_menu = False, False, False
+        prompt_txt = None
         for _ in range(8):
             so = state["structured_obs"]
             yn = getattr(so, "yn_prompt", None)
@@ -1210,6 +1255,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             has_more = any("--More--" in m for m in (so.messages or [])) or _obs_tty_has_more(last_obs)
             if so.menu is None and so.inventory_prompt is None and yn is None and not has_more:
                 break
+            if so.inventory_prompt is not None or yn is not None:
+                saw_prompt = True
+                if prompt_txt is None:
+                    for _m in reversed(so.messages or []):
+                        if "?" in _m:
+                            prompt_txt = _m.strip()
+                            break
+            elif has_more:
+                saw_more = True
+            else:
+                saw_menu = True
             # Under the BALROG raw-command surface, answering menus / item
             # prompts / y-n questions is the AGENT's job (see
             # `_balrog_raw_prompts` in __init__). Only --More-- is still
@@ -1223,7 +1279,37 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 # MORE prompts want CR/space, not ESC.
                 action = more_idx_list[0] if more_idx_list else esc_action
             else:
+                # Skill-initiated confirmation (exp4 fix 4): when the skill the
+                # agent JUST called opened a matching [ynq] confirm, ESC is the
+                # wrong answer -- the agent already declared its intent by
+                # calling the skill. Measured cost of ESC-ing these: a 10-call
+                # brute-force spiral trying to answer a chest's "loot it?"
+                # after the fact (exp3b pa seed 4). Answer 'y' ONCE; if the
+                # prompt survives (locked, nested question), fall back to ESC
+                # so this can never loop. The whitelist is deliberately tiny
+                # and intent-matched; anything mentioning attack/really is
+                # excluded -- "Really attack the watch captain?" must stay
+                # declined.
                 action = esc_action
+                if not state.get("_confirm_yes_tried"):
+                    _lastq = None
+                    for _m in reversed(so.messages or []):
+                        if "[yn" in _m or "[ynq" in _m:
+                            _lastq = _m.lower()
+                            break
+                    _skill_confirms = {
+                        "np_loot": ("loot it",),
+                        "np_tip": ("tip it",),
+                        "np_apply": ("force its lock", "unlock it"),
+                        "np_offer": (),   # sacrifices stay manual
+                    }
+                    _oks = _skill_confirms.get(state.get("_last_skill_name") or "", ())
+                    if (_lastq and _oks
+                            and any(k in _lastq for k in _oks)
+                            and "attack" not in _lastq and "really" not in _lastq):
+                        action = y_action
+                        state["_confirm_yes_tried"] = True
+                        saw_prompt = False  # answered, not dismissed: no notice
             if action is None:
                 break
             last_obs, _r, t2, tr2, _info = env.step(action)
@@ -1244,8 +1330,46 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 reset_agent_cache()
             except Exception:
                 pass
-            halt_reason = (halt_reason or "") + (f" menu auto-dismissed x{dismissed}" if not halt_reason else f" / menu auto-dismissed x{dismissed}")
-            halt_reason = halt_reason.lstrip()
+            # Report the SITUATION, not the mechanism. "menu auto-dismissed xN"
+            # described the harness's plumbing and misnamed the common case (a
+            # one-line item prompt is not a menu); the agent was left with three
+            # open questions -- did the action happen? is something pending?
+            # what now? -- and answered them by retrying: exp3 seed 4 called
+            # `wear` (no item_letter) 11 times in a row. The notice now answers
+            # all three inline, quoting the game's own prompt where one was
+            # captured. Resume semantics are stated flatly because they are
+            # simple: ESC returns the game to the command prompt, nothing is
+            # ever pending after this loop.
+            notices = []
+            if saw_prompt:
+                _last = state.get("_last_skill_name") or ""
+                asked = f'NetHack asked "{prompt_txt}"' if prompt_txt else "NetHack asked which item to use"
+                if _last in _DISMISSAL_ITEM_SKILLS:
+                    # Suggest a letter the prompt actually offered ("[bcde or
+                    # ?*]" -> 'b'), so the example is directly usable.
+                    _m = re.search(r"\[\$?([A-Za-z])", prompt_txt or "")
+                    _eg = _m.group(1) if _m else "a"
+                    notices.append(
+                        f"{asked} -- '{_last}' ended without choosing, so the "
+                        f"harness pressed ESC. Nothing happened and no game time "
+                        f"passed. Nothing is pending. To do it, call "
+                        f"{_last} again with the item's inventory letter from "
+                        f"that prompt, e.g. {_last}(item_letter='{_eg}')"
+                    )
+                else:
+                    notices.append(
+                        f"{asked} -- the harness pressed ESC, so nothing "
+                        f"happened and nothing is pending"
+                    )
+            if saw_menu:
+                notices.append("harness closed a leftover menu; the game is back at the command prompt")
+            if saw_more:
+                notices.append("harness acknowledged --More--")
+            # NOT merged into halt_reason: "autohalt" is a skill being
+            # interrupted mid-run, and this is post-skill cleanup. Each gets
+            # its own bracketed prefix so the agent never reads a closed
+            # prompt as an interrupted plan.
+            state["_dismiss_notice"] = "; ".join(notices) or f"harness cleared a blocking prompt x{dismissed}"
         # Snapshot the post-turn state so `rollback(n)` has somewhere to go.
         # Only when the tool is actually published, because each snapshot is a
         # full engine heap image -- every other arm must not pay for a feature
@@ -1370,6 +1494,26 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["turn_count"] = state.get("turn_count", 0) + 1
         if self.belief_state_interval > 0 and state["turn_count"] > 0 and state["turn_count"] % self.belief_state_interval == 0:
             _maybe_belief_state_summary(state)
+
+        # Path-failure diagnosis (exp4 fix 3): "No valid path found to reach
+        # position (X,Y)" was the single largest waste bucket in BOTH arms of
+        # exp3b (~25% of all move_to calls), because it names no reason -- so
+        # both agents re-issued the identical coordinates within a few calls.
+        # Append WHY: the blocking door/monster on the route, or the nearest
+        # reachable tile when no explored route exists at all.
+        if (skill_name in ("np_move_to", "np_go_to", "move_to")
+                and result.feedback
+                and ("No valid path" in result.feedback or "No path found" in result.feedback)):
+            try:
+                from nethack_harness.navigation.path_explain import explain_path_failure
+                extra = explain_path_failure(state.get("raw_obs"), skill_args)
+                if extra:
+                    from nethack_harness.tools.skills import SkillResult as _SR
+                    result = _SR(actions=result.actions,
+                                 feedback=f"{result.feedback} {extra}",
+                                 interrupted=result.interrupted)
+            except Exception:
+                pass  # a diagnosis must never break the turn
 
         # Move-blocked detection: `move(direction=...)` always reports "Moved
         # S." even when the action bumped a wall. The model can't tell from
@@ -1568,6 +1712,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             prefix_parts.append(loop_hint)
         if halt_reason:
             prefix_parts.append(f"[autohalt: {halt_reason}]")
+        # Post-skill prompt/menu cleanup, deliberately NOT under the autohalt
+        # label -- a closed prompt is not an interrupted plan.
+        _dn = state.pop("_dismiss_notice", None)
+        if _dn:
+            prefix_parts.append(f"[{_dn}]")
         dropped = state.get("_dropped_extra_tool_calls", 0)
         if dropped:
             prefix_parts.append(
