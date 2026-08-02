@@ -900,6 +900,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         in `state["_turn_trace"]` at each of its several return points.
         """
         tt = state.setdefault("_turn_trace", {})
+        # The skill this turn's observation is a response TO. Stamped before
+        # any render so a turn template can condition on it — variant BBOX_MIN
+        # withholds the entity/message blocks except on `reveal` turns, and
+        # this is how its template knows which turn it is rendering.
+        state["_last_skill_name"] = skill_name or ""
         # `_parse_tool_call` encodes "the model emitted no tool call at all" as
         # this sentinel (there is no skill to apply, so nothing below — the
         # gate, dispatch, engine stepping — applies). Surface the same

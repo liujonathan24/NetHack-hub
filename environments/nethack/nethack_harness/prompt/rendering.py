@@ -1299,6 +1299,7 @@ def format_observation_as_chat(
     include_map: bool = True,
     include_local: bool = True,
     sparse_entities: bool = False,
+    minimal: bool = False,
 ) -> str:
     """Render a StructuredObservation as a text block for the user message.
 
@@ -1313,6 +1314,15 @@ def format_observation_as_chat(
     trace analyses found `recall`/`pin_objective` never called across 1,173
     Claude Code calls. The control arm never sets this flag (default False)
     and keeps both blocks unchanged: it is the v0 baseline and must not drift.
+
+    `minimal=True` (variant BBOX_MIN) keeps only the survival-critical core:
+    the game-over block, STATUS + Character, and the MENU / inventory-prompt
+    safety notices. INVENTORY, UNDER PLAYER, ADJACENT, VISIBLE FEATURES,
+    VISIBLE MONSTERS and MESSAGES are all withheld — under that variant they
+    are delivered only on the turn a `reveal` is called (the turn template
+    passes `minimal=False` for that turn). The action feedback line, which
+    already carries the last GAME message, is prepended by the harness and is
+    not this function's concern.
     """
     self_dispatch = bool(state and state.get("_self_dispatch"))
     lines: list[str] = []
@@ -1417,7 +1427,7 @@ def format_observation_as_chat(
     if c:
         lines.append(f"Character: {c.get('role', '?')} ({c.get('race', '?')}, {c.get('alignment', '?')})")
     lines.append("")
-    if structured.inventory:
+    if structured.inventory and not minimal:
         prev_fp = state.get("_inv_fingerprint") if state is not None else None
         cur_fp = _inventory_fingerprint(structured.inventory)
         if compact and prev_fp == cur_fp:
@@ -1447,7 +1457,7 @@ def format_observation_as_chat(
         if state is not None:
             state["_inv_fingerprint"] = cur_fp
         lines.append("")
-    if include_local:
+    if include_local and not minimal:
         # UNDER PLAYER: critically tells the agent what tile @ is hiding.
         # Especially important for stairs (`>` down vs `<` up).
         under = getattr(structured, "under_player", None)
@@ -1745,7 +1755,7 @@ def format_observation_as_chat(
     from nethack_harness.prompt.features import (
         format_features, monsters_in_sight, stairs_down, visible_features,
     )
-    if state is not None and "raw_obs" in state:
+    if state is not None and "raw_obs" in state and not minimal:
         try:
             feats = visible_features(state["raw_obs"])
             # Memoize stairs DOWN coords across turns so a subsequent step
@@ -1806,7 +1816,12 @@ def format_observation_as_chat(
 
         except Exception:
             pass
-    if structured.messages:
+    # MESSAGES is withheld under `minimal` like the other context blocks, but
+    # with less lost than it looks: the harness's action-feedback prefix
+    # (`[Executing skill ... GAME: <message>]`) already carries the last game
+    # message of the turn, so `minimal` drops only the earlier messages of
+    # multi-message turns.
+    if structured.messages and not minimal:
         lines.append("=== MESSAGES ===")
         msgs = _run_length_encode_messages(structured.messages) if compact else list(structured.messages)
         for m in msgs:

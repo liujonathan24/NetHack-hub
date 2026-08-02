@@ -452,6 +452,40 @@ def _bbox_template(structured, journal, state, *, compact, journal_max_chars):
     return _splice_placeholder(text, _BBOX_MAP_PLACEHOLDER)
 
 
+#: BBOX_MIN's placeholder names everything the variant withholds, not just the
+#: map — the line is the agent's only standing notice of what `reveal` buys.
+_BBOX_MIN_PLACEHOLDER = (
+    "=== SURROUNDINGS (hidden; call reveal(x1,y1,x2,y2) for the map plus "
+    "ADJACENT / VISIBLE FEATURES / VISIBLE MONSTERS / MESSAGES) ==="
+)
+
+
+def _bbox_min_template(structured, journal, state, *, compact, journal_max_chars):
+    """BBOX_MIN: the quiet turn is feedback + STATUS, nothing else.
+
+    BBOX withholds the ASCII grid but still pushes ADJACENT, UNDER PLAYER,
+    VISIBLE FEATURES, VISIBLE MONSTERS and MESSAGES on every turn — so the
+    coordinate feed `reveal` competes with is free, and `reveal` fires on ~2%
+    of turns. This variant withholds all of it. A quiet turn is the action
+    feedback line (prepended by the harness, and already carrying the last
+    GAME message), the placeholder above, STATUS + Character, and the MENU /
+    inventory-prompt safety notices. The turn a `reveal` executes, the FULL
+    section set renders alongside the crop — everything else is saved for
+    when reveal is called, exactly once per purchase.
+
+    The game-over block always renders (death must never arrive silently),
+    and `reveal` still consumes no game turn, so buying the sections is free
+    on the in-game clock and costs exactly one unit of the call budget.
+    """
+    reveal_turn = bool(state) and state.get("_last_skill_name") == "reveal"
+    text = format_observation_as_chat(
+        structured, journal, state, compact=compact,
+        journal_max_chars=journal_max_chars, include_map=False,
+        minimal=not reveal_turn,
+    )
+    return _splice_placeholder(text, _BBOX_MIN_PLACEHOLDER)
+
+
 def _sparse_template(structured, journal, state, *, compact, journal_max_chars):
     """SPARSE: entity-only map, always shown. No terrain, no duplicate sections."""
     return format_observation_as_chat(
@@ -702,6 +736,11 @@ def _build_registry(system_prompt: str) -> dict:
         # reveal(x1,y1,x2,y2), which returns an ASCII crop as tool feedback.
         "BBOX": canonical("BBOX", turn_template=_bbox_template,
                           obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # BBOX with the quiet-turn push stripped to feedback + STATUS; the
+        # entity/message sections arrive only on `reveal` turns. See
+        # _bbox_min_template.
+        "BBOX_MIN": canonical("BBOX_MIN", turn_template=_bbox_min_template,
+                              obs=ObsSpec(setup_flags={"_bbox_map": True})),
         # Entity-only map: terrain dropped, and ADJACENT / VISIBLE FEATURES /
         # VISIBLE MONSTERS folded into it so there is exactly one place state
         # lives. SPARSE always shows it; SPARSE_ONDEMAND withholds it behind
