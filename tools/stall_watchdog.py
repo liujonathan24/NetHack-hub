@@ -240,11 +240,14 @@ def recent_call_gaps(path: str, n: int = 24) -> list[float]:
             except (ValueError, UnicodeDecodeError):
                 continue
             t = rec.get("t_wall") if isinstance(rec, dict) else None
-            if t:
-                ts.append(float(t))
+            try:
+                if t:
+                    ts.append(float(t))
+            except (TypeError, ValueError):
+                continue  # a torn tail can leave t_wall as garbage
         return [b - a for a, b in zip(ts, ts[1:]) if b > a][-n:]
-    except OSError:
-        return []
+    except Exception:
+        return []  # this function's contract: never break the sweep
 
 
 def adaptive_timeout(base: float, gaps: list[float], factor: float = 4.0,
@@ -259,8 +262,13 @@ def adaptive_timeout(base: float, gaps: list[float], factor: float = 4.0,
     if not gaps:
         return base
     g = sorted(gaps)
-    p95 = g[min(len(g) - 1, int(0.95 * (len(g) - 1)))]
-    return min(ceiling, max(base, factor * p95))
+    # With fewer than 5 samples a p95 index degenerates to the MINIMUM gap --
+    # a slow-thinking model whose first gaps are [30s, 400s] would get no
+    # protection exactly when a long think is most likely (early, before the
+    # history fills). Small samples use the MAX gap instead: conservative in
+    # the protective direction, converging to p95 as history accumulates.
+    rep = g[-1] if len(g) < 5 else g[min(len(g) - 1, int(0.95 * (len(g) - 1)))]
+    return min(ceiling, max(base, factor * rep))
 
 
 def last_turn_record(path: str) -> dict:
@@ -495,10 +503,18 @@ class Watchdog:
             # rollout's OWN recent call latency (see recent_call_gaps). A model
             # that routinely thinks 150s between calls is not stalled at 320s;
             # a model that answers in 10s is.
-            newest = max(slot["files"], key=lambda p: os.stat(p).st_mtime)
-            eff = adaptive_timeout(self.timeout, recent_call_gaps(newest),
-                                   factor=self.adaptive_factor,
-                                   ceiling=self.adaptive_ceiling)
+            # NOTHING in this calibration may raise: a dead watchdog leaves
+            # the sweep unguarded, which is worse than any mis-timed kill. A
+            # file in slot["files"] can vanish between scan() and here (a
+            # concurrent quarantine -- duplicate driver invocations are a
+            # lived event), so degrade to the base timeout on any error.
+            try:
+                newest = max(slot["files"], key=lambda p: os.stat(p).st_mtime)
+                eff = adaptive_timeout(self.timeout, recent_call_gaps(newest),
+                                       factor=self.adaptive_factor,
+                                       ceiling=self.adaptive_ceiling)
+            except Exception:
+                eff = self.timeout
             if idle <= eff:
                 if self.verbose or eff > self.timeout:
                     self.say(f"deferring pid={pid}: idle={idle:.0f}s is inside "

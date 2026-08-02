@@ -120,6 +120,36 @@ GAME_SPECS: dict[str, "GameSpec"] = {
     PRIMITIVES_GAME_SPEC.name: PRIMITIVES_GAME_SPEC,
 }
 
+#: [ynq] confirms a skill may open ABOUT ITS OWN INTENT, keyed by the skill.
+#: Deliberately tiny: an entry means "if the agent just called this skill and
+#: NetHack asked this question, the answer is yes". Nothing mentioning
+#: attack/really is ever auto-answered -- "Really attack the watch captain?"
+#: must stay declined (a `y` there is run-ending in Minetown).
+_SKILL_CONFIRMS = {
+    "np_loot": ("loot it",),
+    "np_tip": ("tip it",),
+    "np_apply": ("force its lock", "unlock it"),
+}
+
+
+def _confirm_yes_for(skill_name, messages) -> bool:
+    """Should this [ynq] prompt be answered `y` because `skill_name` opened it?
+
+    True only when the newest [yn...]-bearing message matches the calling
+    skill's own whitelist and mentions neither attack nor really. Pure
+    function so the policy is unit-testable apart from the dismissal loop.
+    """
+    oks = _SKILL_CONFIRMS.get(skill_name or "", ())
+    if not oks:
+        return False
+    for m in reversed(messages or []):
+        if "[yn" in m:
+            q = m.lower()
+            return (any(k in q for k in oks)
+                    and "attack" not in q and "really" not in q)
+    return False
+
+
 #: The NetPlay skills that open a "What do you want to <verb>?" item prompt and
 #: can answer it themselves via `item_letter` -- the vendored
 #: `create_inventory_command` set (drop, read, put_on, remove, takeoff, wield,
@@ -1274,42 +1304,31 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 break
             if yn is not None:
                 ans = yn["answer"]
+                # Skill-initiated confirmation (exp4 fix 4, RELOCATED): the
+                # first version of this lived in the `else` branch below and
+                # was UNREACHABLE -- `extract_yn_prompt` parses any "[ynq]"
+                # message into `yn_prompt`, so a [ynq] confirm always lands
+                # HERE, where the parsed default for "loot it? [ynq] (q)" is
+                # ESC and the chest never opened (the measured 10-call
+                # brute-force spiral). When the skill the agent JUST called
+                # opened a matching confirm, answer y ONCE; if the prompt
+                # survives, the next iteration falls through to the default
+                # so this can never loop. Attack/really prompts are excluded.
+                if ans != "y" and not state.get("_confirm_yes_tried"):
+                    if _confirm_yes_for(state.get("_last_skill_name"),
+                                        so.messages or []):
+                        ans = "y"
+                        state["_confirm_yes_tried"] = True
                 action = y_action if ans == "y" else (n_action if ans == "n" else esc_action)
             elif has_more:
                 # MORE prompts want CR/space, not ESC.
                 action = more_idx_list[0] if more_idx_list else esc_action
             else:
-                # Skill-initiated confirmation (exp4 fix 4): when the skill the
-                # agent JUST called opened a matching [ynq] confirm, ESC is the
-                # wrong answer -- the agent already declared its intent by
-                # calling the skill. Measured cost of ESC-ing these: a 10-call
-                # brute-force spiral trying to answer a chest's "loot it?"
-                # after the fact (exp3b pa seed 4). Answer 'y' ONCE; if the
-                # prompt survives (locked, nested question), fall back to ESC
-                # so this can never loop. The whitelist is deliberately tiny
-                # and intent-matched; anything mentioning attack/really is
-                # excluded -- "Really attack the watch captain?" must stay
-                # declined.
+                # A real menu / inventory prompt with no yn question: ESC. The
+                # skill-initiated [ynq] whitelist lives in the `yn is not None`
+                # branch above -- its first home here was unreachable, because
+                # any message containing "[ynq]" is parsed into `yn_prompt`.
                 action = esc_action
-                if not state.get("_confirm_yes_tried"):
-                    _lastq = None
-                    for _m in reversed(so.messages or []):
-                        if "[yn" in _m or "[ynq" in _m:
-                            _lastq = _m.lower()
-                            break
-                    _skill_confirms = {
-                        "np_loot": ("loot it",),
-                        "np_tip": ("tip it",),
-                        "np_apply": ("force its lock", "unlock it"),
-                        "np_offer": (),   # sacrifices stay manual
-                    }
-                    _oks = _skill_confirms.get(state.get("_last_skill_name") or "", ())
-                    if (_lastq and _oks
-                            and any(k in _lastq for k in _oks)
-                            and "attack" not in _lastq and "really" not in _lastq):
-                        action = y_action
-                        state["_confirm_yes_tried"] = True
-                        saw_prompt = False  # answered, not dismissed: no notice
             if action is None:
                 break
             last_obs, _r, t2, tr2, _info = env.step(action)
