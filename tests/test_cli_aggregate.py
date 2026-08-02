@@ -102,10 +102,15 @@ def test_rollout_cost_matches_a_hand_computed_price():
         ]
     }
     price = {"input_per_million": 2.0, "cached_input_per_million": 0.5, "output_per_million": 10.0}
-    # call 1: 1000 fresh * 2.0/1e6 + 0 cached + 100 * 10.0/1e6 = 0.002 + 0.001 = 0.003
-    # call 2: 1000 fresh * 2.0/1e6 + 1000 cached * 0.5/1e6 + 50 * 10.0/1e6
-    #       = 0.002 + 0.0005 + 0.0005 = 0.003
-    assert rollout_cost(trace, price) == 0.006
+    # `prompt_tokens` EXCLUDES cache reads (verifiers.v1.types.Usage: "`input_tokens`
+    # adds them back"), so the two are added, never subtracted. The earlier version
+    # of this test encoded the opposite -- `1000 fresh = 2000 prompt - 1000 cached`
+    # -- and so certified the sign error that dropped 52% of the exp2 sweep's input
+    # tokens out of every cost this module reported.
+    # call 1: 1000 prompt * 2.0/1e6 + 0 cached + 100 * 10.0/1e6 = 0.002 + 0.001 = 0.003
+    # call 2: 2000 prompt * 2.0/1e6 + 1000 cached * 0.5/1e6 + 50 * 10.0/1e6
+    #       = 0.004 + 0.0005 + 0.0005 = 0.005
+    assert rollout_cost(trace, price) == 0.008
 
 
 def test_rollout_cost_is_none_when_no_call_carries_usage():

@@ -190,14 +190,46 @@ def test_a_short_rollout_is_flagged_degenerate_and_never_silently_passed():
 
 
 @_needs_probe
-def test_an_unpriced_model_reports_cost_unavailable_not_glm_5_2_rates():
-    rows, warnings = _rows(PROBE_RUN)
+def test_a_non_glm_5_2_cell_is_priced_with_its_OWN_table():
+    """The defect was a `z-ai/glm-4.7-flash` run reported at GLM 5.2 rates.
+
+    That model is now in PRICE_TABLES with the provider's own numbers, so the
+    assertion moved from "reports unavailable" to "reports ITS price": the row
+    must be priced strictly below what the GLM 5.2 table would have produced
+    (flash is $0.10/$0.43 against $1.68/$5.28).
+    """
+    rows, _warnings = _rows(PROBE_RUN)
     (row,) = rows
     assert row["model"] == "z-ai/glm-4.7-flash"
+    assert row["cost_priced_model"] == "z-ai/glm-4.7-flash"
+    assert row["cost_mean"] is not None
+    glm52 = cli_agg.PRICE_TABLES["z-ai/glm-5.2"]
+    flash = cli_agg.PRICE_TABLES["z-ai/glm-4.7-flash"]
+    assert flash["input_per_million"] < glm52["input_per_million"]
+
+
+def test_a_model_with_no_table_at_all_reports_cost_unavailable(tmp_path):
+    """The invariant the test above used to carry: a model nobody has a price
+    for is reported as unavailable, NEVER priced with a neighbour's table."""
+    cell = tmp_path / "cell"
+    (cell / "turns").mkdir(parents=True)
+    (cell / "config.toml").write_text('model = "acme/not-a-real-model"\n')
+    (cell / "turns" / "0_100_1.ndjson").write_text(
+        json.dumps({"turn": 1, "dlvl": 1, "hp": 10, "status": {"time": 1}}) + "\n"
+    )
+    (cell / "traces.jsonl").write_text(
+        json.dumps({
+            "task": {"data": {"idx": 0}},
+            "stop_condition": "game_over",
+            "calls": [{"usage": {"prompt_tokens": 10, "completion_tokens": 1}}],
+        }) + "\n"
+    )
+    rows, warnings = _rows(tmp_path)
+    (row,) = rows
     assert row["cost_mean"] is None
     assert row["cost_priced_model"] is None
     assert any("not in PRICE_TABLES" in w for w in warnings)
-    assert "unavailable (no price table for z-ai/glm-4.7-flash)" in cli_agg.to_markdown(rows)
+    assert "unavailable (no price table for acme/not-a-real-model)" in cli_agg.to_markdown(rows)
 
 
 @_needs_pilot

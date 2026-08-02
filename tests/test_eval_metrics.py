@@ -347,9 +347,19 @@ def test_an_empty_attempt_file_is_reported_not_silently_selected(tmp_path):
 @_needs_probe
 def test_the_probe_cell_ran_a_model_that_is_not_glm_5_2():
     """The measured mispricing: this run was `z-ai/glm-4.7-flash` and was
-    reported at GLM 5.2 rates."""
+    reported at GLM 5.2 rates.
+
+    `glm-4.7-flash` now HAS a table of its own (the provider's, via
+    `refresh_price_tables`), so the guard is no longer "it is unpriced" -- it
+    is "it is priced as ITSELF". That is the property that actually mattered:
+    the defect was one model's rates being applied to another's run, and a
+    table that happens to be missing is only an accidental way to avoid it.
+    """
     assert model_for_cell(PROBE) == "z-ai/glm-4.7-flash"
-    assert price_table_for("z-ai/glm-4.7-flash") is None
+    probe_price = price_table_for("z-ai/glm-4.7-flash")
+    assert probe_price is not None
+    assert probe_price is not PRICE_TABLES["z-ai/glm-5.2"]
+    assert probe_price["input_per_million"] != PRICE_TABLES["z-ai/glm-5.2"]["input_per_million"]
 
 
 @_needs_pilot

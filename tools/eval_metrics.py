@@ -61,6 +61,9 @@ from nethack_harness.prompt.balrog import balrog_both  # noqa: E402
 __all__ = [
     "PRICE_TABLES",
     "PRICE_TABLE_GLM_5_2",
+    "PRICE_CACHE_PATH",
+    "PRICE_ENDPOINT",
+    "refresh_price_tables",
     "TABLE_PROVENANCE_NAME",
     "balrog_columns",
     "concurrent_rollout_files",
@@ -444,10 +447,21 @@ def select_turn_files(cell_dir, subdir: str = "turns", seeds=None):
 
 # $/1M tokens, keyed by the `model` string in the cell's `config.toml`.
 #
-# Sourced from public aggregator pricing pages (Requesty, SiliconFlow) citing
-# "official Z.ai rates" as of 2026-07; NOT verified against an actual Prime
-# Inference invoice for this project's account, which may carry a different
-# reseller markup. Correct them HERE (one place) if a real invoice disagrees.
+# THESE ARE THE PROVIDER'S OWN NUMBERS, read from Prime Inference's `/models`
+# endpoint (`pricing.input_usd_per_mtok` / `output_usd_per_mtok`) and refreshed
+# by `refresh_price_tables()`. The previous values here were $1.40/$4.40, taken
+# from public aggregator pages citing "official Z.ai rates"; Prime actually
+# charges $1.68/$5.28, so every cost this module produced was 20% low before
+# any other error compounded on top. Do not re-source these from a third-party
+# pricing page -- the only authority for what this account is billed is the
+# endpoint the account calls.
+#
+# `cached_input_per_million` DELIBERATELY EQUALS `input_per_million`. Prime's
+# `/models` payload exposes exactly two prices per model and no cached-read
+# discount, so a cache hit is billed at the full input rate until Prime
+# publishes otherwise. The old 0.26 here was an OpenAI-style 0.19x guess and,
+# combined with the sign error in `_call_cost` (see aggregate.py), it hid the
+# single largest line item in the run: cache reads were 52% of all input.
 #
 # A model absent from this table gets NO price: `price_table_for` returns None
 # and every cost derived from it reports "unavailable". This is deliberate --
@@ -456,14 +470,111 @@ def select_turn_files(cell_dir, subdir: str = "turns", seeds=None):
 # cost is worse than a missing one.
 PRICE_TABLES: dict[str, dict[str, float]] = {
     "z-ai/glm-5.2": {
-        "input_per_million": 1.40,
-        "cached_input_per_million": 0.26,
-        "output_per_million": 4.40,
+        "input_per_million": 1.68,
+        "cached_input_per_million": 1.68,
+        "output_per_million": 5.28,
+    },
+    "z-ai/glm-5.1": {
+        "input_per_million": 1.75,
+        "cached_input_per_million": 1.75,
+        "output_per_million": 5.50,
+    },
+    "z-ai/glm-5": {
+        "input_per_million": 1.20,
+        "cached_input_per_million": 1.20,
+        "output_per_million": 3.50,
+    },
+    "z-ai/glm-4.7": {
+        "input_per_million": 0.60,
+        "cached_input_per_million": 0.60,
+        "output_per_million": 2.65,
+    },
+    "z-ai/glm-4.7-flash": {
+        "input_per_million": 0.10,
+        "cached_input_per_million": 0.10,
+        "output_per_million": 0.43,
     },
 }
 
 #: Back-compat alias for the one table that was hardcoded module-wide.
 PRICE_TABLE_GLM_5_2 = PRICE_TABLES["z-ai/glm-5.2"]
+
+#: Where `refresh_price_tables` caches the provider's reply, so a sweep on a box
+#: with no outbound network still prices correctly from the last fetch.
+PRICE_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "results", "model_prices.json"
+)
+
+PRICE_ENDPOINT = "https://api.pinference.ai/api/v1/models"
+
+
+def _price_table_from_models_entry(entry: dict) -> dict[str, float] | None:
+    """One `/models` record -> a price table, or None when it carries no
+    pricing (some entries do not)."""
+    pricing = entry.get("pricing") or {}
+    inp = pricing.get("input_usd_per_mtok")
+    out = pricing.get("output_usd_per_mtok")
+    if inp is None or out is None:
+        return None
+    # No `cached_input_usd_per_mtok` exists in this payload. Read a cache hit at
+    # the full input rate rather than inventing a discount -- see the note on
+    # PRICE_TABLES. If Prime ever publishes one, honour it here and nowhere else.
+    cached = pricing.get("cached_input_usd_per_mtok", inp)
+    return {
+        "input_per_million": float(inp),
+        "cached_input_per_million": float(cached),
+        "output_per_million": float(out),
+    }
+
+
+def refresh_price_tables(api_key: str | None = None, timeout: float = 20.0,
+                         cache_path: str | None = None) -> dict[str, dict[str, float]]:
+    """Fetch live prices from Prime's `/models` and merge them into
+    `PRICE_TABLES`, caching the result.
+
+    Returns the tables that were merged in (empty on any failure). NEVER
+    raises: a budget number computed from the committed constants is worth more
+    than a traceback, and the constants above are the last known-good fetch.
+    Falls back to the on-disk cache when the endpoint cannot be reached.
+    """
+    cache_path = cache_path or PRICE_CACHE_PATH
+    key = api_key or os.environ.get("PI_API_KEY") or os.environ.get("PRIME_API_KEY")
+    fetched: dict[str, dict[str, float]] = {}
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(PRICE_ENDPOINT)
+        if key:
+            req.add_header("Authorization", f"Bearer {key}")
+        # Cloudflare in front of the endpoint 403s the default
+        # `Python-urllib/3.x` agent while serving the identical curl request
+        # 200. Without this the refresh always failed and always fell back --
+        # silently correct, but never actually refreshing.
+        req.add_header("User-Agent", "nethack-hub-eval/1.0")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        for entry in payload.get("data") or []:
+            model = entry.get("id")
+            table = _price_table_from_models_entry(entry)
+            if model and table:
+                fetched[model] = table
+    except Exception:
+        fetched = {}
+    if fetched:
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, "w") as fh:
+                json.dump(fetched, fh, indent=2, sort_keys=True)
+        except OSError:
+            pass
+    elif os.path.exists(cache_path):
+        try:
+            with open(cache_path) as fh:
+                fetched = json.load(fh)
+        except (OSError, ValueError):
+            fetched = {}
+    PRICE_TABLES.update(fetched)
+    return fetched
 
 
 def price_table_for(model: str | None) -> dict[str, float] | None:

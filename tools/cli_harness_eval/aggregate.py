@@ -99,6 +99,7 @@ from tools.eval_metrics import (  # noqa: E402
     pace_columns,
     price_table_for,
     read_ndjson,
+    refresh_price_tables,
     select_turn_files,
     skill_call_count,
     turn_file_parts,
@@ -252,6 +253,83 @@ def _read_turns_file(path) -> list[dict]:
     return read_ndjson(path)
 
 
+# -- infrastructure-terminated rollouts ---------------------------------------
+#
+# A rollout that ended because the PROVIDER refused the call is not a
+# measurement of the agent, and 31 of the 80 records in the exp2 sweep are
+# exactly that: the wallet hit -$15.01 at 19:20:28Z and every subsequent call
+# came back `upstream 402 ... insufficient_funds`. The eval CLI writes those
+# attempts into `traces.jsonl` as ordinary records, and every column that
+# averaged over `traces` silently averaged them in -- three `claude_code
+# __visoff` cells are reduced to n=1 by this, which is why the scaffold
+# comparison in that sweep is unreadable.
+#
+# They are EXCLUDED FROM SCORING and REPORTED SEPARATELY (`n_error`), never
+# dropped silently. Their spend is still counted: the money left the wallet
+# whether or not the rollout produced a measurement.
+
+#: `stop_condition` values that mean "the infrastructure stopped this", not
+#: "the game ended". The eval CLI writes the exception class name for a rollout
+#: killed by an exception (`ProviderError`, `HarnessError`) and the bare string
+#: `error` for one whose final state was an error node.
+ERROR_STOP_CONDITIONS = frozenset({"error", "harness_timeout"})
+
+
+def is_error_trace(trace: dict) -> bool:
+    """True when this rollout ended for an INFRASTRUCTURE reason.
+
+    Recognised two ways, because the two channels disagree: `stop_condition`
+    is `error` in `traces.jsonl` but the exception class name (`ProviderError`,
+    `HarnessError`) in `eval.log`. A trace whose every recorded call carries an
+    `error` and none carries `usage` is also one of these -- that is the shape
+    of a 402 stub that never got a single completion back.
+    """
+    stop = trace.get("stop_condition") or ""
+    if stop in ERROR_STOP_CONDITIONS or stop.endswith("Error"):
+        return True
+    calls = trace.get("calls") or []
+    if calls and all(isinstance(c, dict) and c.get("error") for c in calls):
+        return True
+    return False
+
+
+def rollout_from_metrics(trace: dict) -> dict | None:
+    """Per-rollout stats for a rollout with NO turn file, read from the trace's
+    own `metrics`. `None` when the trace carries no depth either.
+
+    This is the other half of the 402 damage. `rollout_from_turns` starts at
+    `max_dlvl = 1` and both scorers reach it through `max_dlvl_reached or 1`,
+    so a rollout whose turn file was quarantined by the watchdog -- or never
+    written -- scored a flat dlvl 1. `NetHackTask.finalize` copies the real
+    figure onto `trace.metrics.max_dlvl_reached`, and the deepest such rollout
+    in the exp2 sweep reached 13.
+
+    Latency, post-death drain and game turns are per-turn quantities with no
+    metrics equivalent, so they stay `None` rather than being invented; the
+    row is usable for depth and BALROG and honest about the rest.
+    """
+    metrics = trace.get("metrics") or {}
+    depth = metrics.get("max_dlvl_reached")
+    if depth is None:
+        return None
+    max_dlvl = int(depth) or 1
+    max_xp = int(metrics.get("max_xp_level") or metrics.get("experience_level") or 1) or 1
+    row = {
+        "max_dlvl": max_dlvl,
+        "max_xp": max_xp,
+        "died": bool(metrics.get("died")),
+        "n_turns": None,
+        "game_turns": None,
+        "post_death_drain": None,
+        "sec_per_call_first_half": None,
+        "sec_per_call_second_half": None,
+        "sec_per_call_unavailable": "no turn file; depth read from trace.metrics",
+        "from_metrics": True,
+    }
+    row.update(balrog_columns(max_dlvl, max_xp))
+    return row
+
+
 # -- per-rollout: the traces.jsonl channel -----------------------------------
 
 
@@ -287,6 +365,23 @@ def actions_used(trace: dict, arm: str = ""):
 
 
 def _call_cost(call: dict, price: dict):
+    """Billed cost of ONE intercepted model call.
+
+    `prompt_tokens` and `cached_input_tokens` are DISJOINT and ADDITIVE, not
+    whole-and-part. `verifiers.v1.types.Usage` says so in its own docstring
+    ("`prompt_tokens` excludes cache reads; `input_tokens` adds them back"),
+    `Usage.from_openai` builds it that way (`prompt_tokens = usage.prompt_tokens
+    - cached`), and the traces show it directly: the first call of every
+    claude_code rollout carries `prompt_tokens=28, cached_input_tokens=384` --
+    a "subset" 13x larger than the set containing it.
+
+    The previous code read them as whole-and-part (`cached = min(cached,
+    prompt); fresh = prompt - cached`). On that call it charged 28 tokens
+    instead of 412, and across the exp2 sweep it dropped 334M cache-read tokens
+    -- 52.4% of all input, ~$561 -- straight out of the total. Combined with a
+    price table 20% low, the projection for that sweep came in 6.6x under what
+    the wallet was actually billed.
+    """
     usage = call.get("usage")
     if not isinstance(usage, dict):
         return None
@@ -294,10 +389,11 @@ def _call_cost(call: dict, price: dict):
     if prompt is None:
         return None
     completion = usage.get("completion_tokens") or 0
-    cached = min(usage.get("cached_input_tokens") or 0, prompt)
-    fresh = prompt - cached
+    cached = usage.get("cached_input_tokens") or 0
+    # `reasoning_tokens` is a SUBSET of `completion_tokens` (same source
+    # docstring), so it is deliberately not added again.
     return (
-        fresh * price["input_per_million"]
+        prompt * price["input_per_million"]
         + cached * price["cached_input_per_million"]
         + completion * price["output_per_million"]
     ) / 1_000_000
@@ -365,19 +461,58 @@ def aggregate_arm(
     `turns_paths` is one or more per-turn NDJSON files (one per rollout,
     already de-duplicated by `select_turn_files` when called via
     `aggregate_run`)."""
-    traces = []
+    all_traces = []
     for p in traces_jsonl_paths:
         for line in open(p):
             line = line.strip()
             if line:
-                traces.append(json.loads(line))
+                all_traces.append(json.loads(line))
+
+    # A killed attempt that was RETRIED has both a reconstructed partial record
+    # and, later, a real one from the retry. Keep the real one: it is complete,
+    # it carries token usage, and counting both would inflate `n` with the same
+    # seed twice -- the failure mode `select_turn_files` already guards against
+    # on the other channel.
+    real_seeds = {
+        trace_seed(t) for t in all_traces if not t.get("partial")
+    } - {None}
+    n_partial_dropped = sum(
+        1 for t in all_traces if t.get("partial") and trace_seed(t) in real_seeds
+    )
+    all_traces = [
+        t for t in all_traces
+        if not (t.get("partial") and trace_seed(t) in real_seeds)
+    ]
+    n_partial = sum(1 for t in all_traces if t.get("partial"))
+
+    # Infrastructure-terminated rollouts are split out HERE, once, so no column
+    # below can average one in by accident. `traces` is what gets SCORED;
+    # `error_traces` is reported as `n_error` and still contributes to spend.
+    traces = [t for t in all_traces if not is_error_trace(t)]
+    error_traces = [t for t in all_traces if is_error_trace(t)]
+
+    # A seed whose ONLY records are error traces is not measurable, and its turn
+    # file must not sneak back in through the other channel: exp2's 402 hit
+    # mid-flight, so several seeds have a partly-played turn file AND an error
+    # record, and scoring the truncated depth would report a rollout the
+    # provider cut off as one the agent could not get deeper than. A seed that
+    # errored and was then RETRIED successfully keeps its turn file -- that file
+    # belongs to the good attempt (`select_turn_files` already picks the longest
+    # attempt per seed).
+    good_seeds = {trace_seed(t) for t in traces} - {None}
+    error_only_seeds = ({trace_seed(t) for t in error_traces} - {None}) - good_seeds
 
     turn_items = []
     path_rows = []
+    skipped_error_seeds = []
     for p in turns_paths:
         parts = turn_file_parts(p)
+        seed = parts[0] if parts else None
+        if seed is not None and seed in error_only_seeds:
+            skipped_error_seeds.append((str(p), seed))
+            continue
         rows = _read_turns_file(p)
-        turn_items.append((parts[0] if parts else None, rows))
+        turn_items.append((seed, rows))
         path_rows.append((p, rows))
 
     # Which of this cell's rollouts shared an interpreter with another, and so
@@ -396,6 +531,24 @@ def aggregate_arm(
         )
         for p, rows in path_rows
     ]
+    n_from_turns = len(turn_rollouts)
+
+    # Rollouts the turns channel never saw. A watchdog kill quarantines the turn
+    # file out of `turns/` and a rollout that died before its first flush never
+    # wrote one at all -- in both cases the depth survives on `trace.metrics`,
+    # and reading it there is the difference between a real 13 and a default 1.
+    # Only for SEEDS WITH NO TURN FILE: when both channels have a rollout, the
+    # per-turn one wins (it carries latency, drain and game turns too).
+    covered_seeds = {s for s, _ in turn_items if s is not None}
+    metrics_only = []
+    for t in traces:
+        seed = trace_seed(t)
+        if seed is not None and seed in covered_seeds:
+            continue
+        row = rollout_from_metrics(t)
+        if row is not None:
+            metrics_only.append(row)
+    turn_rollouts += metrics_only
 
     depths = [r["max_dlvl"] for r in turn_rollouts]
     depth_mean, depth_se = mean_se(depths)
@@ -428,6 +581,17 @@ def aggregate_arm(
     costs = [rollout_cost(t, price) for t in traces]
     cost_available = [c for c in costs if c is not None]
     cost_mean, cost_se = mean_se(cost_available)
+
+    # Per-rollout cost above is over SCORED rollouts only, so it stays a
+    # like-for-like number. Spend is a different question -- an attempt that was
+    # killed, retried or 402'd still burned tokens -- so it sums over every
+    # trace this cell wrote, scored or not. Reported alongside a count of the
+    # attempts that produced NO trace at all (the watchdog's partial records,
+    # see tools/stall_watchdog.py), because those are the ones that made the
+    # exp2 reconstruction land $139.52 under the wallet.
+    spend_traced = sum(
+        c for c in (rollout_cost(t, price) for t in all_traces) if c is not None
+    ) if price is not None else None
 
     # -- joined, per-rollout: pace + degeneracy ------------------------------
     pace_rows, degenerate, unknown_degeneracy = [], [], []
@@ -464,7 +628,23 @@ def aggregate_arm(
         "cell": arm,
         "model": model,
         "n": len(turn_rollouts),
+        "n_from_turns": n_from_turns,
+        "n_from_metrics": len(metrics_only),
         "n_traces": len(traces),
+        # Rollouts the PROVIDER or the harness ended. Excluded from every score
+        # above, never dropped silently -- a cell whose n fell from 5 to 1 must
+        # say so on its own row.
+        "n_error": len(error_traces),
+        "n_traces_all": len(all_traces),
+        # Attempts recovered from the watchdog's quarantine, and attempts whose
+        # retry superseded them. Both belong on the row: the first says "this
+        # score includes a rollout that was killed mid-game", the second says
+        # "the killed attempt is not being counted twice".
+        "n_partial": n_partial,
+        "n_partial_superseded": n_partial_dropped,
+        # Turn files dropped because the provider, not the game, ended them.
+        "n_turnfiles_error_only": len(skipped_error_seeds),
+        "spend_traced": spend_traced,
         "depth_mean": depth_mean,
         "depth_se": depth_se,
         "balrog_pct_mean": balrog_mean,
@@ -511,12 +691,12 @@ def _fmt(x, spec="{:.2f}"):
 
 def to_markdown(rows: list[dict]) -> str:
     lines = [
-        "| Cell | n | Depth (mean ± SE) | BALROG % max (mean ± SE) | "
+        "| Cell | n | n_err | Depth (mean ± SE) | BALROG % max (mean ± SE) | "
         "BALROG % min (mean ± SE) | xp-carried | Died % | "
         "Actions used (measured, mean ± SE) | Cost/rollout ($) | "
         "dlvl / game-turn | dlvl / LLM call | BALROG% / game-turn | "
         "BALROG% / LLM call | sec/call 1st half → 2nd half | Post-death drain |",
-        "|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|",
+        "|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|",
     ]
     for r in rows:
         depth = f"{_fmt(r['depth_mean'])} ± {_fmt(r['depth_se'])}"
@@ -535,6 +715,8 @@ def to_markdown(rows: list[dict]) -> str:
                 f" ({r['cost_n_available']}/{r['cost_n_total']} rollouts)"
             )
             cost = f"${_fmt(r['cost_mean'], '{:.4f}')} ± {_fmt(r['cost_se'], '{:.4f}')}{note}"
+            if r.get("spend_traced") is not None:
+                cost += f" · cell spend ${_fmt(r['spend_traced'], '{:.2f}')}"
         elif r.get("model") and r.get("cost_priced_model") is None:
             cost = f"unavailable (no price table for {r['model']})"
         else:
@@ -557,8 +739,14 @@ def to_markdown(rows: list[dict]) -> str:
             if n_shared:
                 sec += f" ({r['sec_per_call_n_available']}/{r['n']} rollouts)"
         drain = _fmt(r["post_death_drain_mean"], "{:.1f}")
+        n_cell = str(r["n"])
+        if r.get("n_from_metrics"):
+            # An `n` that mixes channels must say so: those rollouts have depth
+            # and BALROG but no latency, drain or game-turn denominator.
+            n_cell += f" ({r['n_from_metrics']}m)"
         lines.append(
-            f"| {r.get('cell', r['arm'])} | {r['n']} | {depth} | {balrog} | {balrog_min} | "
+            f"| {r.get('cell', r['arm'])} | {n_cell} | {r.get('n_error', 0)} | "
+            f"{depth} | {balrog} | {balrog_min} | "
             f"{xpc} | {died} | {actions} | {cost} | {dpt} | {dpc} | {bpt} | {bpc} | "
             f"{sec} | {drain} |"
         )
@@ -578,7 +766,17 @@ def to_markdown(rows: list[dict]) -> str:
         "macro, so the two denominators differ by ~10x); depth gained is "
         "`max_dlvl - 1`. Cost uses the price table for the model the cell actually "
         "ran and is 'unavailable' when that model is unpriced -- never another "
-        "model's table."
+        "model's table.\n\n"
+        "`n_err` counts rollouts this cell wrote that ended for an INFRASTRUCTURE "
+        "reason (`stop_condition` = `error`/`*Error`/`harness_timeout`, or every "
+        "recorded call carrying an error and none carrying usage). They are "
+        "excluded from every score in the row -- a 402 stub is not a shallow "
+        "rollout -- but their tokens are still counted in 'cell spend', because "
+        "the money left the wallet either way. A cell with a large `n_err` did "
+        "not measure what its `n` suggests. An `n` written `4 (1m)` includes "
+        "rollouts whose depth was read from `trace.metrics.max_dlvl_reached` "
+        "because their turn file was quarantined or never written; those "
+        "contribute depth and BALROG but no latency, drain or game-turn slope."
     )
     for r in rows:
         if r.get("sec_per_call_unavailable"):
@@ -640,6 +838,12 @@ def _cell_paths(run_dir: str, cell: str):
     cell_dir = os.path.join(run_dir, cell)
     traces = os.path.join(cell_dir, "traces.jsonl")
     traces = traces if os.path.exists(traces) else None
+    # `traces.partial.jsonl` holds the attempts the stall watchdog killed, whose
+    # real records the eval CLI never got to write (see
+    # tools/stall_watchdog.py). Read second so a real record for the same seed
+    # always wins the de-dup in `aggregate_arm`.
+    partial = os.path.join(cell_dir, "traces.partial.jsonl")
+    partial = partial if os.path.exists(partial) else None
 
     seeds = None
     if traces:
@@ -653,7 +857,8 @@ def _cell_paths(run_dir: str, cell: str):
         seeds = seeds or None
 
     chosen, dropped = select_turn_files(cell_dir, seeds=seeds)
-    return cell_dir, traces, [chosen[s] for s in sorted(chosen)], dropped
+    paths = [p for p in (traces, partial) if p]
+    return cell_dir, paths, [chosen[s] for s in sorted(chosen)], dropped
 
 
 def aggregate_run(run_dir: str, warn=None) -> list[dict]:
@@ -661,6 +866,19 @@ def aggregate_run(run_dir: str, warn=None) -> list[dict]:
     everything ignored (superseded retries, stale seeds) so a caller can print
     them; nothing is dropped silently."""
     warn = warn or (lambda msg: print(msg, file=sys.stderr))
+    # Ask the PROVIDER what it charges before pricing anything. The committed
+    # tables were $1.40/$4.40 against a real $1.68/$5.28, and nothing in the
+    # pipeline could have noticed -- a price table is exactly the kind of
+    # constant that rots silently and is only caught by an invoice. Soft-fails
+    # to the committed constants (and then to `results/model_prices.json`) so an
+    # offline box still aggregates.
+    if os.environ.get("NO_PRICE_REFRESH") != "1":
+        fetched = refresh_price_tables()
+        if not fetched:
+            warn(
+                "aggregate: could not refresh prices from Prime's /models endpoint; "
+                "using the committed PRICE_TABLES. Verify before quoting a budget."
+            )
     rows = []
     cells = discover_cells(run_dir)
     if not cells:
@@ -671,10 +889,10 @@ def aggregate_run(run_dir: str, warn=None) -> list[dict]:
         )
         return rows
     for cell in cells:
-        cell_dir, traces_path, turns_paths, dropped = _cell_paths(run_dir, cell)
+        cell_dir, traces_paths, turns_paths, dropped = _cell_paths(run_dir, cell)
         for path, reason in dropped:
             warn(f"aggregate: ignoring {path}: {reason}")
-        if traces_path is None and not turns_paths:
+        if not traces_paths and not turns_paths:
             warn(f"aggregate: cell {cell!r} has neither traces.jsonl nor usable turn files")
             continue
         model = model_for_cell(cell_dir)
@@ -686,7 +904,7 @@ def aggregate_run(run_dir: str, warn=None) -> list[dict]:
                 f"rather than priced with another model's table"
             )
         row = aggregate_arm(
-            cell, [traces_path] if traces_path else [], turns_paths, price=price, model=model
+            cell, traces_paths, turns_paths, price=price, model=model
         )
         rows.append(row)
     return rows
