@@ -253,6 +253,93 @@ def last_turn_record(path: str) -> dict:
     return out
 
 
+# --------------------------------------------------------------------------
+# partial traces: what a killed attempt is still worth
+# --------------------------------------------------------------------------
+#
+# A watchdog kill leaves NO `traces.jsonl` record. The eval CLI writes that
+# record when a rollout finishes, and a SIGKILLed one never does -- so in the
+# exp2 sweep, 50 orphaned attempts holding 6,195 turn records and 32,145
+# in-game turns billed real tokens and then vanished from every table. The cell
+# looked like it had run five seeds and scored four.
+#
+# The turn file survives (quarantined, not deleted), and it carries the depth,
+# the experience level, the game clock and the death flag. That is enough to
+# emit a trace-shaped record so the attempt is COUNTED. What it cannot carry is
+# per-call token usage -- that lives only in the interception proxy's memory,
+# which died with the process -- so `calls` is empty and cost stays honestly
+# unavailable rather than being guessed at from a turn count.
+#
+# `stop_condition` is `watchdog_stall`, which `aggregate.is_error_trace` does
+# NOT treat as an infrastructure stub: the depth reached before the hang is a
+# real lower bound on what the agent achieved and belongs in the score, unlike
+# a 402 that stopped a rollout the agent was still winning.
+
+PARTIAL_TRACES_BASENAME = "traces.partial.jsonl"
+
+
+def partial_trace_from_turns(path: str, seed: int, reason: dict) -> dict | None:
+    """A trace-shaped record reconstructed from one killed attempt's turn file.
+
+    `None` when the file holds no parseable record -- an attempt that produced
+    nothing is not evidence of anything, and inventing a dlvl-1 row for it is
+    the exact defect this exists to undo.
+    """
+    rows: list[dict] = []
+    try:
+        with open(path, "rb") as fh:
+            for raw in fh.read().splitlines():
+                try:
+                    rec = json.loads(raw.decode("utf-8", "replace"))
+                except (ValueError, UnicodeDecodeError):
+                    continue  # a killed writer leaves a torn final line
+                if isinstance(rec, dict):
+                    rows.append(rec)
+    except OSError:
+        return None
+    if not rows:
+        return None
+
+    max_dlvl = 1
+    max_xp = 1
+    game_turns = 0
+    died = False
+    for r in rows:
+        d = r.get("max_dlvl_reached") or r.get("dlvl")
+        if d:
+            max_dlvl = max(max_dlvl, int(d))
+        status = r.get("status")
+        if isinstance(status, dict):
+            max_xp = max(max_xp, int(status.get("experience_level") or 1))
+            game_turns = max(game_turns, int(status.get("time") or 0))
+        hp = r.get("hp")
+        if hp is not None and int(hp) <= 0:
+            died = True
+    skill_calls = sum(
+        len(r.get("tool_calls") or r.get("tool_results") or []) for r in rows
+    )
+
+    return {
+        "id": f"watchdog-partial-{os.path.basename(path)}",
+        "partial": True,
+        "task": {"data": {"idx": seed}},
+        "calls": [],
+        "stop_condition": "watchdog_stall",
+        "is_completed": False,
+        "metrics": {
+            "max_dlvl_reached": float(max_dlvl),
+            "max_xp_level": float(max_xp),
+            "game_turns": float(game_turns),
+            "skill_calls": float(skill_calls or len(rows)),
+            "died": 1.0 if died else 0.0,
+            "n_turn_records": float(len(rows)),
+        },
+        # Provenance, so a partial row can always be traced back to the kill
+        # that produced it rather than looking like a normal short rollout.
+        "watchdog": reason,
+    }
+
+
 def scan(turns_dir: str) -> dict[int, dict]:
     """Group `turns/*.ndjson` by owning PID.
 
@@ -417,10 +504,53 @@ class Watchdog:
                     json.dump(rec, fh, indent=2, default=str)
             except OSError:
                 pass
+        n_partial = self.flush_partial_traces(turns_dir, moved, rec)
+        if n_partial:
+            self.say(f"wrote {n_partial} partial trace record(s) for the killed attempt(s)")
         self.say(f"killed pid={pid} (survivors={kill['survivors']}); "
                  f"quarantined {len(moved)} file(s) -> {qdir}")
         self.kills.append(rec)
         return rec
+
+    def flush_partial_traces(self, turns_dir: str, moved: list[str], rec: dict) -> int:
+        """Append one partial trace per killed attempt to the CELL's
+        `traces.partial.jsonl`, and return how many were written.
+
+        The file sits beside `traces.jsonl` (i.e. one level up from `turns/`)
+        because that is where the aggregator looks for a cell's rollouts. It is
+        a SEPARATE file, not an append to `traces.jsonl`: the eval CLI owns that
+        one and may still be writing it, and a reader must always be able to
+        tell a reconstructed record from one the CLI produced.
+        """
+        if self.dry_run or not moved:
+            return 0
+        cell_dir = os.path.dirname(turns_dir.rstrip(os.sep))
+        out_path = os.path.join(cell_dir, PARTIAL_TRACES_BASENAME)
+        reason = {
+            "killed_at": rec.get("ts"),
+            "pid": rec.get("pid"),
+            "idle_s": rec.get("idle_s"),
+            "timeout_s": rec.get("timeout_s"),
+            "quarantine_dir": rec.get("quarantine_dir"),
+        }
+        written = 0
+        try:
+            with open(out_path, "a", encoding="utf-8") as fh:
+                for path in moved:
+                    m = RUN_ID_RE.match(os.path.basename(path))
+                    if not m:
+                        continue
+                    trace = partial_trace_from_turns(
+                        path, int(m.group("seed")), reason
+                    )
+                    if trace is None:
+                        continue
+                    fh.write(json.dumps(trace, default=str) + "\n")
+                    written += 1
+        except OSError as exc:
+            self.say(f"cannot write partial traces to {out_path}: {exc}")
+            return 0
+        return written
 
     def quarantine_files(self, turns_dir: str, pid: int, files: list[str]):
         """Move every turn file this PID owned out of `turns/`.
@@ -509,8 +639,14 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("--turns-dir", action="append", required=True, dest="turns_dirs",
+    p.add_argument("--turns-dir", action="append", dest="turns_dirs",
                    metavar="DIR", help="a rollout `turns/` directory (repeatable)")
+    p.add_argument("--backfill", metavar="RUN_ROOT", default=None,
+                   help="do not watch anything: walk RUN_ROOT's existing "
+                        "`*/turns.stalled/` quarantine dirs and write the "
+                        "`traces.partial.jsonl` those kills should have "
+                        "produced, then exit. For sweeps killed before this "
+                        "tool learned to flush them.")
     p.add_argument("--timeout", type=float, default=300.0,
                    help="seconds of process-wide silence before a kill (default 300, per RUNBOOK)")
     p.add_argument("--poll", type=float, default=15.0, help="seconds between scans (default 15)")
@@ -533,8 +669,57 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def backfill(run_root: str, say=print) -> int:
+    """Reconstruct `traces.partial.jsonl` for every already-quarantined attempt
+    under `run_root`, and return how many records were written.
+
+    Idempotent: a cell's file is REWRITTEN, not appended to, so running this
+    twice does not double the run's `n`. Attempts whose seed also has a real
+    `traces.jsonl` record are still written -- the aggregator de-dups against
+    the real record, and dropping them here would hide how many attempts a cell
+    actually burned.
+    """
+    total = 0
+    for cell in sorted(os.listdir(run_root)):
+        stalled = os.path.join(run_root, cell, "turns.stalled")
+        if not os.path.isdir(stalled):
+            continue
+        records = []
+        for dirpath, _dirnames, filenames in os.walk(stalled):
+            for name in sorted(filenames):
+                m = RUN_ID_RE.match(name)
+                if not m:
+                    continue
+                path = os.path.join(dirpath, name)
+                trace = partial_trace_from_turns(
+                    path, int(m.group("seed")),
+                    {"backfilled_from": os.path.relpath(path, run_root)},
+                )
+                if trace is not None:
+                    records.append(trace)
+        if not records:
+            continue
+        out_path = os.path.join(run_root, cell, PARTIAL_TRACES_BASENAME)
+        with open(out_path, "w", encoding="utf-8") as fh:
+            for trace in records:
+                fh.write(json.dumps(trace, default=str) + "\n")
+        say(f"[backfill] {cell}: {len(records)} partial record(s) -> {out_path}")
+        total += len(records)
+    say(f"[backfill] {total} record(s) across {run_root}")
+    return total
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.backfill:
+        if not os.path.isdir(args.backfill):
+            sys.stderr.write(f"[stall_watchdog] no such run root: {args.backfill}\n")
+            return 2
+        backfill(args.backfill)
+        return 0
+    if not args.turns_dirs:
+        sys.stderr.write("[stall_watchdog] --turns-dir is required (or use --backfill)\n")
+        return 2
     for d in args.turns_dirs:
         q = os.path.abspath(quarantine_root(os.path.abspath(d), args.quarantine_dir))
         if q.startswith(os.path.abspath(d) + os.sep):
