@@ -1,0 +1,147 @@
+08:47:33 WARNING Harness 'nethack-prime-agent' is running in the subprocess runtime on the local system. Local files and settings may affect the evaluation; use subprocess only for debugging. Use --harness.runtime.type docker or prime for an isolated run.
+08:47:33    INFO eval config:
+{
+  "taskset": {
+    "id": "nethack_v1",
+    "task": {
+      "judges": []
+    },
+    "task_spec": "full_nle",
+    "variant": "B0",
+    "map_detail": "full",
+    "interface": "skill",
+    "character": "Val-hum-neu-fem",
+    "max_turns": 200,
+    "trace_dir": "/root/NetHack-hub/outputs/e1_observability/reveal/turns",
+    "self_dispatch": true,
+    "obs_mode": "push",
+    "max_skill_calls": 800,
+    "max_parallel_skill_calls": 0,
+    "parallel_batch_window_s": 0.5,
+    "env_args": {
+      "skill_set": "netplay_true,reveal,rollback",
+      "tune": {
+        "reveal_map": "1.0"
+      }
+    },
+    "colocated": false,
+    "seed_workspace": true,
+    "n_examples": 16,
+    "seed": 0,
+    "explicit_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harness_id": "nethack_v1"
+  },
+  "harness": {
+    "id": "nethack-prime-agent",
+    "runtime": {
+      "type": "subprocess"
+    },
+    "env": {},
+    "forward_env": [],
+    "disabled_tools": null,
+    "binary": "prime-agent",
+    "version": "0.3.3",
+    "install_dir": "/tmp/vf-prime-agent",
+    "path_prepend": "/usr/bin:/root/.local/bin",
+    "thinking": "",
+    "websearch": false,
+    "reasoning": null,
+    "context_window": 1048576,
+    "capture_output": true,
+    "sandbox": false,
+    "sandbox_bwrap": "bwrap",
+    "allow_batching": false,
+    "max_relaunches": 0
+  },
+  "timeout": {
+    "setup": 1800.0,
+    "rollout": 7200.0,
+    "finalize": null,
+    "scoring": null
+  },
+  "retries": {
+    "rollout": {
+      "max_retries": 2,
+      "include": [],
+      "exclude": []
+    }
+  },
+  "max_turns": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "max_total_tokens": null,
+  "interception": {
+    "type": "elastic",
+    "multiplex": 32
+  },
+  "id": null,
+  "args": {},
+  "extra_env_kwargs": {},
+  "pool": {
+    "type": "elastic",
+    "max_workers": null,
+    "multiplex": 128
+  },
+  "model": "z-ai/glm-5.2",
+  "client": {
+    "base_url": "https://api.pinference.ai/api/v1",
+    "api_key_var": "PRIME_API_KEY",
+    "headers": {
+      "X-Prime-Team-ID": "cmotasmp5005ppyp07dcoh50u"
+    },
+    "type": "eval"
+  },
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "reasoning_effort": null,
+    "max_tokens": null
+  },
+  "num_tasks": 5,
+  "num_rollouts": 1,
+  "shuffle": false,
+  "max_concurrent": 16,
+  "verbose": false,
+  "dry_run": false,
+  "rich": false,
+  "server": false,
+  "push": false,
+  "output_dir": "/root/NetHack-hub/outputs/e1_observability/reveal"
+}
+08:47:33    INFO running 5x1 rollouts on z-ai/glm-5.2
+08:47:33    INFO results: /root/NetHack-hub/outputs/e1_observability/reveal
+08:47:33    INFO rollout start: id=27a27381605a47e9a95d56dacc328bc4 task=0 harness=nethack-prime-agent runtime=subprocess
+08:47:33    INFO rollout start: id=494a43632f6745ef8a1c75293598f770 task=1 harness=nethack-prime-agent runtime=subprocess
+08:47:33    INFO rollout start: id=d0ff858bfcfc4d2fafedb3623f2b479b task=2 harness=nethack-prime-agent runtime=subprocess
+08:47:33    INFO rollout start: id=a03aa15851034e22a413f6a114b32aeb task=3 harness=nethack-prime-agent runtime=subprocess
+08:47:33    INFO rollout start: id=f82d9e4bd51347a6a5a1bc9d8d3bc490 task=4 harness=nethack-prime-agent runtime=subprocess
+08:47:33    INFO interception up: url=http://127.0.0.1:41141
+08:47:34    INFO interception pool: 1 server(s), multiplex=32
+08:47:37    INFO tool server 'nethack': http://127.0.0.1:42297/mcp
+08:47:38    INFO tool server 'nethack': http://127.0.0.1:45931/mcp
+08:47:38    INFO tool server 'nethack': http://127.0.0.1:44261/mcp
+08:47:42    INFO tool server 'nethack': http://127.0.0.1:38235/mcp
+08:47:44    INFO tool server 'nethack': http://127.0.0.1:35467/mcp
+09:23:05    INFO rollout done: id=f82d9e4bd51347a6a5a1bc9d8d3bc490 task=4 reward=77.651 turns=128 stop=game_over
+09:34:26    INFO rollout done: id=d0ff858bfcfc4d2fafedb3623f2b479b task=2 reward=100.434 turns=129 stop=game_over
+09:47:55    INFO rollout done: id=494a43632f6745ef8a1c75293598f770 task=1 reward=56.362 turns=87 stop=game_over
+09:48:44    INFO rollout done: id=27a27381605a47e9a95d56dacc328bc4 task=0 reward=68.644 turns=187 stop=game_over
+10:00:44    INFO rollout done: id=a03aa15851034e22a413f6a114b32aeb task=3 reward=98.365 turns=194 stop=game_over
+10:00:44    INFO interception down: url=http://127.0.0.1:41141

@@ -1,0 +1,162 @@
+[
+ {
+  "arm": "fog",
+  "cell": "fog",
+  "model": "z-ai/glm-5.2",
+  "n": 2,
+  "n_traces": 2,
+  "depth_mean": 4.5,
+  "depth_se": 1.5,
+  "balrog_pct_mean": 2.695354533994951,
+  "balrog_pct_se": 0.8475140778223501,
+  "balrog_min_pct_mean": 2.0849836174756997,
+  "balrog_min_pct_se": 0.3310300375789984,
+  "xp_carried_n": 0,
+  "died_pct": 0.0,
+  "actions_metric_name": "skill_calls",
+  "actions_source": "metrics.total_tool_calls",
+  "actions_mean": 100.0,
+  "actions_se": 0.0,
+  "actions_n_available": 2,
+  "cost_mean": 1.6216317,
+  "cost_se": 0.3644295000000001,
+  "cost_n_available": 2,
+  "cost_n_total": 2,
+  "cost_priced_model": "z-ai/glm-5.2",
+  "sec_per_call_first_half_mean": null,
+  "sec_per_call_second_half_mean": null,
+  "sec_per_call_unavailable": [
+   [
+    "outputs/pilot_reveal/fog/turns/0_33959_1785556712.ndjson",
+    "shared its eval process (pid 33959) with 1 other concurrent rollout(s); `t_mono` is process-wide, so its per-call deltas include the other rollout(s)' work and do not measure this rollout's latency"
+   ],
+   [
+    "outputs/pilot_reveal/fog/turns/1_33959_1785556711.ndjson",
+    "shared its eval process (pid 33959) with 1 other concurrent rollout(s); `t_mono` is process-wide, so its per-call deltas include the other rollout(s)' work and do not measure this rollout's latency"
+   ]
+  ],
+  "sec_per_call_n_available": 0,
+  "post_death_drain_mean": 0.0,
+  "game_turns_mean": 740.0,
+  "degenerate": [],
+  "unknown_degeneracy": [],
+  "pace_rollouts": [
+   {
+    "depth_gained": 2,
+    "game_turns": 936,
+    "llm_calls": 100,
+    "depth_per_game_turn": 0.002136752136752137,
+    "depth_per_llm_call": 0.02,
+    "balrog_pct_per_game_turn": 0.001974188521551924,
+    "balrog_pct_per_llm_call": 0.01847840456172601,
+    "seed": 0,
+    "calls_source": "metrics.total_tool_calls",
+    "degenerate": false
+   },
+   {
+    "depth_gained": 5,
+    "game_turns": 544,
+    "llm_calls": 100,
+    "depth_per_game_turn": 0.009191176470588236,
+    "depth_per_llm_call": 0.05,
+    "balrog_pct_per_game_turn": 0.006512626124664156,
+    "balrog_pct_per_llm_call": 0.035428686118173014,
+    "seed": 1,
+    "calls_source": "metrics.total_tool_calls",
+    "degenerate": false
+   }
+  ],
+  "depth_per_game_turn_mean": 0.005663964303670187,
+  "depth_per_game_turn_se": 0.0035272121669180493,
+  "depth_per_game_turn_n": 2,
+  "depth_per_llm_call_mean": 0.035,
+  "depth_per_llm_call_se": 0.015000000000000001,
+  "depth_per_llm_call_n": 2,
+  "balrog_pct_per_game_turn_mean": 0.00424340732310804,
+  "balrog_pct_per_game_turn_se": 0.002269218801556116,
+  "balrog_pct_per_game_turn_n": 2,
+  "balrog_pct_per_llm_call_mean": 0.026953545339949512,
+  "balrog_pct_per_llm_call_se": 0.008475140778223502,
+  "balrog_pct_per_llm_call_n": 2
+ },
+ {
+  "arm": "reveal",
+  "cell": "reveal",
+  "model": "z-ai/glm-5.2",
+  "n": 2,
+  "n_traces": 2,
+  "depth_mean": 4.5,
+  "depth_se": 0.5,
+  "balrog_pct_mean": 2.3851913910836635,
+  "balrog_pct_se": 0.26305355466011315,
+  "balrog_min_pct_mean": 1.0405817909871775,
+  "balrog_min_pct_se": 1.0405817909871775,
+  "xp_carried_n": 1,
+  "died_pct": 0.0,
+  "actions_metric_name": "skill_calls",
+  "actions_source": "metrics.total_tool_calls",
+  "actions_mean": 100.0,
+  "actions_se": 0.0,
+  "actions_n_available": 2,
+  "cost_mean": 2.2189228,
+  "cost_se": 0.3459976000000001,
+  "cost_n_available": 2,
+  "cost_n_total": 2,
+  "cost_priced_model": "z-ai/glm-5.2",
+  "sec_per_call_first_half_mean": null,
+  "sec_per_call_second_half_mean": null,
+  "sec_per_call_unavailable": [
+   [
+    "outputs/pilot_reveal/reveal/turns/0_33988_1785556715.ndjson",
+    "shared its eval process (pid 33988) with 1 other concurrent rollout(s); `t_mono` is process-wide, so its per-call deltas include the other rollout(s)' work and do not measure this rollout's latency"
+   ],
+   [
+    "outputs/pilot_reveal/reveal/turns/1_33988_1785556715.ndjson",
+    "shared its eval process (pid 33988) with 1 other concurrent rollout(s); `t_mono` is process-wide, so its per-call deltas include the other rollout(s)' work and do not measure this rollout's latency"
+   ]
+  ],
+  "sec_per_call_n_available": 0,
+  "post_death_drain_mean": 0.0,
+  "game_turns_mean": 468.0,
+  "degenerate": [],
+  "unknown_degeneracy": [],
+  "pace_rollouts": [
+   {
+    "depth_gained": 4,
+    "game_turns": 388,
+    "llm_calls": 100,
+    "depth_per_game_turn": 0.010309278350515464,
+    "depth_per_llm_call": 0.04,
+    "balrog_pct_per_game_turn": 0.006825373571504579,
+    "balrog_pct_per_llm_call": 0.026482449457437766,
+    "seed": 0,
+    "calls_source": "metrics.total_tool_calls",
+    "degenerate": false
+   },
+   {
+    "depth_gained": 3,
+    "game_turns": 548,
+    "llm_calls": 100,
+    "depth_per_game_turn": 0.005474452554744526,
+    "depth_per_llm_call": 0.03,
+    "balrog_pct_per_game_turn": 0.003872514300042975,
+    "balrog_pct_per_llm_call": 0.021221378364235502,
+    "seed": 1,
+    "calls_source": "metrics.total_tool_calls",
+    "degenerate": false
+   }
+  ],
+  "depth_per_game_turn_mean": 0.007891865452629994,
+  "depth_per_game_turn_se": 0.002417412897885469,
+  "depth_per_game_turn_n": 2,
+  "depth_per_llm_call_mean": 0.035,
+  "depth_per_llm_call_se": 0.005000000000000001,
+  "depth_per_llm_call_n": 2,
+  "balrog_pct_per_game_turn_mean": 0.005348943935773777,
+  "balrog_pct_per_game_turn_se": 0.001476429635730802,
+  "balrog_pct_per_game_turn_n": 2,
+  "balrog_pct_per_llm_call_mean": 0.023851913910836634,
+  "balrog_pct_per_llm_call_se": 0.0026305355466011322,
+  "balrog_pct_per_llm_call_n": 2
+ }
+]

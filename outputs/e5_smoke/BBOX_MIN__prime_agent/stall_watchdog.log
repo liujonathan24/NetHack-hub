@@ -1,0 +1,2 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e5_smoke/BBOX_MIN__prime_agent/turns'] timeout=300s poll=15s parent_pid=546867
+[stall_watchdog] exit (parent_exited); 0 kill(s)

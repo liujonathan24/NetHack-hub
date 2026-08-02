@@ -1,0 +1,12 @@
+[engine] head=edbcad3 submodule=ac80760 pinned=ac80760 so=/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so built=2026-08-01T03:52:48 newest_src=src/win/rl/winrl.cc@2026-08-01T03:49:30 flags=ok
+sweep start 2026-08-01T16:54:53Z model=z-ai/glm-5.2 seeds=5 calls=1500 timeout=21600s
+sweep: 16 cells, 8 per batch, 5 seeds each
+== batch 1: 8 cells @ 16:54:53 ==
+  launch prime_agent__B0__visoff
+  launch prime_agent__B0__vison
+  launch prime_agent__BBOX__visoff
+  launch prime_agent__BBOX__vison
+  launch prime_agent__SPARSE_ONDEMAND__visoff
+  launch prime_agent__SPARSE_ONDEMAND__vison
+  launch prime_agent__BBOX_JSON__visoff
+  launch prime_agent__BBOX_JSON__vison

@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-02T03:49:36+00:00",
+  "event": "kill",
+  "watchdog_pid": 439106,
+  "turns_dir": "/root/NetHack-hub/outputs/e4/BBOX_MIN__prime_agent/turns",
+  "pid": 439445,
+  "idle_s": 304.3,
+  "timeout_s": 300.0,
+  "seeds": [
+    4
+  ],
+  "likely_hung_seed": 4,
+  "per_seed": {
+    "4": {
+      "idle_s": 304.3,
+      "newest_file": "4_439445_1785639975.ndjson",
+      "last_turn": {
+        "file": "4_439445_1785639975.ndjson",
+        "n_lines": 192,
+        "turn": 192,
+        "dlvl": 15,
+        "hp": 37,
+        "max_hp": 43,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 15,
+        "t_wall": 1785642261.8989441,
+        "reward": 0.0,
+        "last_tool_call": "reveal",
+        "last_message_head": "[reveal (x0-78, y0-20):"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      439445
+    ],
+    "sigterm": [
+      439445
+    ],
+    "sigkill": [
+      439445
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e4/BBOX_MIN__prime_agent/turns.stalled/20260802T034936Z_pid439445",
+  "quarantined_files": [
+    "4_439445_1785639975.ndjson"
+  ],
+  "dry_run": false
+}

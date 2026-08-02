@@ -1,0 +1,4 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e3b_tier1/BBOX_MIN__claude_code/turns'] timeout=300s poll=15s parent_pid=385841
+[stall_watchdog] exit (parent_exited); 0 kill(s)
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e3b_tier1/BBOX_MIN__claude_code/turns'] timeout=300s poll=15s parent_pid=441190
+[stall_watchdog] exit (parent_exited); 0 kill(s)

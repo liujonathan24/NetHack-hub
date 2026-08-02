@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T18:51:44+00:00",
+  "event": "kill",
+  "watchdog_pid": 86927,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns",
+  "pid": 87286,
+  "idle_s": 300.1,
+  "timeout_s": 300.0,
+  "seeds": [
+    4
+  ],
+  "likely_hung_seed": 4,
+  "per_seed": {
+    "4": {
+      "idle_s": 300.1,
+      "newest_file": "4_87286_1785603320.ndjson",
+      "last_turn": {
+        "file": "4_87286_1785603320.ndjson",
+        "n_lines": 226,
+        "turn": 226,
+        "dlvl": 15,
+        "hp": 22,
+        "max_hp": 48,
+        "variant": "B0",
+        "max_dlvl_reached": 15,
+        "t_wall": 1785609993.9905233,
+        "reward": 4208.0,
+        "last_tool_call": "np_rest",
+        "last_message_head": "[Executing skill 'rest'. GAME: You enter what seems to be an older, more primitive world.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      87286
+    ],
+    "sigterm": [
+      87286
+    ],
+    "sigkill": [
+      87286
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T185144Z_pid87286",
+  "quarantined_files": [
+    "4_87286_1785603320.ndjson"
+  ],
+  "dry_run": false
+}

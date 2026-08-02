@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T17:19:00+00:00",
+  "event": "kill",
+  "watchdog_pid": 87381,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__BBOX__visoff/turns",
+  "pid": 87696,
+  "idle_s": 307.4,
+  "timeout_s": 300.0,
+  "seeds": [
+    2
+  ],
+  "likely_hung_seed": 2,
+  "per_seed": {
+    "2": {
+      "idle_s": 307.4,
+      "newest_file": "2_87696_1785603385.ndjson",
+      "last_turn": {
+        "file": "2_87696_1785603385.ndjson",
+        "n_lines": 45,
+        "turn": 45,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "BBOX",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785604422.4732242,
+        "reward": 0.0,
+        "last_tool_call": "np_press_key",
+        "last_message_head": "[Executing skill 'press_key ENTER'. Pressing key 'ENTER'. Skill 'press_key ENTER' completed GAME: # search]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      87696
+    ],
+    "sigterm": [
+      87696
+    ],
+    "sigkill": [
+      87696
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__BBOX__visoff/turns.stalled/20260801T171900Z_pid87696",
+  "quarantined_files": [
+    "2_87696_1785603385.ndjson"
+  ],
+  "dry_run": false
+}

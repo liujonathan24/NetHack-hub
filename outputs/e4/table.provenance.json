@@ -1,0 +1,12 @@
+{
+ "producer": "cli_harness_eval",
+ "written_at": 1785646338.192442,
+ "run_dir": "/root/NetHack-hub/outputs/e4",
+ "primary_md": "table.cli_harness_eval.md",
+ "primary_json": "table.cli_harness_eval.json",
+ "previous_producer": null,
+ "argv": [
+  "/root/NetHack-hub/tools/cli_harness_eval/aggregate.py",
+  "outputs/e4"
+ ]
+}

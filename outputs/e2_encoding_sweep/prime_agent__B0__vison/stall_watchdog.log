@@ -1,0 +1,10 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns'] timeout=300s poll=15s parent_pid=86780
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns pid=87287 idle=308s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=87287 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T171520Z_pid87287
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns pid=87290 idle=309s (timeout=300s) seeds=[3] likely_hung_seed=3
+[stall_watchdog] killed pid=87290 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T182948Z_pid87290
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns pid=87286 idle=300s (timeout=300s) seeds=[4] likely_hung_seed=4
+[stall_watchdog] killed pid=87286 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T185144Z_pid87286
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns pid=151885 idle=307s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=151885 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T190224Z_pid151885
+[stall_watchdog] exit (parent_exited); 4 kill(s)

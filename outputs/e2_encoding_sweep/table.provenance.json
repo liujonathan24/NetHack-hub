@@ -1,0 +1,12 @@
+{
+ "producer": "cli_harness_eval",
+ "written_at": 1785625444.8992336,
+ "run_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep",
+ "primary_md": "table.cli_harness_eval.md",
+ "primary_json": "table.cli_harness_eval.json",
+ "previous_producer": null,
+ "argv": [
+  "/root/NetHack-hub/tools/cli_harness_eval/aggregate.py",
+  "outputs/e2_encoding_sweep"
+ ]
+}

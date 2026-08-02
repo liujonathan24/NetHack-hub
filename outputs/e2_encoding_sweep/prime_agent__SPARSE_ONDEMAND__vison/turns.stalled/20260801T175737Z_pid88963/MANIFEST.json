@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T17:57:37+00:00",
+  "event": "kill",
+  "watchdog_pid": 88648,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns",
+  "pid": 88963,
+  "idle_s": 314.1,
+  "timeout_s": 300.0,
+  "seeds": [
+    3
+  ],
+  "likely_hung_seed": 3,
+  "per_seed": {
+    "3": {
+      "idle_s": 314.1,
+      "newest_file": "3_88963_1785603544.ndjson",
+      "last_turn": {
+        "file": "3_88963_1785603544.ndjson",
+        "n_lines": 132,
+        "turn": 132,
+        "dlvl": 4,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "SPARSE_ONDEMAND",
+        "max_dlvl_reached": 7,
+        "t_wall": 1785606733.0487294,
+        "reward": 0.0,
+        "last_tool_call": "np_move_to",
+        "last_message_head": "[Executing skill 'move_to 14 16'. Skill 'move_to 14 16' failed: No valid path found to reach position (14, 16). GAME: The door opens.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      88963
+    ],
+    "sigterm": [
+      88963
+    ],
+    "sigkill": [
+      88963
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T175737Z_pid88963",
+  "quarantined_files": [
+    "3_88963_1785603544.ndjson"
+  ],
+  "dry_run": false
+}

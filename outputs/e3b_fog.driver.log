@@ -1,0 +1,11 @@
+preflight: probing team billing with a 1-token completion...
+preflight: billing ok
+[engine] head=edbcad3 submodule=ac80760 pinned=ac80760 so=/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so built=2026-08-01T03:52:48 newest_src=src/win/rl/winrl.cc@2026-08-01T03:49:30 flags=ok
+preflight: sandbox DNS ok (2606:4700::6812:971)
+sweep start 2026-08-02T02:10:01Z
+  model=z-ai/glm-5.2 cells=BBOX_MIN x cc/pa vision=FOG seeds=5 calls=200 timeout=7200s
+  git_head cd929466b80a905001b72f70a2c761ebd04b9d1a dirty=yes
+  est cost ~$228 (range 154-300) for 2 cells x 5 seeds
+== batch 1: 2 cells @ 02:10:03 ==
+  launch BBOX_MIN__claude_code (arm=claude_code variant=BBOX_MIN no-extra)
+  launch BBOX_MIN__prime_agent (arm=prime_agent variant=BBOX_MIN ALLOW_BATCHING=1)

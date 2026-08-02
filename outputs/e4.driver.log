@@ -1,0 +1,16 @@
+preflight: probing team billing with a 1-token completion...
+preflight: billing ok
+[engine] head=edbcad3 submodule=ac80760 pinned=ac80760 so=/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so built=2026-08-01T03:52:48 newest_src=src/win/rl/winrl.cc@2026-08-01T03:49:30 flags=ok
+preflight: sandbox DNS ok (2606:4700::6812:971)
+sweep start 2026-08-02T03:05:58Z
+  model=z-ai/glm-5.2 cells=BBOX_MIN x cc/pa vision=on seeds=5 calls=200 timeout=7200s
+  git_head cd929466b80a905001b72f70a2c761ebd04b9d1a dirty=yes
+  est cost ~$228 (range 154-300) for 2 cells x 5 seeds
+== batch 1: 2 cells @ 03:05:59 ==
+  launch BBOX_MIN__claude_code (arm=claude_code variant=BBOX_MIN no-extra)
+  launch BBOX_MIN__prime_agent (arm=prime_agent variant=BBOX_MIN ALLOW_BATCHING=1)
+  done   BBOX_MIN__claude_code rc=0
+  done   BBOX_MIN__prime_agent rc=143
+== batch 1 complete @ 04:51:52 ==
+tools/run_scaffold_showdown.sh: line 337: syntax error near unexpected token `('
+tools/run_scaffold_showdown.sh: line 337: `          f"({100*binding/tot:.0f}%). The BUDGET, not the game, ended them -- "'

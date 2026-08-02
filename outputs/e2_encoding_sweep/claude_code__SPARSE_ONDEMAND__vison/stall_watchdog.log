@@ -1,0 +1,10 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns'] timeout=300s poll=15s parent_pid=93276
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns pid=94025 idle=305s (timeout=300s) seeds=[3] likely_hung_seed=3
+[stall_watchdog] killed pid=94025 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns.stalled/20260801T171807Z_pid94025
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns pid=102168 idle=310s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=102168 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns.stalled/20260801T175725Z_pid102168
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns pid=94027 idle=301s (timeout=300s) seeds=[2] likely_hung_seed=2
+[stall_watchdog] killed pid=94027 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns.stalled/20260801T180812Z_pid94027
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns pid=94026 idle=302s (timeout=300s) seeds=[1] likely_hung_seed=1
+[stall_watchdog] killed pid=94026 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__SPARSE_ONDEMAND__vison/turns.stalled/20260801T182213Z_pid94026
+[stall_watchdog] exit (parent_exited); 4 kill(s)

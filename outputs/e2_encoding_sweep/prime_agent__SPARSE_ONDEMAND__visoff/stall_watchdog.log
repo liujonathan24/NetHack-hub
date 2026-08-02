@@ -1,0 +1,6 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns'] timeout=300s poll=15s parent_pid=87839
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns pid=138988 idle=304s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=138988 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns.stalled/20260801T183217Z_pid138988
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns pid=149346 idle=309s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=149346 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns.stalled/20260801T185649Z_pid149346
+[stall_watchdog] exit (parent_exited); 2 kill(s)

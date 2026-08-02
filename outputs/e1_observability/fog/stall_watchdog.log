@@ -1,0 +1,6 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e1_observability/fog/turns'] timeout=300s poll=15s parent_pid=73735
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e1_observability/fog/turns pid=73923 idle=300s (timeout=300s) seeds=[1] likely_hung_seed=1
+[stall_watchdog] killed pid=73923 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e1_observability/fog/turns.stalled/20260801T085933Z_pid73923
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e1_observability/fog/turns pid=73922 idle=300s (timeout=300s) seeds=[4] likely_hung_seed=4
+[stall_watchdog] killed pid=73922 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e1_observability/fog/turns.stalled/20260801T102507Z_pid73922
+[stall_watchdog] exit (parent_exited); 2 kill(s)

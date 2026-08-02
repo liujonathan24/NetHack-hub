@@ -1,0 +1,12 @@
+{
+ "producer": "cli_harness_eval",
+ "written_at": 1785647650.2103543,
+ "run_dir": "/root/NetHack-hub/outputs/e5_smoke",
+ "primary_md": "table.cli_harness_eval.md",
+ "primary_json": "table.cli_harness_eval.json",
+ "previous_producer": null,
+ "argv": [
+  "tools/cli_harness_eval/aggregate.py",
+  "outputs/e5_smoke"
+ ]
+}

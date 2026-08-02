@@ -1,0 +1,112 @@
+model = "openai/gpt-5.6-sol"
+num_tasks = 1
+num_rollouts = 1
+shuffle = false
+max_concurrent = 128
+verbose = false
+dry_run = false
+rich = false
+server = false
+push = false
+output_dir = "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3"
+
+[taskset]
+id = "nethack_v1"
+task_spec = "full_nle"
+variant = "BBOX_MIN"
+map_detail = "full"
+interface = "skill"
+character = "Val-hum-neu-fem"
+max_turns = 200
+trace_dir = "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3/turns"
+self_dispatch = true
+obs_mode = "push"
+max_skill_calls = 177
+max_parallel_skill_calls = 0
+parallel_batch_window_s = 0.5
+colocated = false
+seed_workspace = true
+n_examples = 16
+seed = 0
+explicit_seeds = [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+]
+harness_id = "nethack_v1"
+
+[taskset.task]
+judges = []
+
+[taskset.env_args]
+skill_set = "netplay_true,reveal,search"
+resume_from = "/root/NetHack-hub/outputs/e6_gpt_resume/source"
+explicit_seeds = "[3]"
+
+[taskset.env_args.tune]
+reveal_map = "1.0"
+
+[harness]
+id = "nethack-prime-agent"
+forward_env = []
+binary = "prime-agent"
+version = "0.3.3"
+install_dir = "/tmp/vf-prime-agent"
+path_prepend = "/usr/bin:/root/.local/bin"
+thinking = ""
+websearch = false
+context_window = 1048576
+capture_output = true
+sandbox = true
+sandbox_bwrap = "bwrap"
+allow_batching = true
+max_relaunches = 0
+
+[harness.runtime]
+type = "subprocess"
+
+[harness.env]
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
+
+[retries.rollout]
+max_retries = 2
+include = []
+exclude = []
+
+[interception]
+type = "elastic"
+multiplex = 32
+
+[args]
+
+[extra_env_kwargs]
+
+[pool]
+type = "elastic"
+multiplex = 128
+
+[client]
+base_url = "https://api.pinference.ai/api/v1"
+api_key_var = "PRIME_API_KEY"
+type = "eval"
+
+[client.headers]
+X-Prime-Team-ID = "cmotasmp5005ppyp07dcoh50u"
+
+[sampling]

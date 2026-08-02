@@ -1,0 +1,2 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e6_gpt/BBOX_MIN__claude_code/turns'] timeout=300s poll=15s parent_pid=571839
+[stall_watchdog] exit (parent_exited); 0 kill(s)

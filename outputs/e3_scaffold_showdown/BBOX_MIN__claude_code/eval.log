@@ -1,0 +1,137 @@
+23:57:00 WARNING Harness 'claude_code' is running in the subprocess runtime on the local system. Local files and settings may affect the evaluation; use subprocess only for debugging. Use --harness.runtime.type docker or prime for an isolated run.
+23:57:00    INFO eval config:
+{
+  "taskset": {
+    "id": "nethack_v1",
+    "task": {
+      "judges": []
+    },
+    "task_spec": "full_nle",
+    "variant": "BBOX_MIN",
+    "map_detail": "full",
+    "interface": "skill",
+    "character": "Val-hum-neu-fem",
+    "max_turns": 200,
+    "trace_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code/turns",
+    "self_dispatch": true,
+    "obs_mode": "push",
+    "max_skill_calls": 200,
+    "max_parallel_skill_calls": 0,
+    "parallel_batch_window_s": 0.5,
+    "env_args": {
+      "skill_set": "netplay_true,reveal,rollback,search",
+      "tune": {
+        "reveal_map": "1.0"
+      }
+    },
+    "colocated": false,
+    "seed_workspace": true,
+    "n_examples": 16,
+    "seed": 0,
+    "explicit_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harness_id": "nethack_v1"
+  },
+  "harness": {
+    "id": "claude_code",
+    "runtime": {
+      "type": "subprocess"
+    },
+    "env": {},
+    "forward_env": [],
+    "disabled_tools": [
+      "Bash"
+    ],
+    "version": "2.1.214"
+  },
+  "timeout": {
+    "setup": 1800.0,
+    "rollout": 7200.0,
+    "finalize": null,
+    "scoring": null
+  },
+  "retries": {
+    "rollout": {
+      "max_retries": 2,
+      "include": [],
+      "exclude": []
+    }
+  },
+  "max_turns": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "max_total_tokens": null,
+  "interception": {
+    "type": "elastic",
+    "multiplex": 32
+  },
+  "id": null,
+  "args": {},
+  "extra_env_kwargs": {},
+  "pool": {
+    "type": "elastic",
+    "max_workers": null,
+    "multiplex": 128
+  },
+  "model": "z-ai/glm-5.2",
+  "client": {
+    "base_url": "https://api.pinference.ai/api/v1",
+    "api_key_var": "PRIME_API_KEY",
+    "headers": {
+      "X-Prime-Team-ID": "cmotasmp5005ppyp07dcoh50u"
+    },
+    "type": "eval"
+  },
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "reasoning_effort": null,
+    "max_tokens": null
+  },
+  "num_tasks": 5,
+  "num_rollouts": 1,
+  "shuffle": false,
+  "max_concurrent": 10,
+  "verbose": false,
+  "dry_run": false,
+  "rich": false,
+  "server": false,
+  "push": false,
+  "output_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code"
+}
+23:57:00    INFO running 5x1 rollouts on z-ai/glm-5.2
+23:57:00    INFO results: /root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code
+23:57:00    INFO rollout start: id=d513563ed335479cbf820b956d08d858 task=0 harness=claude_code runtime=subprocess
+23:57:00    INFO rollout start: id=2231091dba2a42ddb2f92841b249ec65 task=1 harness=claude_code runtime=subprocess
+23:57:00    INFO rollout start: id=66ba0e0cf3914ea4ba8fadd923516fa2 task=2 harness=claude_code runtime=subprocess
+23:57:00    INFO rollout start: id=b6d0314c12a741bfae47c5ce3445e222 task=3 harness=claude_code runtime=subprocess
+23:57:00    INFO rollout start: id=214d20c4db33441292399bc7715b0e2d task=4 harness=claude_code runtime=subprocess
+23:57:00    INFO interception up: url=http://127.0.0.1:33621
+23:57:01    INFO interception pool: 1 server(s), multiplex=32
+23:57:05    INFO tool server 'nethack': http://127.0.0.1:39991/mcp
+23:57:05    INFO tool server 'nethack': http://127.0.0.1:35083/mcp
+23:57:07    INFO tool server 'nethack': http://127.0.0.1:38215/mcp
+23:57:09    INFO tool server 'nethack': http://127.0.0.1:35319/mcp
+23:57:21    INFO tool server 'nethack': http://127.0.0.1:39815/mcp
+00:17:27    INFO rollout done: id=2231091dba2a42ddb2f92841b249ec65 task=1 reward=0.429 turns=74 stop=game_over
+00:18:36    INFO rollout done: id=b6d0314c12a741bfae47c5ce3445e222 task=3 reward=45.080 turns=75 stop=game_over
+00:44:13    INFO rollout done: id=d513563ed335479cbf820b956d08d858 task=0 reward=76.740 turns=147 stop=game_over
+00:56:58    INFO rollout done: id=66ba0e0cf3914ea4ba8fadd923516fa2 task=2 reward=35.034 turns=201 stop=call_budget_exhausted
+01:04:17    INFO rollout done: id=214d20c4db33441292399bc7715b0e2d task=4 reward=44.857 turns=353 stop=agent_completed
+01:04:18    INFO interception down: url=http://127.0.0.1:33621

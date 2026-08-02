@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T19:02:24+00:00",
+  "event": "kill",
+  "watchdog_pid": 86927,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns",
+  "pid": 151885,
+  "idle_s": 306.5,
+  "timeout_s": 300.0,
+  "seeds": [
+    0
+  ],
+  "likely_hung_seed": 0,
+  "per_seed": {
+    "0": {
+      "idle_s": 306.5,
+      "newest_file": "0_151885_1785609635.ndjson",
+      "last_turn": {
+        "file": "0_151885_1785609635.ndjson",
+        "n_lines": 56,
+        "turn": 56,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "B0",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785610628.164972,
+        "reward": 100.0,
+        "last_tool_call": "np_press_key",
+        "last_message_head": "[Executing skill 'press_key l'. Pressing key 'l'. Skill 'press_key l' completed GAME: It's a wall.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      151885
+    ],
+    "sigterm": [
+      151885
+    ],
+    "sigkill": [
+      151885
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T190224Z_pid151885",
+  "quarantined_files": [
+    "0_151885_1785609635.ndjson"
+  ],
+  "dry_run": false
+}

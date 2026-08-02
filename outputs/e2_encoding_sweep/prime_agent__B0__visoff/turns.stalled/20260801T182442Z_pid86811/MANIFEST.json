@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T18:24:42+00:00",
+  "event": "kill",
+  "watchdog_pid": 86649,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__visoff/turns",
+  "pid": 86811,
+  "idle_s": 304.0,
+  "timeout_s": 300.0,
+  "seeds": [
+    2
+  ],
+  "likely_hung_seed": 2,
+  "per_seed": {
+    "2": {
+      "idle_s": 304.0,
+      "newest_file": "2_86811_1785603412.ndjson",
+      "last_turn": {
+        "file": "2_86811_1785603412.ndjson",
+        "n_lines": 206,
+        "turn": 206,
+        "dlvl": 5,
+        "hp": 21,
+        "max_hp": 36,
+        "variant": "B0",
+        "max_dlvl_reached": 5,
+        "t_wall": 1785608367.9176672,
+        "reward": 866.0,
+        "last_tool_call": "np_move_to",
+        "last_message_head": "[Executing skill 'move_to 27 13'. Skill 'move_to 27 13' completed: Tile (27, 13) is blocked, stopping adjacent to it. GAME: You can't move diagonally into an intact doorway.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      86811
+    ],
+    "sigterm": [
+      86811
+    ],
+    "sigkill": [
+      86811
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__visoff/turns.stalled/20260801T182442Z_pid86811",
+  "quarantined_files": [
+    "2_86811_1785603412.ndjson"
+  ],
+  "dry_run": false
+}

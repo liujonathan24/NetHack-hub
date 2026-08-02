@@ -1,0 +1,154 @@
+[engine] head=edbcad3 submodule=ac80760 pinned=ac80760 so=/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so built=2026-08-01T03:52:48 newest_src=src/win/rl/winrl.cc@2026-08-01T03:49:30 flags=ok
+[launch_cell] env_args overrides: --taskset.env_args.skill_set netplay_true,reveal,rollback,search --taskset.env_args.tune.reveal_map 1.0
+[launch_cell:watchdog] armed: pid=263629 timeout=300s log=/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent/stall_watchdog.log quarantine=/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent/turns.stalled
+[launch_cell] arm=prime_agent config=tools/cli_harness_eval/configs/prime_agent.toml model=z-ai/glm-5.2 variant=BBOX_MIN max_calls=200 n=5 timeout=7200 out=/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent trace_dir=/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent/turns
+23:57:06 WARNING Harness 'nethack-prime-agent' is running in the subprocess runtime on the local system. Local files and settings may affect the evaluation; use subprocess only for debugging. Use --harness.runtime.type docker or prime for an isolated run.
+23:57:06    INFO eval config:
+{
+  "taskset": {
+    "id": "nethack_v1",
+    "task": {
+      "judges": []
+    },
+    "task_spec": "full_nle",
+    "variant": "BBOX_MIN",
+    "map_detail": "full",
+    "interface": "skill",
+    "character": "Val-hum-neu-fem",
+    "max_turns": 200,
+    "trace_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent/turns",
+    "self_dispatch": true,
+    "obs_mode": "push",
+    "max_skill_calls": 200,
+    "max_parallel_skill_calls": 0,
+    "parallel_batch_window_s": 0.5,
+    "env_args": {
+      "skill_set": "netplay_true,reveal,rollback,search",
+      "tune": {
+        "reveal_map": "1.0"
+      }
+    },
+    "colocated": false,
+    "seed_workspace": true,
+    "n_examples": 16,
+    "seed": 0,
+    "explicit_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harness_id": "nethack_v1"
+  },
+  "harness": {
+    "id": "nethack-prime-agent",
+    "runtime": {
+      "type": "subprocess"
+    },
+    "env": {},
+    "forward_env": [],
+    "disabled_tools": null,
+    "binary": "prime-agent",
+    "version": "0.3.3",
+    "install_dir": "/tmp/vf-prime-agent",
+    "path_prepend": "/usr/bin:/root/.local/bin",
+    "thinking": "",
+    "websearch": false,
+    "reasoning": null,
+    "context_window": 1048576,
+    "capture_output": true,
+    "sandbox": true,
+    "sandbox_bwrap": "bwrap",
+    "allow_batching": true,
+    "max_relaunches": 0
+  },
+  "timeout": {
+    "setup": 1800.0,
+    "rollout": 7200.0,
+    "finalize": null,
+    "scoring": null
+  },
+  "retries": {
+    "rollout": {
+      "max_retries": 2,
+      "include": [],
+      "exclude": []
+    }
+  },
+  "max_turns": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "max_total_tokens": null,
+  "interception": {
+    "type": "elastic",
+    "multiplex": 32
+  },
+  "id": null,
+  "args": {},
+  "extra_env_kwargs": {},
+  "pool": {
+    "type": "elastic",
+    "max_workers": null,
+    "multiplex": 128
+  },
+  "model": "z-ai/glm-5.2",
+  "client": {
+    "base_url": "https://api.pinference.ai/api/v1",
+    "api_key_var": "PRIME_API_KEY",
+    "headers": {
+      "X-Prime-Team-ID": "cmotasmp5005ppyp07dcoh50u"
+    },
+    "type": "eval"
+  },
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "reasoning_effort": null,
+    "max_tokens": null
+  },
+  "num_tasks": 5,
+  "num_rollouts": 1,
+  "shuffle": false,
+  "max_concurrent": 10,
+  "verbose": false,
+  "dry_run": false,
+  "rich": false,
+  "server": false,
+  "push": false,
+  "output_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent"
+}
+23:57:06    INFO running 5x1 rollouts on z-ai/glm-5.2
+23:57:06    INFO results: /root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent
+23:57:06    INFO rollout start: id=49b94886c8a64c8ba548ab87c2b90284 task=0 harness=nethack-prime-agent runtime=subprocess
+23:57:06    INFO rollout start: id=6bc6a597bded4e61a291d1cf38c2f671 task=1 harness=nethack-prime-agent runtime=subprocess
+23:57:06    INFO rollout start: id=ce93fd517e0e457297fbbc34171f064d task=2 harness=nethack-prime-agent runtime=subprocess
+23:57:06    INFO rollout start: id=a68f387c52b84467884bf30c7391792c task=3 harness=nethack-prime-agent runtime=subprocess
+23:57:06    INFO rollout start: id=d3fc458aa68042aaad43690871a4a30a task=4 harness=nethack-prime-agent runtime=subprocess
+23:57:06    INFO interception up: url=http://127.0.0.1:39533
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+23:57:07    INFO interception pool: 1 server(s), multiplex=32
+23:57:11    INFO tool server 'nethack': http://127.0.0.1:44615/mcp
+23:57:17    INFO tool server 'nethack': http://127.0.0.1:33647/mcp
+23:57:18    INFO tool server 'nethack': http://127.0.0.1:40643/mcp
+23:57:32    INFO tool server 'nethack': http://127.0.0.1:41859/mcp
+23:57:42    INFO tool server 'nethack': http://127.0.0.1:38471/mcp
+00:37:39    INFO rollout done: id=ce93fd517e0e457297fbbc34171f064d task=2 reward=88.526 turns=119 stop=game_over
+00:39:21    INFO rollout done: id=6bc6a597bded4e61a291d1cf38c2f671 task=1 reward=34.200 turns=134 stop=game_over
+00:52:00    INFO rollout done: id=d3fc458aa68042aaad43690871a4a30a task=4 reward=87.846 turns=178 stop=game_over
+01:04:05    INFO rollout done: id=49b94886c8a64c8ba548ab87c2b90284 task=0 reward=33.653 turns=211 stop=call_budget_exhausted

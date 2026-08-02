@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T18:19:59+00:00",
+  "event": "kill",
+  "watchdog_pid": 87381,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__BBOX__visoff/turns",
+  "pid": 127661,
+  "idle_s": 301.2,
+  "timeout_s": 300.0,
+  "seeds": [
+    2
+  ],
+  "likely_hung_seed": 2,
+  "per_seed": {
+    "2": {
+      "idle_s": 301.2,
+      "newest_file": "2_127661_1785607494.ndjson",
+      "last_turn": {
+        "file": "2_127661_1785607494.ndjson",
+        "n_lines": 31,
+        "turn": 31,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "BBOX",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785608088.2620735,
+        "reward": 121.0,
+        "last_tool_call": "np_press_key",
+        "last_message_head": "[Executing skill 'press_key s'. Pressing key 's'. Skill 'press_key s' completed GAME: The little dog drops a gem.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      127661
+    ],
+    "sigterm": [
+      127661
+    ],
+    "sigkill": [
+      127661
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__BBOX__visoff/turns.stalled/20260801T181959Z_pid127661",
+  "quarantined_files": [
+    "2_127661_1785607494.ndjson"
+  ],
+  "dry_run": false
+}

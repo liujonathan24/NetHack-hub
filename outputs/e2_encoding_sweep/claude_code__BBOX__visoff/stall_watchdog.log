@@ -1,0 +1,4 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__BBOX__visoff/turns'] timeout=300s poll=15s parent_pid=92428
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__BBOX__visoff/turns pid=92945 idle=315s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=92945 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__BBOX__visoff/turns.stalled/20260801T182142Z_pid92945
+[stall_watchdog] exit (parent_exited); 1 kill(s)

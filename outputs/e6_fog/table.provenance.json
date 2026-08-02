@@ -1,0 +1,12 @@
+{
+ "producer": "cli_harness_eval",
+ "written_at": 1785658037.657539,
+ "run_dir": "/root/NetHack-hub/outputs/e6_fog",
+ "primary_md": "table.cli_harness_eval.md",
+ "primary_json": "table.cli_harness_eval.json",
+ "previous_producer": null,
+ "argv": [
+  "tools/cli_harness_eval/aggregate.py",
+  "outputs/e6_fog"
+ ]
+}

@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-02T02:17:06+00:00",
+  "event": "kill",
+  "watchdog_pid": 386168,
+  "turns_dir": "/root/NetHack-hub/outputs/e3b_tier1/BBOX_MIN__prime_agent/turns",
+  "pid": 386343,
+  "idle_s": 306.1,
+  "timeout_s": 300.0,
+  "seeds": [
+    2
+  ],
+  "likely_hung_seed": 2,
+  "per_seed": {
+    "2": {
+      "idle_s": 306.1,
+      "newest_file": "2_386343_1785635903.ndjson",
+      "last_turn": {
+        "file": "2_386343_1785635903.ndjson",
+        "n_lines": 73,
+        "turn": 73,
+        "dlvl": 5,
+        "hp": 30,
+        "max_hp": 39,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 5,
+        "t_wall": 1785636710.5720835,
+        "reward": 5348.0,
+        "last_tool_call": "np_move_to",
+        "last_message_head": "[NetHack asked \"Really attack the watch captain? [yn] (n)\" -- the harness pressed ESC, so nothing happened and nothing is pending]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      386343
+    ],
+    "sigterm": [
+      386343
+    ],
+    "sigkill": [
+      386343
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e3b_tier1/BBOX_MIN__prime_agent/turns.stalled/20260802T021706Z_pid386343",
+  "quarantined_files": [
+    "2_386343_1785635903.ndjson"
+  ],
+  "dry_run": false
+}

@@ -1,0 +1,12 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns'] timeout=300s poll=15s parent_pid=88261
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns pid=88964 idle=303s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] killed pid=88964 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T173211Z_pid88964
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns pid=88963 idle=314s (timeout=300s) seeds=[3] likely_hung_seed=3
+[stall_watchdog] killed pid=88963 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T175737Z_pid88963
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns pid=123019 idle=307s (timeout=300s) seeds=[4] likely_hung_seed=4
+[stall_watchdog] killed pid=123019 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T183504Z_pid123019
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns pid=153487 idle=313s (timeout=300s) seeds=[4] likely_hung_seed=4
+[stall_watchdog] killed pid=153487 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T185329Z_pid153487
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns pid=164028 idle=306s (timeout=300s) seeds=[4] likely_hung_seed=4
+[stall_watchdog] killed pid=164028 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T190131Z_pid164028
+[stall_watchdog] exit (parent_exited); 5 kill(s)

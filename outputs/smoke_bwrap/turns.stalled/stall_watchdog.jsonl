@@ -1,0 +1,2 @@
+{"ts": "2026-08-01T21:45:45+00:00", "event": "armed", "watchdog_pid": 222182, "turns_dir": "/root/NetHack-hub/outputs/smoke_bwrap/turns", "timeout_s": 300.0, "poll_s": 15.0, "parent_pid": 222129, "dry_run": false, "quarantine_root": "/root/NetHack-hub/outputs/smoke_bwrap/turns.stalled"}
+{"ts": "2026-08-01T21:47:32+00:00", "event": "exit", "watchdog_pid": 222182, "turns_dir": "/root/NetHack-hub/outputs/smoke_bwrap/turns", "reason": "parent_exited", "kills": 0}
