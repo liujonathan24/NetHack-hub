@@ -133,3 +133,5 @@
 08:13:50    INFO interception up: url=http://127.0.0.1:46297
 08:13:51    INFO interception pool: 1 server(s), multiplex=32
 08:13:54    INFO tool server 'nethack': http://127.0.0.1:43899/mcp
+09:15:30    INFO rollout done: id=6e4b7a6ccdb143f9a6a0748e242bdd82 task=0 reward=22.362 turns=62 stop=agent_completed
+09:15:30    INFO interception down: url=http://127.0.0.1:46297

@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-02T09:11:46+00:00",
+  "event": "kill",
+  "watchdog_pid": 602461,
+  "turns_dir": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3/turns",
+  "pid": 602519,
+  "idle_s": 758.0,
+  "timeout_s": 300.0,
+  "seeds": [
+    3
+  ],
+  "likely_hung_seed": 3,
+  "per_seed": {
+    "3": {
+      "idle_s": 758.0,
+      "newest_file": "3_602519_1785658434.ndjson",
+      "last_turn": {
+        "file": "3_602519_1785658434.ndjson",
+        "n_lines": 52,
+        "turn": 52,
+        "dlvl": 3,
+        "hp": 10,
+        "max_hp": 16,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 3,
+        "t_wall": 1785661138.1204083,
+        "reward": 1071.0,
+        "last_tool_call": "np_eat",
+        "last_message_head": "[Executing skill 'eat e'. Pressing key 'e'. Skill 'eat e' completed GAME: You finish eating the food ration.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      602519
+    ],
+    "sigterm": [
+      602519
+    ],
+    "sigkill": [
+      602519
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3/turns.stalled/20260802T091146Z_pid602519",
+  "quarantined_files": [
+    "3_602519_1785658434.ndjson"
+  ],
+  "dry_run": false
+}
