@@ -162,8 +162,13 @@ def rollout_rate(rollout):
 MILESTONES = (1.0, 2.0, 5.0, 10.0, 20.0)
 
 
-def turns_to_milestone(rollout, pct):
+def turns_to_milestone(rollout, pct, metric="max"):
     """`(game turns, LLM calls)` to first reach `pct` BALROG, or `None`.
+
+    `metric="min"` measures the same milestone on BALROG's MIN over the two
+    achievement axes -- it rises only when depth AND experience have both
+    advanced, so it is immune to the single-axis carry the max tolerates and
+    is the natural scoreboard for balance-seeking guidance (GUIDE_LAG).
 
     This is the comparison that survives BALROG's concavity, and the reason the
     headline %/turn rate must not be read across very different horizons. The
@@ -176,8 +181,9 @@ def turns_to_milestone(rollout, pct):
     only ever standing on the steep part of the curve. Comparing turns to the
     SAME milestone removes that entirely.
     """
+    idx = 0 if metric == "max" else 1
     for t, c, d, x in rollout:
-        if balrog_both(d, x)[0] * 100 >= pct:
+        if balrog_both(d, x)[idx] * 100 >= pct:
             return t, c
     return None
 

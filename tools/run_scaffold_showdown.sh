@@ -53,6 +53,15 @@
 #   * `search(times<=20)` is published (34 tools). Exp 2 measured 1,058 raw `s`
 #     keystrokes on the prime_agent arm in loops up to 50 long; one `search`
 #     call replaces up to 20 of them for either arm.
+#   * `rollback` is REMOVED from the surface (33 tools, was 34). Exp 3a's
+#     traces convicted it twice over: (a) BOTH watchdog kills sat immediately
+#     downstream of a rollback (cc seed 4 wedged one call after its third
+#     rollback; pa seed 3 five calls after its first) -- the §3.1 deadlock,
+#     which persists even though the skill already resets the NetPlay agent
+#     cache after restore, so there is no known fix short of not offering the
+#     skill; and (b) it is an undo-death crutch no baseline has -- cc seed 2
+#     used it NINE times, repeatedly escaping at HP 1-5, then ran the full
+#     budget. Removing it also drops the per-turn engine-heap snapshot.
 #   * The "Do not batch blind sequences of calls" instruction is STRIPPED from
 #     prime_agent's SKILL.md (ALLOW_BATCHING=1). Claude Code never had an
 #     equivalent rule and was measured batching 2.31 tool calls per assistant
@@ -111,7 +120,7 @@ export ENG="${ENG:-/root/NetHack-engine}"
 export STALL_WATCHDOG=1
 export MAX_CONCURRENT="${MAX_CONCURRENT:-10}"
 
-SURFACE='netplay_true,reveal,rollback,search'
+SURFACE='netplay_true,reveal,search'
 VISION='"tune":{"reveal_map":1.0}'
 
 export PATH="$HOME/.local/bin:$PATH"
@@ -191,10 +200,29 @@ print(f"preflight: sandbox DNS ok ({rc.stdout.split()[0]})")
 PYSANDBOX
 
 mkdir -p "$OUTROOT"
+# --- preflight 0: refuse to clobber a completed run --------------------------
+# The eval CLI OPENS traces.jsonl FOR WRITE at startup, truncating it. Measured
+# 2026-08-02: a duplicate driver invocation woke up after the first finished,
+# relaunched both cells into the same OUTROOT, and zeroed tier 1's completed
+# trace records (per-call usage unrecoverable; scores survived only because the
+# turn files channel is append-per-attempt). A cell that already holds
+# non-empty traces is DONE; launching over it destroys data. RESUME=1 bypasses,
+# for deliberately re-running a cell after moving its old traces aside.
+if [ -z "${RESUME:-}" ]; then
+  V_GUARD="${EXP4_VARIANT:-BBOX_MIN}"
+  for arm_dir in "$OUTROOT/${V_GUARD}__claude_code" "$OUTROOT/${V_GUARD}__prime_agent"; do
+    if [ -s "$arm_dir/traces.jsonl" ]; then
+      echo "sweep: REFUSING to launch -- $arm_dir/traces.jsonl already holds" >&2
+      echo "  $(wc -l < "$arm_dir/traces.jsonl") completed record(s), and the eval CLI" >&2
+      echo "  truncates that file on startup. Move it aside or set RESUME=1." >&2
+      exit 7
+    fi
+  done
+fi
 SUMMARY="$OUTROOT/sweep.log"
 {
   echo "sweep start $(date -u +%FT%TZ)"
-  echo "  model=$MODEL cells=BBOX_MIN x cc/pa vision=on seeds=$SEEDS calls=$MAX_CALLS timeout=${ROLLOUT_TIMEOUT}s"
+  echo "  model=$MODEL cells=BBOX_MIN x cc/pa vision=$([ -n "${FOG:-}" ] && echo FOG || echo on) seeds=$SEEDS calls=$MAX_CALLS timeout=${ROLLOUT_TIMEOUT}s"
   echo "  git_head $(git rev-parse HEAD 2>/dev/null || echo unknown) dirty=$(test -n "$(git status --porcelain 2>/dev/null)" && echo yes || echo no)"
   echo "  est cost ~\$$("$REPO/.venv-cli-eval/bin/python" -c "
 # Per-rollout at 200 calls on plain BBOX (exp2 curves, repaired meter):
@@ -211,9 +239,12 @@ print(f'{mid:.0f} (range {lo:.0f}-{hi:.0f})')") for 2 cells x $SEEDS seeds"
 
 # cell name | arm | variant | extra env. The prime_agent cell strips the
 # no-batching rule; both cells get the search skill via $SURFACE.
+# EXP4_VARIANT overrides the encoding for both cells (e.g. BBOX_MIN_GUIDE_LAG);
+# cell names follow the variant so two sweeps can share an aggregate root.
+V="${EXP4_VARIANT:-BBOX_MIN}"
 cells=(
-  "BBOX_MIN__claude_code|claude_code|BBOX_MIN|"
-  "BBOX_MIN__prime_agent|prime_agent|BBOX_MIN|ALLOW_BATCHING=1"
+  "${V}__claude_code|claude_code|${V}|"
+  "${V}__prime_agent|prime_agent|${V}|ALLOW_BATCHING=1"
 )
 
 launch_cell() {
@@ -223,7 +254,9 @@ launch_cell() {
   # SKILL_SET goes INSIDE env_args: launch_cell.sh refuses the two together,
   # because a whole-object env_args override replaces the table and would drop
   # a separately-passed skill_set.
+  # FOG=1 drops the reveal_map tune -> fog-of-war (the engine default).
   local env_args="{\"skill_set\":\"${SURFACE}\",${VISION}}"
+  [ -n "${FOG:-}" ] && env_args="{\"skill_set\":\"${SURFACE}\"}"
   echo "  launch $name (arm=$arm variant=$variant ${extra:-no-extra})" | tee -a "$SUMMARY"
   env $extra VARIANT="$variant" ENV_ARGS="$env_args" \
     tools/cli_harness_eval/launch_cell.sh "$arm" "$out" "$MAX_CALLS" "$SEEDS" \

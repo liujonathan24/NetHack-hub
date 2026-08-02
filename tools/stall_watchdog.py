@@ -215,6 +215,54 @@ def kill_tree(pid: int, grace: float, dry_run: bool = False) -> dict:
 # --------------------------------------------------------------------------
 # turn-file inspection
 # --------------------------------------------------------------------------
+def recent_call_gaps(path: str, n: int = 24) -> list[float]:
+    """The last `n` inter-call `t_wall` gaps recorded in a turn file.
+
+    Read from the file's own tail (last ~64KB), so it reflects THIS rollout's
+    current latency profile -- which is the quantity a stall threshold must be
+    calibrated against. A fixed 300s timeout was measured killing HEALTHY
+    rollouts twice over: gpt-5.6-sol through prime-agent thinks p90 104-204s
+    between calls (2 kills at 305s/301s idle), and glm-5.2 at call ~190 with
+    ~140k context crossed 300s while mid-thought -- confiscating a Dlvl-15
+    record run at turn 192 of 200. Empty list when the file has fewer than two
+    parseable records.
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > 65536:
+                fh.seek(-65536, os.SEEK_END)
+            lines = fh.read().splitlines()
+        ts: list[float] = []
+        for raw in lines:
+            try:
+                rec = json.loads(raw.decode("utf-8", "replace"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            t = rec.get("t_wall") if isinstance(rec, dict) else None
+            if t:
+                ts.append(float(t))
+        return [b - a for a, b in zip(ts, ts[1:]) if b > a][-n:]
+    except OSError:
+        return []
+
+
+def adaptive_timeout(base: float, gaps: list[float], factor: float = 4.0,
+                     ceiling: float = 1800.0) -> float:
+    """The stall threshold for a rollout with the given recent gaps.
+
+    `max(base, factor * p95(gaps))`, capped at `ceiling`. With no gap history
+    (a rollout that has not written two records yet) the base applies -- the
+    pre-first-turn case is exactly where a tight timeout is wanted. The
+    ceiling keeps a genuinely wedged slow rollout reapable within the sweep.
+    """
+    if not gaps:
+        return base
+    g = sorted(gaps)
+    p95 = g[min(len(g) - 1, int(0.95 * (len(g) - 1)))]
+    return min(ceiling, max(base, factor * p95))
+
+
 def last_turn_record(path: str) -> dict:
     """Summary of the last complete NDJSON record in `path`.
 
@@ -385,9 +433,12 @@ def quarantine_root(turns_dir: str, override: str | None) -> str:
 
 class Watchdog:
     def __init__(self, turns_dirs, timeout=300.0, poll=15.0, kill_grace=10.0,
-                 quarantine=None, log_path=None, dry_run=False, verbose=False):
+                 quarantine=None, log_path=None, dry_run=False, verbose=False,
+                 adaptive_factor=4.0, adaptive_ceiling=1800.0):
         self.turns_dirs = [os.path.abspath(d) for d in turns_dirs]
         self.timeout = float(timeout)
+        self.adaptive_factor = float(adaptive_factor)
+        self.adaptive_ceiling = float(adaptive_ceiling)
         self.poll = float(poll)
         self.kill_grace = float(kill_grace)
         self.quarantine = quarantine
@@ -439,6 +490,21 @@ class Watchdog:
                 if self.verbose:
                     self.say(f"ok pid={pid} idle={idle:.0f}s "
                              f"seeds={sorted(slot['seeds'])}")
+                continue
+            # Past the base timeout: before killing, calibrate against this
+            # rollout's OWN recent call latency (see recent_call_gaps). A model
+            # that routinely thinks 150s between calls is not stalled at 320s;
+            # a model that answers in 10s is.
+            newest = max(slot["files"], key=lambda p: os.stat(p).st_mtime)
+            eff = adaptive_timeout(self.timeout, recent_call_gaps(newest),
+                                   factor=self.adaptive_factor,
+                                   ceiling=self.adaptive_ceiling)
+            if idle <= eff:
+                if self.verbose or eff > self.timeout:
+                    self.say(f"deferring pid={pid}: idle={idle:.0f}s is inside "
+                             f"the ADAPTIVE threshold {eff:.0f}s (base "
+                             f"{self.timeout:.0f}s; this rollout's recent "
+                             f"calls justify the slack)")
                 continue
             if not pid_alive(pid):
                 # Finished or already dead. Its files are final; leave them for
@@ -652,6 +718,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--poll", type=float, default=15.0, help="seconds between scans (default 15)")
     p.add_argument("--kill-grace", type=float, default=10.0,
                    help="seconds between SIGTERM and SIGKILL (default 10)")
+    p.add_argument("--adaptive-factor", type=float, default=4.0,
+                   help="stall threshold = max(timeout, FACTOR * p95 of the "
+                        "rollout's own recent inter-call gaps) (default 4)")
+    p.add_argument("--adaptive-ceiling", type=float, default=1800.0,
+                   help="upper bound on the adaptive threshold (default 1800)")
     p.add_argument("--quarantine-dir", default=None,
                    help="where killed rollouts' turn files go "
                         "(default: <turns-dir>.stalled — must NOT be inside turns/)")
@@ -732,6 +803,8 @@ def main(argv=None) -> int:
         args.turns_dirs, timeout=args.timeout, poll=args.poll,
         kill_grace=args.kill_grace, quarantine=args.quarantine_dir,
         log_path=args.log, dry_run=args.dry_run, verbose=args.verbose,
+        adaptive_factor=args.adaptive_factor,
+        adaptive_ceiling=args.adaptive_ceiling,
     )
     return wd.run(once=args.once, parent_pid=args.parent_pid,
                   max_seconds=args.max_seconds)
