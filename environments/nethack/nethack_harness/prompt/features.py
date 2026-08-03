@@ -67,8 +67,12 @@ LABEL_ORDER = (
 )
 _LABEL_RANK = {label: i for i, label in enumerate(LABEL_ORDER)}
 
-#: How many coordinates per label the rendered line carries before "+N more".
-DISPLAY_CAP = 3
+#: Coordinates per label to render. Was 3-with-"+N more", which silently
+#: deleted the very thing this block exists to deliver: a closed door at
+#: (22,12) fell off the list and the agent could not tell whether it had opened
+#: or been truncated. Under SPARSE the feature list IS the map, so truncating it
+#: removes the encoding's entire content. Show them all.
+DISPLAY_CAP = 10_000
 
 
 @dataclass(frozen=True)
@@ -91,8 +95,19 @@ def _is_wallish(c: str) -> bool:
 
 
 def visible_features(raw_obs) -> list[Feature]:
-    """Every navigable/notable tile on the currently-drawn map, in map coords."""
-    chars = getattr(raw_obs, "chars", None)
+    """Every navigable/notable tile on the currently-drawn map, in map coords.
+
+    Reads the RECONCILED grid (`prompt/engine_grid.py`), the same one the
+    `=== MAP ===` block renders, rather than `raw_obs.chars` directly. The two
+    used to be read off different planes, which is how the seed-0 starting room's
+    two converted secret doors managed to be visible on the engine's tty, absent
+    from the map, and absent from this list, all at once. One grid, one answer.
+    """
+    if raw_obs is None:
+        return []
+    from nethack_harness.prompt.engine_grid import engine_map_chars
+
+    chars = engine_map_chars(raw_obs)
     if chars is None:
         return []
     return visible_features_from_chars(chars)
@@ -331,3 +346,106 @@ def format_monsters(mons: Iterable[Monster]) -> list[str]:
 
 def monsters_in_sight(raw_obs) -> list[str]:
     return format_monsters(visible_monsters(raw_obs))
+
+
+def statues(raw_obs) -> list[str]:
+    """Statue positions, as text.
+
+    Statues draw the MONSTER LETTER on the map but are not monsters: they are
+    excluded from `glyph_is_monster`, from the NetPlay tracker, and (until now)
+    from the feature list -- so nothing anywhere told the agent they existed. It
+    would attack one, get "There is no monster at (x,y)" at zero game-turn cost,
+    see an unchanged observation, and repeat. Statues were present on Dlvl 1 in
+    4 of 7 seeds.
+
+    We deliberately do NOT rewrite the map: the grid is the game's own output
+    and must stay faithful. This adds a line of text instead, which is the only
+    honest fix available from outside the engine.
+    """
+    chars = getattr(raw_obs, "chars", None)
+    glyphs = getattr(raw_obs, "glyphs", None)
+    blstats = getattr(raw_obs, "blstats", None)
+    if chars is None or glyphs is None or blstats is None:
+        return []
+    from nethack_core.glyphs import glyph_is_statue, glyph_to_mon, monster_name
+    px, py = int(blstats[0]), int(blstats[1])
+    out = []
+    h, w = chars.shape
+    for y in range(h):
+        for x in range(w):
+            g = int(glyphs[y, x])
+            if not glyph_is_statue(g) or (x, y) == (px, py):
+                continue
+            try:
+                nm = monster_name(glyph_to_mon(g)) or "creature"
+            except Exception:
+                nm = "creature"
+            out.append(f"statue of a {nm} at ({x},{y}) [NOT a monster - do not attack]")
+    return out
+
+
+#: Game turns a lapsed sighting stays worth reporting. A lichen has not moved;
+#: a jackal has crossed the level. Beyond this the coordinate misleads.
+MONSTER_MEMORY_TURNS = 60
+
+
+def remembered_monsters(state, raw_obs, game_turn, dlvl) -> list[str]:
+    """Monsters seen earlier on THIS floor that are not currently visible.
+
+    This is the "unseen" half of the seen-vs-remembered axis. An earlier version
+    of this block was removed for being actively misleading, and the four
+    defects that killed it are each corrected here:
+
+      1. **Dead monsters were still listed.** It advertised a kobold 22 turns
+         after the agent watched it die. Now a sighting is dropped when the kill
+         log records that species dying after the sighting was taken.
+      2. **It crossed floors.** On Dlvl 2 it still listed jackal/fox/newt at
+         Dlvl 1 coordinates with no floor qualifier. The memory is now keyed by
+         depth and cleared on descent.
+      3. **Wrong clock.** Ages were counted in LLM turns while STATUS reports
+         game turns -- the same word meaning two things ~15x apart. Now game
+         turns throughout.
+      4. **Ghost trails.** Keyed by position, one jackal walking two tiles
+         became two remembered jackals. Now keyed by species, most recent
+         sighting only.
+
+    Returns [] rather than raising on any inconsistency: a memory aid must never
+    be able to break a rollout.
+    """
+    if state is None:
+        return []
+    mem = state.setdefault("_mon_mem", {})
+    if state.get("_mon_mem_dlvl") != dlvl:      # (2) new floor, new memory
+        mem.clear()
+        state["_mon_mem_dlvl"] = dlvl
+    gt = int(game_turn or 0)
+
+    live = {}
+    for m in visible_monsters(raw_obs):
+        if m.is_pet:
+            continue
+        live[m.name] = m
+        mem[m.name] = (m.x, m.y, gt)           # (4) species-keyed, latest only
+
+    try:
+        from nethack_harness.prompt.corpse_age import kill_log
+        kills = kill_log(state)
+    except Exception:
+        kills = {}
+
+    out: list[str] = []
+    for name in list(mem):
+        x, y, seen = mem[name]
+        if name in live:
+            continue
+        killed_at = kills.get((name or "").lower())
+        if killed_at is not None and int(killed_at) >= int(seen):
+            del mem[name]                      # (1) we killed it; it is gone
+            continue
+        age = gt - int(seen)                   # (3) game turns
+        if age > MONSTER_MEMORY_TURNS:
+            del mem[name]
+            continue
+        out.append(f"{name} last seen at ({x},{y}), {age} game turns ago "
+                   f"- NOT visible now, may have moved")
+    return out[:MONSTER_CAP]

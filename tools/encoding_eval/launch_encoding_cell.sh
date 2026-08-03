@@ -18,7 +18,7 @@ set -euo pipefail
 # no `obs_mode` parameter on `load_environment` (that field lives on the v1
 # taskset config), so passing one would land in **kwargs and be silently
 # ignored, producing a cell identical to its baseline.
-KNOWN="B0 B1 JSON TOON IMG_TTY IMG B B_ASCII B_JSON DM_B_ASCII N R DM DM_JSON BBOX GLYPHBOX NETPLAY E1 E2 ND FD CH P G"
+KNOWN="SPARSE_MEM BBOX_MEM SPARSE SPARSE_ONDEMAND BBOX_GUIDE_LEAD BBOX_GUIDE_LAG B0_GUIDE_LEAD B0_GUIDE_LAG B0 B1 JSON TOON IMG_TTY IMG B B_ASCII B_JSON DM_B_ASCII BBOX_JSON N R DM DM_JSON BBOX GLYPHBOX NETPLAY E1 E2 ND FD CH P G"
 
 usage() {
   echo "usage: launch_encoding_cell.sh <VARIANT> <OUTDIR> [MAX_TURNS] [N]" >&2
@@ -81,7 +81,40 @@ echo "[cell] variant=${VARIANT} max_turns=${MAX_TURNS} n=${N}"
 echo "[cell] out=${OUT_ABS}"
 echo "[cell] args=${ARGS_JSON}"
 
+# Optional per-cell model override. The base config pins
+# google/gemini-3-flash-preview as a FIXED factor for the encoding sweep, so the
+# model-strength arms need it settable without forking the config -- a second
+# toml would drift from the base and silently reintroduce exactly the confounds
+# the single-base design exists to prevent.
+MODEL_ARGS=()
+if [ -n "${MODEL:-}" ]; then
+  MODEL_ARGS=(--model "${MODEL}")
+  echo "[cell] model=${MODEL} (override)"
+fi
+
+# --- stall watchdog (opt-in: STALL_WATCHDOG=1) --------------------------------
+# Same contract as tools/cli_harness_eval/launch_cell.sh — see the long note
+# there. Short version: HARNESS_DEFECTS §3.1's two hangs never reach `env.step`,
+# so nothing in-process can time them out; tools/stall_watchdog.py watches
+# `turns/` from outside. Armed per launcher invocation (== per batch) because
+# the documented failure mode is a watchdog that exits when one batch's queue
+# drains. `--parent-pid $$` works because the `exec` below keeps this PID.
+# Opt-in so an unset env var leaves a normal foreground run untouched.
+if [ -n "${STALL_WATCHDOG:-}" ]; then
+  WD_PY="$(dirname "${EVAL_BIN}")/python"
+  [ -x "$WD_PY" ] || WD_PY=python3
+  "$WD_PY" "${REPO}/tools/stall_watchdog.py" \
+    --turns-dir "${OUT_ABS}/turns" \
+    --timeout "${STALL_TIMEOUT:-300}" \
+    --poll "${STALL_POLL:-15}" \
+    --parent-pid "$$" \
+    ${STALL_EXTRA_ARGS:-} >>"${OUT_ABS}/stall_watchdog.log" 2>&1 &
+  echo "[cell:watchdog] armed: pid=$! timeout=${STALL_TIMEOUT:-300}s" \
+       "log=${OUT_ABS}/stall_watchdog.log quarantine=${OUT_ABS}/turns.stalled"
+fi
+
 exec "$EVAL_BIN" @ tools/encoding_eval/configs/encoding_base.toml \
   --num_tasks "${N}" \
   --output_dir "${OUT_ABS}" \
+  "${MODEL_ARGS[@]}" \
   --args "${ARGS_JSON}"

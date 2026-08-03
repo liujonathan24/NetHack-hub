@@ -35,6 +35,14 @@ dat/
 /outputs/cli_harness_eval/**/turns/
 /outputs/cli_harness_eval/**/eval.log
 /outputs/cli_harness_eval/**/config.toml
+# Same artifacts from ANY other sweep directory. The rules above only covered
+# outputs/cli_harness_eval/, so a sweep launched into a new subtree (e.g. the
+# encoding-eval launcher, or a one-off probe dir) had its multi-hundred-MB
+# traces show up as untracked-but-committable. Already-tracked artifacts under
+# outputs/encoding_eval/ are unaffected -- .gitignore does not untrack files.
+/outputs/**/traces.jsonl
+/outputs/**/turns/
+/outputs/**/eval.log
 # The eval CLI's default per-run dir (`<env>--<model>--<harness>/<uuid>/`)
 # when `--output_dir` isn't passed explicitly (ad-hoc `eval` invocations,
 # not launch_cell.sh, which always sets `--output_dir`).
@@ -50,11 +58,8 @@ dat/
 # subdirectory it lands in.
 /outputs/**/*.log
 
-# Per-turn rollout traces from ANY eval subtree, not just cli_harness_eval.
-# `outputs/encoding_eval/**/traces.jsonl` grew to 70+ MB apiece and, together
-# with a 255 MB `outputs/cli_harness_eval/run1/control.log`, made this branch
-# unpushable (GitHub hard-fails blobs over 100 MB). Both were purged from
-# history; keep them out. Aggregated artifacts a run produces next to them
-# (table.md, summary.json, results.jsonl, metrics) are unaffected.
-traces.jsonl
-/outputs/**/turns/
+# Core dumps. A 577MB core landed in the worktree during the hang
+# investigation; large blobs like this are what previously made the branch
+# unpushable (GitHub hard-fails over 100MB).
+core.*
+vgcore.*

@@ -38,6 +38,14 @@ Notes:
 - There is a hard budget of skill calls for the episode. When it is spent the
   server refuses further calls and the episode ends — spend calls on progress,
   not on probing.
+- **Never use `press_key` or `type_text` to move.** `move_to(x, y)` pathfinds
+  for you in one call; a movement key covers one tile and usually walks into a
+  wall. If `move_to` fails, its message includes a `[why: ...]` clause naming
+  the blocker and the remedy (open the named door, `reveal` the unexplored gap,
+  or `search` near dead ends) — follow it instead of retrying by hand.
+- If the observation contains an `=== OBJECTIVE ===` block, treat its FOCUS
+  line as your current priority: it names which scoring axis is worth pursuing
+  right now and what the next checkpoint is worth.
 - A call that returns an error raises `McpToolError`; a missing tool name raises
   `AttributeError` naming the tools that do exist. Neither ends the episode.
 - `NotEnabled` means the harness did not wire the server up. It is a setup bug,

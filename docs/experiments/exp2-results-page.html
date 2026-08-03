@@ -1,0 +1,388 @@
+<title>NetHack CLI-Harness Comparison — Results</title>
+<style>
+  :root {
+    --ground:   #e9ebee;
+    --surface:  #f8f9fa;
+    --raised:   #ffffff;
+    --ink:      #15171c;
+    --muted:    #5b6270;
+    --hairline: #c9cdd4;
+    --accent:   #a8741a;
+    --accent-s: #c8901f;
+    --good:     #2c6e49;
+    --warn:     #9a6520;
+    --crit:     #9d3630;
+    --good-bg:  #dcebe1;
+    --warn-bg:  #f2e6d0;
+    --crit-bg:  #f2dcda;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:   #131519;
+      --surface:  #1a1d23;
+      --raised:   #21252c;
+      --ink:      #e4e7ec;
+      --muted:    #949cab;
+      --hairline: #333944;
+      --accent:   #d9a442;
+      --accent-s: #eab958;
+      --good:     #6cc08a;
+      --warn:     #d7a45c;
+      --crit:     #e08279;
+      --good-bg:  #1c2f24;
+      --warn-bg:  #33281761;
+      --crit-bg:  #341f1d;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:#e9ebee; --surface:#f8f9fa; --raised:#ffffff; --ink:#15171c;
+    --muted:#5b6270; --hairline:#c9cdd4; --accent:#a8741a; --accent-s:#c8901f;
+    --good:#2c6e49; --warn:#9a6520; --crit:#9d3630;
+    --good-bg:#dcebe1; --warn-bg:#f2e6d0; --crit-bg:#f2dcda;
+  }
+  :root[data-theme="dark"] {
+    --ground:#131519; --surface:#1a1d23; --raised:#21252c; --ink:#e4e7ec;
+    --muted:#949cab; --hairline:#333944; --accent:#d9a442; --accent-s:#eab958;
+    --good:#6cc08a; --warn:#d7a45c; --crit:#e08279;
+    --good-bg:#1c2f24; --warn-bg:#332817; --crit-bg:#341f1d;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 1.25rem 5rem;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 60rem; margin: 0 auto; }
+  .prose { max-width: 41rem; }
+
+  h1, h2, h3 {
+    font-family: "Charter", "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+    text-wrap: balance;
+    line-height: 1.2;
+    margin: 0;
+  }
+  h1 { font-size: clamp(1.9rem, 4.4vw, 2.7rem); font-weight: 600; letter-spacing: -0.015em; }
+  h2 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; }
+  h3 { font-size: 1.08rem; font-weight: 600; }
+  p  { margin: 0; }
+
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  header {
+    padding: 3.5rem 0 1.75rem;
+    border-bottom: 2px solid var(--ink);
+    display: flex; flex-direction: column; gap: 0.7rem;
+  }
+  header .sub { color: var(--muted); font-size: 1.02rem; max-width: 38rem; }
+  .stamp {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.76rem; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; margin-top: 0.3rem;
+  }
+
+  section { padding: 2.75rem 0 0; display: flex; flex-direction: column; gap: 1.1rem; }
+  section + section { border-top: 1px solid var(--hairline); margin-top: 2.5rem; }
+
+  /* ---- status strip ---- */
+  .status {
+    display: grid; gap: 1px;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    background: var(--hairline);
+    border: 1px solid var(--hairline);
+    border-radius: 3px; overflow: hidden;
+  }
+  .status div { background: var(--surface); padding: 0.85rem 1rem; display: flex; flex-direction: column; gap: 0.18rem; }
+  .status .k { font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .status .v {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 1.32rem; font-variant-numeric: tabular-nums; font-weight: 600;
+  }
+  .status .n { font-size: 0.78rem; color: var(--muted); }
+
+  /* ---- tables ---- */
+  .scroll { overflow-x: auto; border: 1px solid var(--hairline); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.87rem; }
+  caption {
+    caption-side: top; text-align: left; padding: 0.8rem 1rem 0.65rem;
+    color: var(--muted); font-size: 0.82rem; border-bottom: 1px solid var(--hairline);
+  }
+  caption b { color: var(--ink); font-weight: 600; }
+  th, td { padding: 0.55rem 0.85rem; text-align: left; white-space: nowrap; }
+  thead th {
+    font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700;
+    border-bottom: 1px solid var(--hairline); background: var(--raised);
+  }
+  tbody tr + tr td { border-top: 1px solid var(--hairline); }
+  td.num {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-variant-numeric: tabular-nums; text-align: right;
+  }
+  td.lead { font-weight: 600; }
+  tr.best td { background: var(--good-bg); }
+  tr.dead td { color: var(--muted); }
+  .pm { color: var(--muted); font-size: 0.82em; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.32rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em;
+    padding: 0.12rem 0.45rem; border-radius: 2px; text-transform: uppercase;
+  }
+  .chip.ok   { background: var(--good-bg); color: var(--good); }
+  .chip.warn { background: var(--warn-bg); color: var(--warn); }
+  .chip.bad  { background: var(--crit-bg); color: var(--crit); }
+
+  /* ---- bar viz ---- */
+  .bars { display: flex; flex-direction: column; gap: 0.55rem; }
+  .barrow { display: grid; grid-template-columns: 12.5rem 1fr 4.2rem; gap: 0.75rem; align-items: center; font-size: 0.84rem; }
+  .barrow .lbl { color: var(--muted); }
+  .barrow .lbl b { color: var(--ink); font-weight: 600; }
+  .track { position: relative; height: 1.05rem; background: var(--hairline); border-radius: 2px; overflow: hidden; }
+  .fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 2px; }
+  .fill.q  { background: var(--muted); opacity: 0.55; }
+  .fill.hi { background: var(--accent-s); }
+  .barrow .val {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; font-size: 0.82rem;
+  }
+  @media (max-width: 620px) { .barrow { grid-template-columns: 1fr; gap: 0.2rem; } }
+
+  /* ---- callouts ---- */
+  .note {
+    border-left: 3px solid var(--accent); background: var(--surface);
+    padding: 0.85rem 1.1rem; border-radius: 0 3px 3px 0;
+    display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.93rem;
+  }
+  .note.bad { border-left-color: var(--crit); }
+  .note .h { font-weight: 700; font-size: 0.8rem; letter-spacing: 0.05em; text-transform: uppercase; }
+  .note.bad .h { color: var(--crit); }
+  .note:not(.bad) .h { color: var(--accent); }
+
+  pre {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.8rem; line-height: 1.5;
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 3px; padding: 0.85rem 1rem; overflow-x: auto; margin: 0;
+  }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.86em; background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: 2px; padding: 0.05em 0.32em;
+  }
+  ul { margin: 0; padding-left: 1.15rem; display: flex; flex-direction: column; gap: 0.5rem; }
+  li::marker { color: var(--accent); }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent-s); outline-offset: 2px; }
+
+  .fixlist { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--hairline); border-radius: 3px; overflow: hidden; }
+  .fix { display: grid; grid-template-columns: 1fr auto; gap: 0.3rem 1rem; padding: 0.75rem 1rem; background: var(--surface); align-items: baseline; }
+  .fix + .fix { border-top: 1px solid var(--hairline); }
+  .fix .t { font-weight: 600; font-size: 0.93rem; }
+  .fix .d { grid-column: 1 / -1; color: var(--muted); font-size: 0.85rem; }
+  .fix .d b { color: var(--ink); font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
+
+  footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 0.82rem; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">Experiment status · 27 Jul 2026, 11:34 EDT</span>
+  <h1>CLI-harness comparison: where the numbers stand</h1>
+  <p class="sub">Four scaffold&times;model cells on the NetPlay skill surface, four more on BALROG's raw-keystroke surface, and a re-run baseline measuring the observation fixes. All launched runs have finished.</p>
+  <div class="stamp">
+    <span>branch <b>exp/cli-harness-eval</b></span>
+    <span>HEAD <b>98f77ba</b></span>
+    <span>character Val-hum-neu-fem</span>
+    <span>task full_nle</span>
+  </div>
+</header>
+
+<section>
+  <div class="status">
+    <div><span class="k">My runs active</span><span class="v">0</span><span class="n">all complete</span></div>
+    <div><span class="k">Cells finished</span><span class="v">9</span><span class="n">7 usable, 2 degenerate</span></div>
+    <div><span class="k">Best arm</span><span class="v">3.75<span class="pm">%</span></span><span class="n">GLM · Prime Agent</span></div>
+    <div><span class="k">Best baseline</span><span class="v">4.13<span class="pm">%</span></span><span class="n">control, post-fix</span></div>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">Headline</span>
+  <h2>Prime Agent beats Claude Code on both action surfaces</h2>
+  <div class="prose" style="display:flex;flex-direction:column;gap:0.9rem">
+    <p>On the NetPlay skill surface with GLM 5.2, Prime Agent reaches <b>dungeon level 5.00</b> to Claude Code's <b>4.00</b>. On BALROG's 80-keystroke surface — a completely different action space — the same ordering holds, <b>2.20</b> to <b>1.20</b>. Two surfaces agreeing is the most useful thing these runs produced: it suggests the gap is a property of the harnesses rather than an artifact of our skill layer.</p>
+    <p>The honest caveat is that <b>the error bars overlap</b>. At n=5 per cell, neither the depth nor the BALROG difference is statistically established. The consistency across surfaces is what carries the claim, not either measurement alone.</p>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">Result A · primary comparison</span>
+  <h2>NetPlay skill surface <span style="color:var(--muted);font-weight:400;font-size:0.75em">(31 vendored upstream skills)</span></h2>
+  <div class="scroll">
+    <table>
+      <caption>Per cell, 5 seeds. <b>Degenerate rollouts excluded</b> from means: provider error, or an early clean exit (<code>agent_completed</code> under 80 calls) that never played the game.</caption>
+      <thead>
+        <tr><th>Model</th><th>Harness</th><th style="text-align:right">Depth</th><th style="text-align:right">BALROG %</th><th style="text-align:right">Died</th><th style="text-align:right">Calls</th><th style="text-align:right">n</th><th>Excluded</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="lead">Gemini 3 Flash</td><td>Claude Code</td><td class="num">2.50 <span class="pm">±0.50</span></td><td class="num">1.32 <span class="pm">±0.44</span></td><td class="num">50%</td><td class="num">145</td><td class="num">4</td><td><span class="chip warn">1 seed</span></td></tr>
+        <tr><td class="lead">Gemini 3 Flash</td><td>Prime Agent</td><td class="num">3.33 <span class="pm">±0.88</span></td><td class="num">1.98 <span class="pm">±0.34</span></td><td class="num">100%</td><td class="num">108</td><td class="num">3</td><td><span class="chip bad">2 seeds</span></td></tr>
+        <tr><td class="lead">GLM 5.2</td><td>Claude Code</td><td class="num">4.00 <span class="pm">±0.84</span></td><td class="num">2.38 <span class="pm">±0.38</span></td><td class="num">100%</td><td class="num">176</td><td class="num">5</td><td><span class="chip ok">none</span></td></tr>
+        <tr class="best"><td class="lead">GLM 5.2</td><td>Prime Agent</td><td class="num">5.00 <span class="pm">±1.14</span></td><td class="num">3.75 <span class="pm">±1.52</span></td><td class="num">80%</td><td class="num">285</td><td class="num">5</td><td><span class="chip ok">none</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="color:var(--muted);font-size:0.88rem;max-width:41rem">Both Flash cells lost seeds to early exits and provider errors, so their means rest on 3–4 rollouts and should be read as provisional. The GLM cells are clean.</p>
+</section>
+
+<section>
+  <span class="eyebrow">Result B · replication attempt</span>
+  <h2>BALROG's 80-keystroke surface</h2>
+  <div class="scroll">
+    <table>
+      <caption>The action surface the sourced SOTA of <b>6.77%</b> (gemini-3-pro-preview) actually used. Budget 1,200 calls, 2&nbsp;h wall-clock cap.</caption>
+      <thead>
+        <tr><th>Model</th><th>Harness</th><th style="text-align:right">Depth</th><th style="text-align:right">BALROG %</th><th style="text-align:right">Died</th><th style="text-align:right">Calls</th><th style="text-align:right">n</th><th>Outcome</th></tr>
+      </thead>
+      <tbody>
+        <tr class="dead"><td class="lead">Gemini 3 Flash</td><td>Claude Code</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">0</td><td><span class="chip bad">5/5 degenerate</span></td></tr>
+        <tr class="dead"><td class="lead">Gemini 3 Flash</td><td>Prime Agent</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">0</td><td><span class="chip bad">provider errors</span></td></tr>
+        <tr><td class="lead">GLM 5.2</td><td>Claude Code</td><td class="num">1.20 <span class="pm">±0.20</span></td><td class="num">0.31 <span class="pm">±0.31</span></td><td class="num">40%</td><td class="num">672</td><td class="num">5</td><td><span class="chip ok">clean</span></td></tr>
+        <tr class="best"><td class="lead">GLM 5.2</td><td>Prime Agent</td><td class="num">2.20 <span class="pm">±0.58</span></td><td class="num">1.08 <span class="pm">±0.45</span></td><td class="num">40%</td><td class="num">634</td><td class="num">5</td><td><span class="chip ok">clean</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="h">Why b80 scores low — it is a budget artifact, not weak play</span>
+    <p>A NetPlay skill batches many game turns into one LLM call. A raw keystroke buys about one. So the call budget <em>is</em> the game-turn budget, and the b80 arm played roughly half as much NetHack while spending nearly four times the calls.</p>
+    <div class="bars" style="margin-top:0.2rem">
+      <div class="barrow"><span class="lbl"><b>netplay_true</b> · 176 calls</span><span class="track"><span class="fill hi" style="width:100%"></span></span><span class="val">8.5&times;</span></div>
+      <div class="barrow"><span class="lbl"><b>balrog80</b> · 672 calls</span><span class="track"><span class="fill q" style="width:14%"></span></span><span class="val">1.2&times;</span></div>
+    </div>
+    <p style="font-size:0.85rem;color:var(--muted)">Game turns purchased per LLM call, GLM · Claude Code. Two of five b80 seeds also hit the 2&nbsp;h wall-clock cap before reaching 1,200 calls — BALROG's own runs used 1,057–2,231 calls, so this configuration could never have replicated 6.77% regardless of model.</p>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">Result C · before / after</span>
+  <h2>The observation fixes moved the baseline</h2>
+  <div class="scroll">
+    <table>
+      <caption>Control arm, <b>B0 uncompressed ASCII</b>, gemini-3-flash-preview, 5 seeds, 400 calls — the same configuration as the exp1 baseline, re-run on the fixed build.</caption>
+      <thead>
+        <tr><th>Build</th><th style="text-align:right">BALROG %</th><th style="text-align:right">Depth</th><th style="text-align:right">Died</th><th style="text-align:right">Calls</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        <tr class="dead"><td class="lead">exp1 baseline <span class="pm">(pre-fix)</span></td><td class="num">3.49 <span class="pm">±1.66</span></td><td class="num">&mdash;</td><td class="num">&mdash;</td><td class="num">150</td><td><span class="chip warn">superseded</span></td></tr>
+        <tr class="best"><td class="lead">best_fixed <span class="pm">(post-fix)</span></td><td class="num">4.13 <span class="pm">±1.41</span></td><td class="num">4.20 <span class="pm">±1.36</span></td><td class="num">80%</td><td class="num">226</td><td><span class="chip ok">5/5 clean</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <pre>seed 0:  103 calls   dlvl 3   XL 4    2.42%
+seed 1:  309 calls   dlvl 1   XL 5    2.91%
+seed 2:  399 calls   dlvl 3   XL 5    2.91%
+seed 3:   74 calls   dlvl 5   XL 2    2.65%
+seed 4:  245 calls   dlvl 9   XL 7    9.77%   &larr; deepest run of the project</pre>
+  <div class="prose">
+    <p>The mean rose 3.49 &rarr; 4.13%, but <b>the floor lifting is the more trustworthy signal</b>: the worst seed now scores 2.42% where the baseline had seeds near zero. That is what you would expect from removing ways to waste calls. The means themselves overlap well within their error bars and are not yet a result.</p>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">Reference</span>
+  <h2>Against the published field</h2>
+  <div class="bars">
+    <div class="barrow"><span class="lbl"><b>SOTA</b> gemini-3-pro-preview</span><span class="track"><span class="fill hi" style="width:100%"></span></span><span class="val">6.77%</span></div>
+    <div class="barrow"><span class="lbl"><b>Our baseline</b> post-fix, Flash</span><span class="track"><span class="fill" style="width:61%"></span></span><span class="val">4.13%</span></div>
+    <div class="barrow"><span class="lbl"><b>Prime Agent</b> GLM 5.2</span><span class="track"><span class="fill" style="width:55%"></span></span><span class="val">3.75%</span></div>
+    <div class="barrow"><span class="lbl"><b>Claude Code</b> GLM 5.2</span><span class="track"><span class="fill" style="width:35%"></span></span><span class="val">2.38%</span></div>
+    <div class="barrow"><span class="lbl">Published field cluster</span><span class="track"><span class="fill q" style="width:44%"></span></span><span class="val">1.3–3.0%</span></div>
+  </div>
+  <p style="color:var(--muted);font-size:0.88rem;max-width:41rem">Our control arm on Flash now sits above the published field cluster and within reach of a SOTA set by a substantially stronger model. The 12.56% / DL10 figure circulating earlier is <b>not</b> BALROG's — it came from a third-party blog and should not be used as an anchor.</p>
+</section>
+
+<section>
+  <span class="eyebrow">Engineering</span>
+  <h2>Observation bugs found and fixed</h2>
+  <div class="fixlist">
+    <div class="fix">
+      <span class="t">Coordinate frame mismatch</span><span class="chip ok">fixed</span>
+      <span class="d">Visible-features rows came from the tty screen while positions and skill arguments used map rows. <b>86 of 106</b> coordinates wrong in a single rollout.</span>
+    </div>
+    <div class="fix">
+      <span class="t">Menu text bleeding into the map</span><span class="chip ok">fixed</span>
+      <span class="d">Map rendered from <b>tty_chars</b> let menu prose land where dungeon glyphs belong — <b>10.6%</b> of all map blocks (723/6,802). Now rendered from the glyph plane; re-scan clean.</span>
+    </div>
+    <div class="fix">
+      <span class="t">Carriage return swallowing input</span><span class="chip ok">fixed</span>
+      <span class="d">An unconditional second CR in <b>engrave_elbereth</b>, plus guards at three chokepoints.</span>
+    </div>
+    <div class="fix">
+      <span class="t">Open menus and prompts invisible</span><span class="chip ok">fixed 98f77ba</span>
+      <span class="d">Caused by the map-bleed fix: the glyph plane cannot represent an overlay, so a menu froze the game while the observation looked normal. Detector keys on the engine's own <b>misc</b> UI-state flags.</span>
+    </div>
+  </div>
+
+  <div class="note bad">
+    <span class="h">The wedge that cost a full sweep</span>
+    <p>Three seeds in the other session's <code>b80_b0</code> cell pressed <code>i</code> (inventory) as their first action, never pressed <code>esc</code>, and then emitted the same key for the rest of the rollout. The observation was byte-identical every turn, so the model had no reason to do anything different.</p>
+      <pre>seed 0:  2,499 calls   game time 1   2,494 of them the single key `k`
+seed 1:  2,499 calls   game time 1
+seed 2:  2,499 calls   game time 1</pre>
+    <p><b>7,497 LLM calls that played one game turn.</b> Fixed on this branch; those cells need re-running on <code>98f77ba</code> to be usable.</p>
+  </div>
+
+  <h3 style="margin-top:0.6rem">Wasted-call rate</h3>
+  <div class="scroll">
+    <table>
+      <caption>Fraction of LLM calls that advanced the game clock by <b>zero</b>. ~14% is the healthy floor — wall bumps and escaped menus.</caption>
+      <thead><tr><th>Cell</th><th style="text-align:right">Zero-progress</th><th style="text-align:right">Longest freeze</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td class="lead">m2 · netplay_true · Claude Code</td><td class="num">14.5%</td><td class="num">4</td><td><span class="chip ok">healthy</span></td></tr>
+        <tr><td class="lead">m2 · netplay_true · Prime Agent</td><td class="num">14.3%</td><td class="num">14</td><td><span class="chip ok">healthy</span></td></tr>
+        <tr><td class="lead">b80 · Prime Agent</td><td class="num">15.1%</td><td class="num">13</td><td><span class="chip ok">healthy</span></td></tr>
+        <tr><td class="lead">b80 · Claude Code</td><td class="num">23.5%</td><td class="num">22</td><td><span class="chip warn">short freezes</span></td></tr>
+        <tr class="dead"><td class="lead">encoding · b80_bbox_json</td><td class="num">71.7%</td><td class="num">1,241</td><td><span class="chip bad">compromised</span></td></tr>
+        <tr class="dead"><td class="lead">encoding · b80_bbox</td><td class="num">93.2%</td><td class="num">2,426</td><td><span class="chip bad">compromised</span></td></tr>
+        <tr class="dead"><td class="lead">encoding · b80_b0</td><td class="num">97.2%</td><td class="num">2,498</td><td><span class="chip bad">total loss</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <span class="eyebrow">Open</span>
+  <h2>What I'd do next</h2>
+  <ul class="prose">
+    <li><b>More seeds before any claim ships.</b> Every headline difference here overlaps within error at n=5. Extending the two GLM cells to 16 seeds is the single highest-value spend.</li>
+    <li><b>Guard the output directories.</b> <code>best_fixed</code> already held turn files from two earlier attempts; globbing them would have reported n=15 with a contaminated mean. This is the fourth occurrence of a relative-path or stale-output bug — the launcher should refuse to write into a non-empty <code>turns/</code>.</li>
+    <li><b>Fix the Flash early-exit.</b> Flash's Claude Code process exits cleanly after ~14 calls on the 80-key surface, while the same model plays hundreds of calls on the skill surface. That is a harness bug, not a model limit.</li>
+    <li><b>Make the provider transient non-fatal.</b> <code>Provider finish_reason: error</code> still kills Prime Agent rollouts outright — it surfaces as a subprocess exit, so the rollout-level retry never engages.</li>
+    <li><b>Re-run the encoding b80 sweep</b> on <code>98f77ba</code>. Its current results measure the wedge, not the encoding.</li>
+  </ul>
+</section>
+
+<footer>
+  Sources: <code>outputs/cli_harness_eval/{m2,b80}_*/</code>, <code>outputs/encoding_eval/best_fixed/</code>.
+  Per-seed observation and action traces: <code>outputs/trace_player.html</code>.
+  BALROG progression computed with <code>nethack_harness.prompt.balrog</code>.
+</footer>
+
+</div>

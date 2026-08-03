@@ -111,7 +111,13 @@ max_relaunches = 0
 # builds its IPython kernel venv with it) must be on PATH inside the runtime.
 # The subprocess runtime inherits the host PATH, which on this cluster does not
 # carry the nvm/uv shims unless the launching shell had them.
-path_prepend = "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1/bin:/home/jl0796/.local/bin"
+#
+# MACHINE-SPECIFIC — retarget this per box, do not carry it across.
+# 2026-08-01, Prime Intellect CPU sandbox: prime-agent 0.3.3 and node 22 are
+# system-wide in /usr/bin (installer script, not nvm); uv is in ~/.local/bin.
+# The old cluster value is kept below for the Slurm box.
+#   cluster: "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1/bin:/home/jl0796/.local/bin"
+path_prepend = "/usr/bin:/root/.local/bin"
 # Where the Python skill package is materialized. FIXED, not per-rollout: Prime
 # Agent keys its kernel venv on the set of Python-skill paths, so a per-rollout
 # path would rebuild the venv (a uv install) on every seed. Same non-per-user
@@ -128,10 +134,30 @@ install_dir = "/tmp/vf-prime-agent"
 # mid-action at 107-130 of 400 skill calls. 1048576 is the value Prime Agent's
 # own bundled catalog carries for `z-ai/glm-5.2`. CHANGE IT WITH `model` ABOVE.
 context_window = 1048576
-# Hides /scratch (this cluster's shared multi-user GPFS filesystem) and this
-# repo from the agent's `ipython` tool via a `bwrap` mount-namespace sandbox --
-# see configs/README.md §7. `setup` fails loudly if `bwrap` is missing rather
-# than silently running unconfined.
+# Hides /scratch (this cluster's shared multi-user GPFS filesystem) and
+# this repo from the agent's `ipython` tool via a `bwrap` mount-namespace
+# sandbox (configs/README.md §7). The host now sets `max_user_namespaces = 0`,
+# so `bwrap --unshare-user` fails with "Creating new namespace failed: No space
+# left on device" -- an ENOSPC errno for the namespace cap, NOT disk (/tmp had
+# 23G free and 2% inodes when measured). `setup` fails loudly on an unusable
+# sandbox rather than running unconfined, so the arm could not start at all
+# while this was `true`.
+#
+# 2026-08-01, Prime Intellect CPU sandbox: turned OFF by choice, not by the
+# namespace cap. This host permits namespaces (`max_user_namespaces = 256381`)
+# and `bwrap --unshare-user` succeeds, so the cluster blocker above does not
+# apply here -- we are simply not wrapping. There is also no /scratch on this
+# box to hide, and the box is itself a disposable single-tenant sandbox.
+#
+# What this re-exposes, stated plainly because the flag no longer enforces it:
+# Prime Agent's only built-in tool is `ipython`, a full interpreter with no
+# denylist. `disabled_tools` cannot constrain it -- `open`/`os.walk`/`subprocess`
+# all remain. In a prior run the agent abandoned the game, ran
+# `glob('/scratch/**', recursive=True)`, and printed a live MCP bearer token
+# into its own trace. That failure is possible again while this reads `false`.
+# Separately, in m3 seed 1 the agent used this kernel to `pip install nle` and
+# play 200+ unmeasured games when the MCP server crashed -- contained to the
+# workspace at the time BY this sandbox.
 sandbox = true
 
 [harness.runtime]

@@ -100,7 +100,11 @@ version = "0.3.3"
 # builds its IPython kernel venv with it) must be on PATH inside the runtime.
 # The subprocess runtime inherits the host PATH, which on this cluster does not
 # carry the nvm/uv shims unless the launching shell had them.
-path_prepend = "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1/bin:/home/jl0796/.local/bin"
+# MACHINE-SPECIFIC — see prime_agent.toml. 2026-08-01, Prime Intellect CPU
+# sandbox: prime-agent/node in /usr/bin, uv in ~/.local/bin. Keep in step with
+# prime_agent.toml or the b80 arm resolves a different binary than arm 2.
+#   cluster: "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1/bin:/home/jl0796/.local/bin"
+path_prepend = "/usr/bin:/root/.local/bin"
 # Where the Python skill package is materialized. FIXED, not per-rollout: Prime
 # Agent keys its kernel venv on the set of Python-skill paths, so a per-rollout
 # path would rebuild the venv (a uv install) on every seed. Same non-per-user
@@ -121,6 +125,10 @@ context_window = 1048576
 # repo from the agent's `ipython` tool via a `bwrap` mount-namespace sandbox --
 # see configs/README.md §7. `setup` fails loudly if `bwrap` is missing rather
 # than silently running unconfined.
+#
+# 2026-08-01, Prime Intellect CPU sandbox: OFF, matching prime_agent.toml. Not a
+# bwrap failure -- this host permits namespaces and bwrap works; we are choosing
+# not to wrap. Keep the two arms' values identical or the b80 comparison drifts.
 sandbox = true
 
 [harness.runtime]

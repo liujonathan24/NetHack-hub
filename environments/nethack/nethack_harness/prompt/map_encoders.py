@@ -154,7 +154,42 @@ def json_encode(
     return json.dumps(d, separators=(",", ":"))
 
 
-def toon_encode(model: Any, *, detail: str = "full") -> str:
+def rle_rows(rows, *, compact: bool = False) -> str:
+    """Run-length-encode the RENDERED ascii rows, keeping them readable.
+
+    `model.grid` is an RLE over raw NLE **glyph ids** — a TOON map arrived as
+    `grid: 2359x79`, which tells a model nothing: no part of the prompt says
+    2359 is unseen rock or 2362 a wall. JSON hit the same problem and was moved
+    to per-tile records carrying the rendered character; TOON never got that
+    fix, so every TOON result so far was scored with an unreadable grid.
+
+    `MapModel.rows` already holds the rendered ascii (`rows[y][x]`), so this
+    needs no new data — just characters instead of ints.
+
+    **Rows are emitted literally unless `compact` is set.** Run-collapsing
+    (`.{12}`) is compaction, and every cell in this sweep runs
+    `compact_obs=false` by decision — exp1 excluded compacted ASCII outright.
+    Applying it here regardless of the flag would silently reintroduce the one
+    thing the encoding axis is supposed to hold fixed, which is exactly what an
+    earlier version of this function did.
+    """
+    import re
+
+    out = []
+    for row in rows or ():
+        line = "".join(row) if not isinstance(row, str) else row
+        line = line.rstrip("\n")
+        if not line.strip():
+            continue
+        if compact:
+            line = re.sub(
+                r"([.#])\1{4,}", lambda m: f"{m.group(1)}{{{len(m.group(0))}}}", line
+            )
+        out.append(line)
+    return "\n".join(out)
+
+
+def toon_encode(model: Any, *, detail: str = "full", compact: bool = False) -> str:
     """Token-frugal line-oriented encoding of the same model.
 
     Format (deterministic):
@@ -175,5 +210,12 @@ def toon_encode(model: Any, *, detail: str = "full") -> str:
                     parts.append(f"{f}={v}")
         lines.append(" ".join(str(p) for p in parts))
     if detail == "full":
-        lines.append(f"grid: {model.grid}")
+        # Readable rendered rows, not the raw-glyph-id RLE in `model.grid`.
+        # Falls back to the old field only if a caller passes a model without
+        # `rows`, so nothing breaks for a non-standard MapModel.
+        rows = getattr(model, "rows", None)
+        lines.append(
+            f"grid:\n{rle_rows(rows, compact=compact)}" if rows
+            else f"grid: {model.grid}"
+        )
     return "\n".join(lines)

@@ -1,0 +1,199 @@
+{
+ "runs": [
+  {
+   "driver": "b80.log",
+   "run": "b80",
+   "started": "2026-07-27T06:32:25-04:00",
+   "head": "6f97f47",
+   "extra": ""
+  },
+  {
+   "driver": "m3.log",
+   "run": "m3",
+   "started": "2026-07-27T12:05:06-04:00",
+   "head": "eeabd86",
+   "extra": ""
+  },
+  {
+   "driver": "matrix.log",
+   "run": "matrix",
+   "started": "2026-07-27T04:18:01-04:00",
+   "head": "b8089e3",
+   "extra": ""
+  },
+  {
+   "driver": "p1.log",
+   "run": "p1",
+   "started": "2026-07-28T05:22:15-04:00",
+   "head": "8e8ed61",
+   "extra": "model=google/gemini-3-flash-preview conc=2 stall=1200s"
+  },
+  {
+   "driver": "p1_glm.log",
+   "run": "p1",
+   "started": "2026-07-28T12:52:51-04:00",
+   "head": "8e8ed61",
+   "extra": "model=z-ai/glm-5.2 conc=2 stall=1200s"
+  },
+  {
+   "driver": "p2.log",
+   "run": "p1",
+   "started": "2026-07-28T13:32:52-04:00",
+   "head": "bd10122",
+   "extra": "model=google/gemini-3-flash-preview conc=2 stall=1200s"
+  },
+  {
+   "driver": "v3bbox.log",
+   "run": "v3_bbox",
+   "started": "2026-07-28T23:12:14-04:00",
+   "head": "bd10122",
+   "extra": ""
+  }
+ ],
+ "cells": [
+  {
+   "cell": "b80_gemini-3-flash/claude_code",
+   "finished": "2026-07-27T10:37:14"
+  },
+  {
+   "cell": "b80_gemini-3-flash/prime_agent",
+   "finished": "2026-07-27T10:57:45"
+  },
+  {
+   "cell": "b80_glm-5_2/claude_code",
+   "finished": "2026-07-27T08:32:36"
+  },
+  {
+   "cell": "b80_glm-5_2/prime_agent",
+   "finished": "2026-07-27T10:32:54"
+  },
+  {
+   "cell": "flash400/claude_code",
+   "finished": "2026-07-27T00:50:23"
+  },
+  {
+   "cell": "flash400/control",
+   "finished": "2026-07-27T00:31:48"
+  },
+  {
+   "cell": "flash400/prime_agent",
+   "finished": "2026-07-27T00:51:53"
+  },
+  {
+   "cell": "flash400_control/control",
+   "finished": "2026-07-27T02:35:34"
+  },
+  {
+   "cell": "glm400/claude_code",
+   "finished": "2026-07-27T01:09:45"
+  },
+  {
+   "cell": "glm400/control",
+   "finished": "2026-07-27T01:52:31"
+  },
+  {
+   "cell": "glm400/prime_agent",
+   "finished": "2026-07-27T02:52:18"
+  },
+  {
+   "cell": "m2_gemini-3-flash/claude_code",
+   "finished": "2026-07-27T04:52:44"
+  },
+  {
+   "cell": "m2_gemini-3-flash/prime_agent",
+   "finished": "2026-07-27T05:00:45"
+  },
+  {
+   "cell": "m2_glm-5_2/claude_code",
+   "finished": "2026-07-27T05:27:21"
+  },
+  {
+   "cell": "m2_glm-5_2/prime_agent",
+   "finished": "2026-07-27T05:42:14"
+  },
+  {
+   "cell": "m3_glm-5_2/claude_code",
+   "finished": "2026-07-27T13:27:31"
+  },
+  {
+   "cell": "m3_glm-5_2/prime_agent",
+   "finished": "2026-07-27T15:08:21"
+  },
+  {
+   "cell": "mcp_flash/claude_code",
+   "finished": "2026-07-26T23:43:23"
+  },
+  {
+   "cell": "mcp_flash/prime_agent",
+   "finished": "2026-07-26T23:43:34"
+  },
+  {
+   "cell": "run1/claude_code",
+   "finished": "2026-07-26T17:21:23"
+  },
+  {
+   "cell": "run1/control",
+   "finished": "2026-07-26T16:47:38"
+  },
+  {
+   "cell": "run1/prime_agent",
+   "finished": "2026-07-26T17:50:31"
+  },
+  {
+   "cell": "smoke/claude_code",
+   "finished": "2026-07-26T06:51:04"
+  },
+  {
+   "cell": "smoke/control",
+   "finished": "2026-07-26T06:59:32"
+  },
+  {
+   "cell": "smoke/prime_agent",
+   "finished": "2026-07-26T07:08:58"
+  },
+  {
+   "cell": "smoke2/claude_code",
+   "finished": "2026-07-26T13:02:34"
+  },
+  {
+   "cell": "smoke2/control",
+   "finished": "2026-07-26T12:57:48"
+  },
+  {
+   "cell": "smoke2/prime_agent",
+   "finished": "2026-07-26T13:15:35"
+  },
+  {
+   "cell": "smoke3/claude_code",
+   "finished": "2026-07-26T14:33:51"
+  },
+  {
+   "cell": "smoke3/control",
+   "finished": "2026-07-26T14:54:47"
+  },
+  {
+   "cell": "smoke3/prime_agent",
+   "finished": "2026-07-26T14:32:50"
+  },
+  {
+   "cell": "smoke4/claude_code",
+   "finished": "2026-07-26T15:29:21"
+  },
+  {
+   "cell": "smoke4/control",
+   "finished": "2026-07-26T15:23:58"
+  },
+  {
+   "cell": "smoke4/prime_agent",
+   "finished": "2026-07-26T15:35:05"
+  },
+  {
+   "cell": "v3_cli/claude_code",
+   "finished": "2026-07-28T23:46:50"
+  },
+  {
+   "cell": "v3_cli/prime_agent",
+   "finished": "2026-07-28T23:45:30"
+  }
+ ]
+}

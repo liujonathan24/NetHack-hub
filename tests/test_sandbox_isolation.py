@@ -193,10 +193,21 @@ def test_harness_prefix_binds_workdir_and_install_dir_read_write():
     assert argv[argv.index("--chdir") + 1] == "/tmp/vf-fake-workdir"
 
 
+@pytest.mark.skipif(
+    not pathlib.Path(
+        "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1"
+    ).is_dir(),
+    reason="this cluster's nvm node install is not present",
+)
 def test_harness_prefix_re_exposes_path_prepend_roots_read_only():
     """The one real subtlety (module docstring / README §7.2): the agent binary
     resolves through `path_prepend`, which on this cluster lives under
-    `/scratch` -- so it must be re-bound explicitly or the CLI itself vanishes."""
+    `/scratch` -- so it must be re-bound explicitly or the CLI itself vanishes.
+
+    Same cluster-path guard as the sibling test below: `_sandbox_prefix` only
+    binds paths that EXIST, so off-cluster this asserts on a bind that was
+    correctly never made. It was passing here only by accident -- the whole file
+    skipped while `bwrap` was absent."""
     node_root = "/scratch/gpfs/ZHUANGL/jl0796/.xdg_config_home/nvm/versions/node/v24.13.1"
     harness = _prime_agent_harness(path_prepend=f"{node_root}/bin:/home/jl0796/.local/bin")
     argv = harness._sandbox_prefix("/tmp/vf-fake-workdir")
@@ -374,9 +385,16 @@ def _load(name: str) -> dict:
     return tomllib.loads((CONFIGS / name).read_text())
 
 
-def test_prime_agent_config_turns_the_sandbox_on():
+def test_prime_agent_config_matches_the_b80_arm_on_the_sandbox():
+    """Both prime_agent arms must agree, or the b80 comparison drifts on a
+    dimension it is not measuring. The VALUE is an operator decision, not a
+    property this suite pins: 2026-08-01 it is `false` on the Prime Intellect
+    CPU sandbox by choice (no /scratch to hide, disposable single-tenant box) --
+    NOT because bwrap is unavailable, which is the cluster case exp2 §2
+    describes. The isolation proofs above still run whenever bwrap is present."""
     prime = _load("prime_agent.toml")
-    assert prime["harness"]["sandbox"] is True
+    b80 = _load("prime_agent_b80.toml")
+    assert prime["harness"]["sandbox"] == b80["harness"]["sandbox"]
 
 
 def test_claude_code_config_has_no_sandbox_key():

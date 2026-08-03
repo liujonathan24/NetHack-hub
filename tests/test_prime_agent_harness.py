@@ -548,3 +548,46 @@ def test_relaunch_output_is_persisted_without_overwriting_the_first_attempt():
     assert runtime.files[f"{prefix}program.stdout.txt"] == b"ok"
     assert runtime.files[f"{prefix}program.stdout.relaunch1.txt"] == b"ok"
     assert runtime.files[f"{prefix}program.stdout.relaunch2.txt"] == b"ok"
+
+
+# --- allow_batching -------------------------------------------------------
+# Prime obeys SKILL.md's "Do not batch blind sequences of calls" (measured
+# 0.80-0.95 skills per ipython call across m2/m3/g2). Claude Code was never
+# given an equivalent rule and batched at 2.31 tool calls per assistant turn,
+# buying ~2.3x the game actions per decision on the same budget. The asymmetry
+# is ours; this flag lets Prime run unconstrained so both directions can be
+# measured.
+
+def test_allow_batching_defaults_off():
+    from nethack_prime_agent import PrimeAgentHarnessConfig
+
+    assert PrimeAgentHarnessConfig().allow_batching is False
+
+
+def test_strip_removes_the_rule_and_leaves_the_rest_intact():
+    from importlib import resources
+
+    import nethack_prime_agent as pkg
+    from nethack_prime_agent import _strip_no_batch_rule
+
+    raw = (resources.files(pkg) / "skill" / "SKILL.md").read_bytes()
+    assert b"Do not batch" in raw, "fixture assumption: the rule ships in SKILL.md"
+
+    out = _strip_no_batch_rule(raw)
+    assert b"Do not batch" not in out
+    # Everything else the agent needs must survive — this file is its only
+    # instruction sheet.
+    for keep in (b"Every tool is `async`", b"hard budget of skill calls",
+                 b"McpToolError", b"=== MAP ==="):
+        assert keep in out, f"stripping removed unrelated guidance: {keep!r}"
+
+
+def test_strip_fails_loudly_if_the_rule_text_drifts():
+    """A silent no-op would ship the constrained prompt while the config claims
+    batching is enabled — an invalid experiment that looks like a valid one."""
+    import pytest
+
+    from nethack_prime_agent import _strip_no_batch_rule
+
+    with pytest.raises(RuntimeError, match="stale"):
+        _strip_no_batch_rule(b"# SKILL\nsome other content\n")

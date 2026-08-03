@@ -69,6 +69,73 @@ def balrog_progress(
     return max(0.0, min(1.0, max(vals)))
 
 
+def balrog_progress_min(
+    max_dlvl: int,
+    xp_level: int,
+    *,
+    reached_planes: bool = False,
+    ascended: bool = False,
+) -> float:
+    """The same table scored with min() over the two progress axes.
+
+    BALROG's published metric is a `max`, which lets a run that only ever
+    advanced on ONE axis keep most of its headline score -- a rollout that died
+    on Dlvl 2 still scores off its experience level. Rescoring BALROG's own
+    published per-episode traces with `min` collapsed Gemini 3 Flash from
+    3.96 to 0.37 (4 of 5 episodes to zero), while our BBOX cell held 2.35 with
+    0 of 5 zeroed. So `min` is the discriminator between "descended" and
+    "levelled up while stuck", and both numbers must always be reported --
+    never this one alone, and never the max alone.
+
+    Astral Plane / ascension stay maxed in: they are terminal achievements, not
+    a third axis, and gating them behind a min would make a genuine ascension
+    score less than a shallow one.
+    """
+    ach = _achievements()
+    floor = min(_lookup_pair(ach, max_dlvl, xp_level))
+    if ascended:
+        return max(0.0, min(1.0, ach.get("You ascend t", 1.0)))
+    if reached_planes:
+        return max(0.0, min(1.0, max(floor, ach.get("Astral Plane", 0.0))))
+    return max(0.0, min(1.0, floor))
+
+
+def _lookup_pair(ach: dict, max_dlvl: int, xp_level: int) -> tuple[float, float]:
+    """`(dlvl_value, xp_value)` from the achievement table, same lookup rule as
+    `balrog_progress` (exact key, else nearest lower defined level)."""
+
+    def _lookup(prefix: str, n: int) -> float:
+        n = int(max(1, n))
+        if f"{prefix}{n}" in ach:
+            return ach[f"{prefix}{n}"]
+        cands = [
+            int(m.group(1))
+            for k in ach
+            if (m := re.fullmatch(re.escape(prefix) + r"(\d+)", k)) and int(m.group(1)) <= n
+        ]
+        return ach[f"{prefix}{max(cands)}"] if cands else 0.0
+
+    return _lookup("Dlvl:", max_dlvl), _lookup("Xp:", xp_level)
+
+
+def balrog_both(
+    max_dlvl: int,
+    xp_level: int,
+    *,
+    reached_planes: bool = False,
+    ascended: bool = False,
+) -> tuple[float, float]:
+    """`(max, min)` in one call -- the pair every report must carry.
+
+    Also the cheapest way to spot an xp-carried rollout: `max > 0 and min == 0`
+    means the score came entirely from levelling, not descent.
+    """
+    kw = {"reached_planes": reached_planes, "ascended": ascended}
+    return balrog_progress(max_dlvl, xp_level, **kw), balrog_progress_min(
+        max_dlvl, xp_level, **kw
+    )
+
+
 # ---- DEPRECATED analytic proxy (pre-real-table). Do not quote as "BALROG". ----
 # Calibrated against four headline points from the BALROG paper.
 _DL_EXP = 1.3

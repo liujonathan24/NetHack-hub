@@ -1,0 +1,74 @@
+id = "nethack"
+model = "google/gemini-3-flash-preview"
+num_tasks = 1
+num_rollouts = 1
+shuffle = false
+max_concurrent = 128
+verbose = false
+dry_run = false
+rich = false
+server = false
+push = false
+output_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/v3/v3_sparse/s4"
+
+[taskset]
+id = ""
+
+[taskset.task]
+judges = []
+
+[harness]
+id = "bash"
+forward_env = []
+edit = true
+search = false
+
+[harness.runtime]
+type = "subprocess"
+
+[harness.env]
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
+
+[retries.rollout]
+max_retries = 0
+include = []
+exclude = []
+
+[interception]
+type = "elastic"
+multiplex = 32
+
+[args]
+task_spec = "full_nle"
+character = "Val-hum-neu-fem"
+explicit_seeds = [
+    4,
+]
+n_examples = 1
+interface = "skill"
+skill_set = "netplay_true,reveal,rollback"
+variant = "SPARSE"
+map_detail = "full"
+compact_obs = false
+max_turns = 400
+trace_dir = "/scratch/gpfs/ZHUANGL/jl0796/NetHack-hub/.worktrees/cli-harness-eval/outputs/encoding_eval/v3/v3_sparse/turns"
+belief_state_interval = 25
+
+[extra_env_kwargs]
+
+[pool]
+type = "elastic"
+multiplex = 128
+
+[client]
+base_url = "https://api.pinference.ai/api/v1"
+api_key_var = "PRIME_API_KEY"
+type = "eval"
+
+[client.headers]
+X-Prime-Team-ID = "cmotasmp5005ppyp07dcoh50u"
+
+[sampling]

@@ -69,6 +69,37 @@ MANIFEST="${RUN_ROOT}/manifest.txt"
   echo "git_dirty   $(test -n "$(git status --porcelain 2>/dev/null)" && echo yes || echo no)"
 } | tee "$MANIFEST"
 
+# --- provenance: which ENGINE, not just which harness ------------------------
+# `git_head` above pins the HARNESS only. The engine is a submodule plus a
+# compiled .so, and both have drifted silently before: `third_party/NetHack`
+# checked out to 66c84e6 against a fefd557 pin (~30 tests then failing as if the
+# engine had logic bugs), and a libnethack.so built 2026-07-22 04:26 from a
+# src/src/nle.c last touched 2026-07-31 18:52 -- a 230h gap that every rollout
+# links and nothing reports. `results/run_provenance.json` recorded the harness
+# HEAD only, so no past result can be attributed to an engine. New sweeps carry
+# the full fingerprint; launch_cell.sh separately REFUSES to start a cell whose
+# .so provably predates the source.
+#
+# The interpreter and PYTHONPATH here MUST match launch_cell.sh's, or this
+# records a different .so than the cells load: the resolution goes through
+# `nethack_core._engine.library_path()`, so a bare `python3` with no ENG on the
+# path resolves NOTHING and writes an all-null fingerprint (measured -- the
+# first version of this block did exactly that).
+ENG="${ENG:-/scratch/gpfs/ZHUANGL/jl0796/NetHackHarness}"
+ENGINE_PROV="tools/cli_harness_eval/engine_provenance.py"
+PROV_PY="${REPO}/.venv-cli-eval/bin/python"
+[ -x "$PROV_PY" ] || PROV_PY=python3
+if [ -f "$ENGINE_PROV" ]; then
+  ENGINE_LINE="$(PYTHONPATH="${ENG}:${REPO}:${REPO}/environments/nethack" "$PROV_PY" "$ENGINE_PROV" \
+      --json "${RUN_ROOT}/engine_provenance.json" \
+      --run-record results/run_provenance.json \
+      --run "${RUN_NAME}" \
+      --driver "${RUN_NAME}.log" \
+      --extra "max_calls=${MAX_CALLS} n=${N} arms=${ARMS[*]}" \
+      2>/dev/null | head -1)"
+  echo "engine      ${ENGINE_LINE:-capture failed}" | tee -a "$MANIFEST"
+fi
+
 # --- wall-clock estimate, so nobody starts a 3-day run by accident -----------
 # Measured on the committed acceptance artifacts: median ~10s/call (claude_code)
 # and ~6s/call (prime_agent), with a heavy tail -- the slowest single call
@@ -131,6 +162,19 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
 fi
 
 echo "[sweep] aggregating ${RUN_ROOT}"
-python3 tools/cli_harness_eval/aggregate.py "$RUN_ROOT" | tee "${RUN_ROOT}/table.md"
+# DO NOT `| tee "${RUN_ROOT}/table.md"` here. `aggregate.py`'s `main()` writes
+# that exact path itself, so teeing wrote it twice per invocation and the shell
+# copy was the WORSE of the two: a pipe captures stdout only, so the
+# aggregator's stderr warnings (ignored retry attempts, seeds absent from
+# traces.jsonl, a cell whose model has no price table) never reached the file,
+# and the pipeline's exit status was tee's, not the aggregator's -- an
+# aggregator that refused to write an empty table still looked like success.
+# Both streams go to a log instead; the table files are the aggregator's.
+python3 tools/cli_harness_eval/aggregate.py "$RUN_ROOT" 2>&1 \
+  | tee "${RUN_ROOT}/aggregate.log"
+AGG_RC=${PIPESTATUS[0]}
+if [ "$AGG_RC" -ne 0 ]; then
+  echo "[sweep] aggregate FAILED (exit ${AGG_RC}) -- see ${RUN_ROOT}/aggregate.log" >&2
+fi
 
-[ "${#FAILED[@]}" -eq 0 ] || exit 1
+[ "${#FAILED[@]}" -eq 0 ] && [ "$AGG_RC" -eq 0 ] || exit 1

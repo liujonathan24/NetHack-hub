@@ -13,9 +13,148 @@ from typing import Any, Optional
 import verifiers as vf
 
 from nethack_core.env import NetHackCoreEnv
+from nethack_core import trace_schema as TS
 from nethack_harness.memory.journal import Journal
 from nethack_core.observations import shape as shape_observation
 from nethack_harness.tools.skills import registry as skill_registry, list_skills
+
+
+# ---------------------------------------------------------------------------
+# Per-turn engine instrumentation (trace items A + D)
+# ---------------------------------------------------------------------------
+
+
+def _obs_message(obs) -> str:
+    """Decode the top-line message out of a raw observation, cheaply.
+
+    `shape()` does this too, but shaping a whole observation costs a map render
+    + inventory parse + menu scrape; a 100-step macro would pay that 100 times
+    just to read one string. This reads only the `message` plane.
+    """
+    try:
+        msg = obs.get("message") if isinstance(obs, dict) else getattr(obs, "message", None)
+        if msg is None:
+            return ""
+        return bytes(int(c) for c in msg).split(b"\x00", 1)[0].decode("ascii", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+class TurnRecorder:
+    """Intercept every engine step for the duration of ONE agent turn.
+
+    WHY A HOOK AND NOT CALL-SITE BOOKKEEPING. Actions reach the engine from at
+    least five places in a single turn: `_apply_tool_call`'s own step loop, the
+    menu auto-dismiss drain, the deadlock-breaker's kick/search, the post-death
+    `rollback` path, and -- for every `netplay_true` skill -- the skill's own
+    internal loop inside `run_netplay_skill` (which is exactly why
+    `action_indices` was empty on 100% of netplay_true turns: those skills are
+    `pre_executed`, so the harness step loop never runs for them). All five
+    funnel through `NetHackCoreEnv.step`, so patching that one method for the
+    turn captures the complete, ordered command stream with no call site left to
+    forget.
+
+    Also harvests the per-step message, which is the other thing a macro loses:
+    `shape()` keeps only the message of the FINAL observation, so `You kill the
+    little dog!` from step 12 of 100 never reached the agent OR the trace.
+
+    The patch is an instance attribute over the bound method and is removed in
+    `__exit__`, so nothing outside the `with` block is affected.
+    """
+
+    __slots__ = ("_env", "_orig", "_had_own", "_eng", "_orig_restore",
+                 "actions", "messages", "restores", "_installed")
+
+    def __init__(self, env) -> None:
+        self._env = env
+        self._orig = None
+        self._had_own = False
+        self._eng = None
+        self._orig_restore = None
+        self._installed = False
+        self.actions: list[int] = []
+        self.messages: list[str] = []
+        #: Snapshot restores this turn. `rollback` rewinds the engine heap
+        #: directly (`engine.restore(handle)`) instead of stepping, so a turn
+        #: with restores > 0 is NOT replayable from its byte stream and the
+        #: record must say so rather than imply otherwise.
+        self.restores: int = 0
+
+    def note_message(self, msg) -> None:
+        """Append `msg` unless it is empty or repeats the previous one."""
+        if not msg:
+            return
+        m = str(msg).strip()
+        if m and (not self.messages or self.messages[-1] != m):
+            self.messages.append(m)
+
+    def __enter__(self) -> "TurnRecorder":
+        env = self._env
+        if env is None:
+            return self
+        try:
+            orig = env.step
+            # If something else already patched `step` on the instance (a test
+            # double, a nested recorder), put THAT back rather than falling
+            # through to the class method.
+            self._had_own = "step" in getattr(env, "__dict__", {})
+
+            def _recording_step(action, *a, **kw):
+                out = orig(action, *a, **kw)
+                try:
+                    self.actions.append(int(action))
+                    self.note_message(_obs_message(out[0] if isinstance(out, tuple) else out))
+                except Exception:
+                    pass
+                return out
+
+            env.step = _recording_step
+            self._orig = orig
+            self._installed = True
+            eng = getattr(env, "_engine", None)
+            restore = getattr(eng, "restore", None)
+            if restore is not None:
+                def _recording_restore(*a, **kw):
+                    self.restores += 1
+                    return restore(*a, **kw)
+                eng.restore = _recording_restore
+                self._eng, self._orig_restore = eng, restore
+        except Exception:
+            # Instrumentation must never break a rollout; the trace will just
+            # say recorded=False for this turn.
+            self._installed = False
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        if self._installed:
+            try:
+                if self._had_own:
+                    self._env.step = self._orig
+                else:
+                    del self._env.step      # restore the bound class method
+            except Exception:
+                pass
+        if self._eng is not None:
+            try:
+                del self._eng.restore
+            except Exception:
+                try:
+                    self._eng.restore = self._orig_restore
+                except Exception:
+                    pass
+        return False
+
+    def action_record(self) -> dict:
+        if not self._installed:
+            return TS.empty_action_record(
+                "engine step hook could not be installed for this turn")
+        if self.restores:
+            return TS.action_record(
+                self.actions, replayable=False,
+                reason=(f"engine state was rewound {self.restores}x from a heap "
+                        "snapshot (`rollback`); the byte stream alone does not "
+                        "reproduce this turn"))
+        return TS.action_record(self.actions)
 
 def _continual_reset(state: dict, env, env_self) -> None:
     """Continual harness: reseed and reset the underlying NLE so the chat
@@ -93,20 +232,145 @@ def _capture_user_content(content, out_dir, *, run_id: str, turn: int):
     return out
 
 
+#: Markers the netplay_true adapter and the harness put in skill feedback.
+#: Ordered: the first match wins, so an explicit failure beats the generic
+#: "completed" that the vendored skills emit unconditionally.
+_STATUS_MARKERS: tuple[tuple[str, str], ...] = (
+    ("REFUSED:", "refused"),
+    ("Skill raised ", "error"),
+    ("' failed", "failed"),
+    ("failed:", "failed"),
+    ("No valid path", "failed"),
+    ("Interrupting skill", "interrupted"),
+    ("[INTERRUPTED:", "interrupted"),
+    # NetPlay's own per-skill budget cap (100 in-game turns) -- the skill stopped
+    # itself, which is an interruption, not a completion.
+    ("timesteps without interruption", "interrupted"),
+    ("' completed", "completed"),
+    ("completed:", "completed"),
+    # Harness-owned skills that do not go through the NetPlay adapter and so
+    # have no `Skill 'x' <verb>` envelope of their own.
+    ("rollback unavailable", "failed"),
+    ("rollback failed", "failed"),
+    ("cannot roll back", "failed"),
+    ("rolled back ", "completed"),
+    ("reveal: ", "failed"),          # "reveal: map unavailable this turn."
+    ("reveal (x", "completed"),      # "reveal (x1-x20, y3-y9):\n..."
+)
+
+
+def classify_tool_result(feedback: str, *, default: str = "unknown") -> str:
+    """Map a skill's prose feedback onto the `TS.TOOL_STATUSES` vocabulary.
+
+    This exists so callers stop regex-scraping `rendered_user_message`. It is
+    deliberately a *classification of what the skill claimed*, not a judgement
+    of whether anything happened -- `clock_advanced` on the same record is what
+    tells you that, and the two disagree often: measured on the probe, 6 of 10
+    zero-clock turns still report `completed` (e.g. `completed: Tile (36,10) is
+    blocked, stopping adjacent to it`). Treating "completed" as success alone
+    overstates it by ~21 points.
+    """
+    fb = feedback or ""
+    for marker, status in _STATUS_MARKERS:
+        if marker in fb:
+            return status
+    if "No effect." in fb:
+        return "no_op"
+    return default
+
+
+def build_tool_result(*, name, arguments, feedback, status=None,
+                      clock_before=None, clock_after=None, engine_steps=0,
+                      reward=0.0, game_message=None) -> dict:
+    """One machine-readable outcome record for one tool call."""
+    if status is None:
+        status = classify_tool_result(feedback)
+    advanced = None
+    if clock_before is not None and clock_after is not None:
+        try:
+            advanced = int(clock_after) > int(clock_before)
+        except (TypeError, ValueError):
+            advanced = None
+    return {
+        "name": name,
+        "arguments": arguments,
+        "status": status,
+        "game_message": game_message or "",
+        "clock_before": clock_before,
+        "clock_after": clock_after,
+        "clock_advanced": advanced,
+        "engine_steps": int(engine_steps),
+        "reward": float(reward),
+        "feedback": feedback or "",
+    }
+
+
+#: Why the MCP route cannot see the model's message at write time, stated once
+#: so every affected record carries the same auditable sentence. Consumed by
+#: `tools/trace_reasoning.py`, which is the thing that fixes it after the fact.
+MCP_REASONING_UNAVAILABLE = (
+    "dispatched over MCP: the tool server is a separate process from the one "
+    "the model talks to, so no assistant message exists at write time. Backfill "
+    "it from the rollout trace with `python -m tools.trace_reasoning <run_dir>` "
+    "(or let NetHackTask.finalize do it live)."
+)
+
+#: The model did produce a message this turn; it simply had no visible text
+#: (a bare tool call). Distinct from "this route cannot see it" above.
+NO_TEXT_REASONING_UNAVAILABLE = (
+    "the model emitted a tool call with no assistant text this turn"
+)
+
+
+def _reasoning_block(assistant_msg, dispatch_route: str) -> dict:
+    """The `reasoning` block for a record written live by the harness.
+
+    Three outcomes, and keeping them apart is the whole point:
+      * text in hand              -> available, source=assistant_message;
+      * message in hand, no text  -> unavailable, "the model said nothing";
+      * no message at all (MCP)   -> unavailable, and says why + how to fix it.
+    """
+    if assistant_msg is None:
+        if dispatch_route == "mcp":
+            return TS.unavailable_reasoning(MCP_REASONING_UNAVAILABLE)
+        return TS.unavailable_reasoning(
+            "no assistant message was associated with this turn")
+    if isinstance(assistant_msg, dict):
+        text = assistant_msg.get("content") or ""
+        extra = assistant_msg.get("reasoning_content") or ""
+    else:
+        text = getattr(assistant_msg, "content", "") or ""
+        extra = getattr(assistant_msg, "reasoning_content", "") or ""
+    if not (text or extra):
+        return TS.unavailable_reasoning(NO_TEXT_REASONING_UNAVAILABLE)
+    return TS.reasoning_record(text, "assistant_message", "inline",
+                               reasoning_text=extra)
+
+
 def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
                        action_indices, total_reward: float, obs_text: str,
-                       obs_content=None) -> None:
-    """Write one NDJSON line per env_response turn. Best-effort; never raises.
+                       obs_content=None, *, actions=None, tool_results=None,
+                       all_messages=None, applied=True, lm_turn=None,
+                       turn=None, gt_obs=True, dispatch_route="harness") -> None:
+    """Write one NDJSON line per LM turn. Best-effort; never raises.
 
-    Captures everything needed by the replay viewer to render the game as
-    the model saw it: raw 24x80 tty grid, structured obs, the literal user
-    message we will send back, the assistant message we just consumed, the
-    parsed tool calls, the NLE action indices applied, reward, dlvl, hp.
+    Captures everything needed to render the game as the model saw it (raw
+    24x80 tty grid, structured obs, the literal user message, the assistant
+    message, the parsed tool calls, reward, dlvl, hp) AND everything needed to
+    replay it independently of the rendering: the full ordered engine command
+    stream (`actions`), the engine's own ground-truth observation (`gt_obs`),
+    machine-readable call outcomes (`tool_results`) and every intermediate
+    in-game message (`all_messages`).
+
+    Exactly one record is written per LM turn -- including turns that never
+    reached the engine (hallucinated tool, journal-only call, no tool call at
+    all, post-death refusal) -- so `len(records)` matches `metrics.num_turns`
+    and `metrics.total_tool_calls`. `lm_turn` is that authoritative counter;
+    `turn` keeps its version-0/1 meaning (engine-advancing turns only).
     """
     if not env_self.trace_dir:
         return
     try:
-        import json as _json
         import os as _os
         import time as _time
         out_dir = Path(env_self.trace_dir)
@@ -151,8 +415,21 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
                     "arguments": getattr(fn, "arguments", None) if fn is not None
                                  else getattr(tc, "arguments", None),
                 })
+        # `messages` (version 0/1) is last-message-only because it comes from
+        # `shape()`, which only ever sees the FINAL observation of the turn.
+        # `all_messages` is the full ordered stream the TurnRecorder harvested
+        # from every engine step, with the final shaped message appended if the
+        # post-turn re-shape produced something the hook did not see.
+        shaped_msgs = list(s.messages) if s and s.messages else []
+        full_msgs = list(all_messages) if all_messages else []
+        for m in shaped_msgs:
+            if m and (not full_msgs or full_msgs[-1] != m):
+                full_msgs.append(m)
+        turn_no = state.get("turn_count", 0) if turn is None else turn
         entry = {
-            "turn": state.get("turn_count", 0),
+            "turn": turn_no,
+            "lm_turn": state.get("_trace_lm_turn", turn_no) if lm_turn is None else lm_turn,
+            "applied": bool(applied),
             "t_wall": _time.time(),
             # Strictly monotonic clock (unaffected by NTP/wall-clock
             # adjustments), alongside `t_wall`. Diffing consecutive `t_mono`
@@ -172,20 +449,38 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
             "rendered_user_message": obs_text,
             "rendered_user_content": _capture_user_content(
                 obs_content if obs_content is not None else obs_text,
-                out_dir, run_id=run_id, turn=state.get("turn_count", 0)),
+                out_dir, run_id=run_id, turn=turn_no),
             "assistant_message": assist_content,
             "tool_calls": tc_serial,
+            # Which route delivered this call, and -- explicitly, never by
+            # inference from an empty string -- whether the agent's own words
+            # for this turn are available and why not (schema version 3).
+            "dispatch_route": dispatch_route,
+            "reasoning": _reasoning_block(assistant_msg, dispatch_route),
+            # Kept verbatim for version-0/1 readers. It is the harness step
+            # loop's PLANNED index list and is structurally empty for every
+            # pre_executed skill; `actions` below is the authoritative record.
             "action_indices": list(action_indices) if action_indices else [],
             "reward": float(total_reward),
-            "messages": list(s.messages) if s and s.messages else [],
+            "messages": shaped_msgs,
+            "all_messages": full_msgs,
+            "actions": actions if actions is not None else TS.empty_action_record(
+                "no engine step hook was active for this turn"),
+            "tool_results": list(tool_results) if tool_results else [],
+            # Ground truth straight off the engine, independent of what was
+            # rendered. See `TS.GT_OBS_PLANES` for the size/fidelity tradeoff.
+            "gt_obs": TS.encode_obs_blob(raw) if (gt_obs and raw is not None) else None,
         }
         # Variant CH: capture the refiner's per-interval edits (set by
         # _ch_refiner_hook on refinement turns) so the trace records exactly
         # what the teacher changed this turn.
         if state.get("_ch_last_edits"):
             entry["ch_edits"] = state["_ch_last_edits"]
+        # Route through the schema helper (NOT a bare json.dumps) so every
+        # record carries `schema_version`. The bare dumps is why
+        # `TS.record_version()` read 0 on freshly written traces.
         with path.open("a") as f:
-            f.write(_json.dumps(entry) + "\n")
+            f.write(TS.to_json_line(entry))
     except Exception:
         # Tracing must never break a rollout.
         pass
@@ -988,7 +1283,12 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # No journal/wiki tools here. BALROG gives its agent none, and adding
         # them would confound exactly the memory axis 1c measures.
         from nethack_harness.tools import balrog_actions as _bal
-        keep = set(_bal.BALROG_TOOL_NAMES)
+        # The 80 documented commands PLUS `bal_a`..`bal_z`. BALROG documents 80
+        # but its valid action space is 248 strings including the bare letters,
+        # which is how their agent answers item prompts ("What do you want to
+        # eat? [dgh...]" -> "d"). Without them a tool-calling agent cannot
+        # answer such a prompt at all, so eat/quaff/read/wield are dead.
+        keep = set(_bal.BALROG_TOOL_NAMES) | set(_bal.BALROG_MENU_LETTERS)
         out = []
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
@@ -1037,6 +1337,12 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # tools.balrog_actions registers them globally, and they are an
         # alternative ACTION SURFACE, not extra tools.
         if name.startswith(_BALROG_PREFIX):
+            continue
+        # `rollback` is an opt-in CAPABILITY (engine snapshot/restore), not a
+        # default tool. It is registered globally the moment tools.skills is
+        # imported, so without this it would silently appear in every 'full'
+        # arm already run and change their action surface.
+        if name == "rollback":
             continue
         params = schema.get("parameters", {}) or {}
         out.append(_make_skill_adapter(name, schema.get("description", ""), params))

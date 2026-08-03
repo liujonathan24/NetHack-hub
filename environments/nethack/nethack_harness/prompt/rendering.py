@@ -192,6 +192,19 @@ _PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
 # the published set. Adding a skill without a blurb is fine — it simply does not
 # appear; adding a blurb for a skill nobody publishes is a no-op.
 _SKILL_BLURBS: tuple[tuple[str, str], ...] = (
+    # Listed FIRST because it is the one capability this engine has that stock
+    # NetHack does not, and an agent that does not know undo exists will never
+    # ask for it. The first `rollback` ablation published the tool correctly but
+    # had no blurb here, so the agent called it ZERO times across 5 rollouts --
+    # that measured tool adoption, not whether undo helps. (Same failure mode as
+    # the journal tools, unused across 15 rollouts, and as the balrog80 arm.)
+    ("rollback",
+     "**UNDO — this game supports it**: `rollback(n)` rewinds the last n turns, "
+     "putting the game back exactly as it was. NetHack is normally "
+     "irreversible; here it is not. Use it as soon as a move turns out badly: "
+     "you walked into a fight you are losing, stepped on a trap, ate something "
+     "that made you ill, or wasted turns in a dead end. If you are about to "
+     "die, roll back and choose differently. Costs one turn and no game time."),
     ("explore_and_descend",
      "**PRIMARY — dive**: `explore_and_descend` — explore the level + descend a "
      "floor, then returns to you."),
@@ -220,6 +233,107 @@ _SKILL_BLURBS: tuple[tuple[str, str], ...] = (
 )
 
 
+#: The state key carrying the tool names actually published to the agent for
+#: THIS rollout. Written once by `NetHackVerifiersEnv.setup_state` from the
+#: resolved adapter list and read per-render by `_fix_hint_vocabulary`.
+#:
+#: HISTORY (docs/HARNESS_DEFECTS.md 3.7). This used to be a module-level
+#: `_PUBLISHED_TOOLS` set that `render_system_prompt` wrote as a side effect.
+#: Nothing restored it, so *constructing an environment changed how every later
+#: render in the same process behaved*: after any `load_environment`, hint
+#: sentences naming `search` / `engrave_elbereth` / `attack` / `kick` were
+#: silently deleted from every subsequent render, including renders belonging to
+#: a completely different (or entirely synthetic) game. It made render-level
+#: tests order-dependent -- `test_hint_actionability` passed alone and failed
+#: after `test_golden_obs` -- and `tests/golden/obs_configs.py` carried a
+#: save/restore workaround for it.
+#:
+#: Per-render state is the fix: the set now travels with the rollout it belongs
+#: to, so two environments with different skill sets can render in the same
+#: process, in any order, without touching each other. A render with no state
+#: (or a state that predates this key) rewrites nothing -- the same
+#: "unknown publisher => leave the text alone" default the global had at import.
+PUBLISHED_TOOLS_STATE_KEY = "_published_tools"
+
+
+def published_tools_for(state) -> set:
+    """The published-tool set for this render, or an empty set when unknown."""
+    if not state:
+        return set()
+    try:
+        return set(state.get(PUBLISHED_TOOLS_STATE_KEY) or ())
+    except (AttributeError, TypeError):
+        return set()
+
+
+#: Canonical hint vocabulary -> the tool that is actually bound. The HINT text
+#: was written against an older skill set and never reconciled with what
+#: `netplay_true` publishes. Measured across 8 cells: 1,722 hints recommended
+#: `search` and 260 `engrave_elbereth` -- NEITHER IS BOUND -- plus 592 `descend`
+#: (bound as np_down), 484 `attack(direction=..)` and 371 `kick(direction=..)`
+#: (both bound only as coordinate calls). ~3,058 dead recommendations, and the
+#: agent dutifully tried to follow them.
+#: SAFE renames: same call signature, different bound name. Renaming these is
+#: purely cosmetic and always correct.
+_HINT_TOOL_ALIASES: tuple[tuple[str, str], ...] = (
+    ("find_and_descend", "np_down"),
+    ("descend", "np_down"),
+    ("rest", "np_rest"),
+    ("pray", "np_pray"),
+    ("eat", "np_eat"),
+    ("pickup", "np_pickup"),
+    ("move_to", "np_move_to"),
+    ("look", "np_look"),
+)
+
+#: Capabilities the HINT text references that CANNOT be safely renamed, because
+#: either nothing is bound for them or the bound tool takes different arguments:
+#:   search / engrave_elbereth -> nothing bound at all under netplay_true
+#:   attack(direction=..)      -> only np_melee_attack(x, y) exists
+#:   kick(direction=..)        -> only np_kick(x, y) exists
+#: Renaming `attack` to `np_melee_attack` would keep the `direction=` argument
+#: and produce a call that fails on every invocation, which is worse than
+#: silence. So when the canonical tool is unbound we DELETE the advice.
+#: Measured dead recommendations across 8 cells: search 1,722, descend 592,
+#: attack 484, kick 371, engrave_elbereth 260.
+_HINT_UNSAFE: tuple[str, ...] = ("search", "engrave_elbereth", "attack", "kick")
+
+
+def _fix_hint_vocabulary(hint: str, published_tools) -> str:
+    """Rewrite a HINT so it only ever names a tool the agent can actually call.
+
+    `published_tools` is REQUIRED and explicit: this function used to read a
+    module-level set that `render_system_prompt` wrote as a side effect, which
+    made the output depend on which environments had been constructed earlier in
+    the process (see `PUBLISHED_TOOLS_STATE_KEY`). An empty/None set means "we do
+    not know what is bound", and the hint is returned untouched.
+
+    Safe-renames where the signature matches; deletes the sentence entirely
+    where the capability is unbound or takes different arguments. Deleting a
+    whole sentence (rather than the token) keeps the hint grammatical -- an
+    earlier version left fragments like "Try a different frontier, or for a
+    hidden passage."
+    """
+    published = set(published_tools or ())
+    if not hint or not published:
+        return hint
+    import re as _re
+    for canonical, bound in _HINT_TOOL_ALIASES:
+        if canonical in published:
+            continue
+        if bound in published:
+            hint = _re.sub(rf"`{canonical}\b", f"`{bound}", hint)
+            hint = _re.sub(rf"\b{canonical}\(", f"{bound}(", hint)
+    for canonical in _HINT_UNSAFE:
+        if canonical in published:
+            continue
+        # Drop any SENTENCE that mentions the unbound capability.
+        kept = [seg for seg in _re.split(r"(?<=[.!])\s+", hint)
+                if not _re.search(rf"`?\b{canonical}\b`?", seg)]
+        hint = " ".join(kept)
+    return _re.sub(r"\s{2,}", " ", hint).strip()
+
+
 def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     """Assemble the system prompt for a specific published tool set.
 
@@ -234,6 +348,12 @@ def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     two objective sentences — no strategy prose. `verbose=True` renders the
     pre-Task-18 prompt (`SYSTEM_PROMPT_VERBOSE`), so the A/B is this one flag,
     not a `git revert`.
+
+    PURE. This function has no side effects: it used to also stash
+    `published_tools` in a module global that `_fix_hint_vocabulary` read, which
+    meant building an environment silently re-programmed every later render in
+    the process (docs/HARNESS_DEFECTS.md 3.7). The observation renderer now takes
+    the set from per-rollout state instead -- see `PUBLISHED_TOOLS_STATE_KEY`.
     """
     if published_tools is None:
         from nethack_harness.tools.skills import registry as _registry
@@ -313,9 +433,12 @@ def _render_ascii_map(structured, state) -> str:
         raw = state.get("raw_obs")
         chars = getattr(raw, "chars", None) if raw is not None else None
         if chars is not None:
-            from nethack_harness.prompt.ascii_map import render_map_from_chars
-
-            return render_map_from_chars(chars)
+            from nethack_harness.prompt.ascii_map import render_map
+            # `render_map` (not `render_map_from_chars`) so the MAP is the
+            # RECONCILED engine grid: `chars` alone drops terrain the engine's
+            # own reveal overlay emitted once and then stopped repeating. See
+            # prompt/engine_grid.py.
+            return render_map(raw)
     return _map_rows_only(structured.map_view)
 
 
@@ -416,8 +539,23 @@ def _format_obs_balrog(structured, journal, state, journal_max_chars: int) -> st
     lines.append("")
     if structured.inventory:
         lines.append("=== INVENTORY ===")
+        # Corpses carry no visible age in NetHack, and rot is what kills the
+        # agent in ~18% of deaths. Reconstruct it from the kill log.
+        _gt = None
+        try:
+            _gt = (getattr(structured, "status", None) or {}).get("time")
+            from nethack_harness.prompt.corpse_age import note_kills, annotate_corpse
+            note_kills(state, getattr(structured, "messages", None) or [], _gt)
+        except Exception:
+            annotate_corpse = None
         for item in structured.inventory:
-            lines.append(f"  {item.letter}: {item.description}")
+            desc = item.description
+            if annotate_corpse is not None:
+                try:
+                    desc = annotate_corpse(desc, state, _gt)
+                except Exception:
+                    pass
+            lines.append(f"  {item.letter}: {desc}")
         lines.append("")
     under = getattr(structured, "under_player", None)
     if under:
@@ -571,6 +709,161 @@ def _format_obs_summarize_reset(structured, journal, state, journal_max_chars: i
         structured, journal, state=state, compact=True,
         journal_max_chars=journal_max_chars,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Death announcement (docs/HARNESS_DEFECTS.md 3.6)                             #
+# --------------------------------------------------------------------------- #
+#
+# THE DEFECT. The turn on which the character dies rendered `HP: 0/N`, a normal
+# MAP, and whatever HINT the ladder happened to produce -- "Hostile adjacent
+# (SE). Call `attack(...)` -- your HP is healthy." was observed on a corpse.
+# Nothing in the observation said "you are dead". `state["died"]` is set at the
+# BOTTOM of `env_response`, after the render, and the "[Your character is dead
+# ...]" note is appended by the *next* `_apply_tool_call` -- by which time every
+# tool is gated and the only thing the agent can still do (rollback) is the one
+# thing nothing has told it about. So the agent spent its death turn issuing a
+# combat order and learned it was dead one call later, from a refusal.
+#
+# THE FIX. Announce it from the observation renderer, which runs on the death
+# turn itself, and detect it from the observation rather than from harness
+# bookkeeping so the ordering inside `env_response` cannot matter:
+#   * `hitpoints <= 0` in the shaped status -- the same signal nethack.py's own
+#     zero-HP fallback calls authoritative,
+#   * NetHack's own death-screen phrases in the messages or on the tty,
+#   * `state["died"]` / `state["ascended"]`, when the harness got there first.
+# Any one is enough; the block is emitted FIRST, above JOURNAL, and the HINT
+# ladder is suppressed so the observation cannot simultaneously say "you are
+# dead" and "attack the kobold".
+
+#: NetHack's death sequence, in the order the player sees it: the death message,
+#: then the DYWYPI prompt, then Final Attributes, then the tombstone. Mirrors
+#: `helpers._DEATH_MARKERS` (kept local so `prompt/` does not import the env
+#: package) and adds the phrases that appear on the *first* death frame, which
+#: is exactly the frame `_DEATH_MARKERS` was too late for.
+_DEATH_SCREEN_MARKERS = (
+    "You die",
+    "You died",
+    "killed by",
+    "starved to death",
+    "petrified by",
+    "drowned",
+    "Do you want your possessions identified",
+    "Do you want to see your attributes",
+    "Goodbye ",
+    "You made the top ",
+)
+
+#: Ascension is the other terminal outcome and must not be reported as death.
+_ASCENSION_SCREEN_MARKERS = (
+    "ascended to demigod",
+    "ascended to demigoddess",
+    "You offer the Amulet",
+)
+
+
+def _tty_plane(state):
+    raw = (state or {}).get("raw_obs") if state else None
+    return getattr(raw, "tty_chars", None) if raw is not None else None
+
+
+def _tty_flat(state) -> str:
+    """The whole tty as ONE string, rows concatenated, for marker containment.
+
+    The death message is frequently NOT in `structured.messages`: NetHack paints
+    "You die..." plus the DYWYPI prompt over the map, and the harness's own
+    menu/--More-- auto-dismiss loop can consume it before `shape()` runs. The
+    tty still carries it, so it is the more reliable place to look.
+
+    `tobytes()` + one decode, not 1,920 `chr()` calls: this runs on every render,
+    alive or dead, for a check that is negative on ~99.9% of turns. Rows are
+    padded to full width, so a marker never straddles the join.
+    """
+    tty = _tty_plane(state)
+    if tty is None:
+        return ""
+    try:
+        if getattr(tty, "itemsize", 0) == 1:
+            return tty.tobytes().decode("latin-1")
+    except Exception:
+        pass
+    try:
+        return "".join("".join(chr(int(c)) for c in row) for row in tty)
+    except Exception:
+        return ""
+
+
+def _tty_lines(state) -> list[str]:
+    """The tty row by row. Only called once the character is already dead."""
+    tty = _tty_plane(state)
+    if tty is None:
+        return []
+    try:
+        return ["".join(chr(int(c)) for c in row) for row in tty]
+    except Exception:
+        return []
+
+
+def _death_cause(structured, state) -> Optional[str]:
+    """The game's own words for how the run ended, or None."""
+    msgs = list(getattr(structured, "messages", None) or [])
+    for msg in reversed(msgs):
+        if any(m in msg for m in _DEATH_SCREEN_MARKERS):
+            return msg.strip()
+    for line in _tty_lines(state):
+        line = line.strip()
+        if "killed by" in line or "starved to death" in line:
+            return line
+    return None
+
+
+def _is_dead(structured, state) -> bool:
+    """True when this observation is the one belonging to a dead character."""
+    if state is not None and state.get("ascended"):
+        return False
+    if state is not None and state.get("died"):
+        return True
+    s = getattr(structured, "status", None) or {}
+    hp = s.get("hitpoints")
+    if hp is not None:
+        try:
+            if int(hp) <= 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    haystack = "\n".join(list(getattr(structured, "messages", None) or [])
+                         + [_tty_flat(state)])
+    if any(m in haystack for m in _ASCENSION_SCREEN_MARKERS):
+        return False
+    return any(m in haystack for m in _DEATH_SCREEN_MARKERS)
+
+
+def _game_over_block(structured, state) -> list[str]:
+    """`=== GAME OVER ===`, emitted on the death turn itself. [] when alive."""
+    if not _is_dead(structured, state):
+        return []
+    s = getattr(structured, "status", None) or {}
+    hp = s.get("hitpoints", 0)
+    hp_max = s.get("max_hitpoints", "?")
+    where = f"Dlvl {s.get('depth', '?')}"
+    when = f"turn {s.get('time', '?')}"
+    cause = _death_cause(structured, state)
+    out = [
+        "=== GAME OVER ===",
+        f"YOUR CHARACTER IS DEAD. HP {hp}/{hp_max} on {where} at {when}."
+        + (f" {cause}" if cause else ""),
+        "The game is over. Every further tool call is REFUSED without touching "
+        "the engine — you cannot move, fight, eat, pray or descend, and nothing "
+        "you do now changes the outcome.",
+    ]
+    if "rollback" in published_tools_for(state):
+        out.append(
+            "ONE action still works: `rollback(n)` rewinds the last n turns and "
+            "puts the game back as it was BEFORE you died. If you want to keep "
+            "playing, call it now and then choose differently."
+        )
+    out.append("")
+    return out
 
 
 def _hero_depth(structured) -> int:
@@ -1005,6 +1298,8 @@ def format_observation_as_chat(
     journal_max_chars: int = 2000,
     include_map: bool = True,
     include_local: bool = True,
+    sparse_entities: bool = False,
+    minimal: bool = False,
 ) -> str:
     """Render a StructuredObservation as a text block for the user message.
 
@@ -1019,9 +1314,25 @@ def format_observation_as_chat(
     trace analyses found `recall`/`pin_objective` never called across 1,173
     Claude Code calls. The control arm never sets this flag (default False)
     and keeps both blocks unchanged: it is the v0 baseline and must not drift.
+
+    `minimal=True` (variant BBOX_MIN) keeps only the survival-critical core:
+    the game-over block, STATUS + Character, and the MENU / inventory-prompt
+    safety notices. INVENTORY, UNDER PLAYER, ADJACENT, VISIBLE FEATURES,
+    VISIBLE MONSTERS and MESSAGES are all withheld — under that variant they
+    are delivered only on the turn a `reveal` is called (the turn template
+    passes `minimal=False` for that turn). The action feedback line, which
+    already carries the last GAME message, is prepended by the harness and is
+    not this function's concern.
     """
     self_dispatch = bool(state and state.get("_self_dispatch"))
     lines: list[str] = []
+    # Death is announced on the turn it happens, ABOVE everything else, and it
+    # suppresses the HINT ladder so the observation cannot say "you are dead"
+    # and "attack the hostile to your SE" in the same breath. See
+    # `_game_over_block` for why this is detected from the observation rather
+    # than from `state["died"]` (which is set after this render).
+    game_over = _game_over_block(structured, state)
+    lines.extend(game_over)
     if journal is not None and not journal.is_empty() and not self_dispatch:
         # Diff-only journal: when state is threaded through and the journal
         # hasn't changed since last render, emit "(unchanged)" instead of the
@@ -1058,7 +1369,15 @@ def format_observation_as_chat(
         lines.extend(_e1_frontiers_block(state))
         lines.extend(_e1_exploration_block(state, structured))
         lines.extend(_e1_spatial_belief_block(state, structured))
-    if include_map:
+    if include_map and sparse_entities:
+        # Entity-only map: the ASCII grid is NOT rendered at all. The whole
+        # point is to drop terrain, so falling through to the grid below would
+        # make this the most expensive encoding rather than the cheapest.
+        from nethack_harness.prompt.sparse_map import sparse_entity_map
+        lines.append("=== MAP (entities only; terrain omitted) ===")
+        lines.append(sparse_entity_map(structured, state))
+        lines.append("")
+    elif include_map:
         lines.append("=== MAP ===")
         map_view = _render_ascii_map(structured, state)
         # Wave-3 Track C v2 (variant E2): paint '?' over truly-unseen tiles
@@ -1108,19 +1427,37 @@ def format_observation_as_chat(
     if c:
         lines.append(f"Character: {c.get('role', '?')} ({c.get('race', '?')}, {c.get('alignment', '?')})")
     lines.append("")
-    if structured.inventory:
+    if structured.inventory and not minimal:
         prev_fp = state.get("_inv_fingerprint") if state is not None else None
         cur_fp = _inventory_fingerprint(structured.inventory)
         if compact and prev_fp == cur_fp:
             lines.append("=== INVENTORY (unchanged) ===")
         else:
             lines.append("=== INVENTORY ===")
+            # Corpse rot is invisible in NetHack and kills the agent in ~18% of
+            # deaths, so annotate age here. NOTE: this is the block
+            # `format_observation_as_chat` actually uses -- the near-identical
+            # one earlier in this file belongs to a different render path, and
+            # patching only that one left the feature silently dead.
+            _gt2 = (getattr(structured, "status", None) or {}).get("time")
+            _ann = None
+            try:
+                from nethack_harness.prompt.corpse_age import note_kills, annotate_corpse as _ann
+                note_kills(state, getattr(structured, "messages", None) or [], _gt2)
+            except Exception:
+                _ann = None
             for item in structured.inventory:
-                lines.append(f"  {item.letter}: {item.description}")
+                _d = item.description
+                if _ann is not None:
+                    try:
+                        _d = _ann(_d, state, _gt2)
+                    except Exception:
+                        pass
+                lines.append(f"  {item.letter}: {_d}")
         if state is not None:
             state["_inv_fingerprint"] = cur_fp
         lines.append("")
-    if include_local:
+    if include_local and not minimal:
         # UNDER PLAYER: critically tells the agent what tile @ is hiding.
         # Especially important for stairs (`>` down vs `<` up).
         under = getattr(structured, "under_player", None)
@@ -1134,7 +1471,8 @@ def format_observation_as_chat(
             # a strictly additive signal worth ~30 tokens.
             order = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
             adj_line = " ".join(f"{d}={adj.get(d, '?')}" for d in order)
-            lines.append(f"=== ADJACENT === {adj_line}")
+            if not sparse_entities:
+                lines.append(f"=== ADJACENT === {adj_line}")
             lines.append("")
         # NEXT-ACTION HINT: the model kept missing the moment to descend or
         # attack adjacent hostiles. If on stairs down, say so. Else if stairs
@@ -1249,11 +1587,41 @@ def format_observation_as_chat(
                         found = stairs_down(visible_features(state["raw_obs"]))
                         if found:
                             f0 = found[0]
-                            hint = (
-                                f"Stairs DOWN visible at ({f0.x},{f0.y}). "
-                                f"Call `move_to(x={f0.x}, y={f0.y})` to walk "
-                                "to them, then `descend`."
-                            )
+                            # Only recommend walking there if a route actually
+                            # exists. Under `tune.reveal_map` the whole level is
+                            # visible from turn 1, so the stairs are frequently
+                            # SEEN long before they are REACHABLE -- measured: a
+                            # revealed rollout was handed this identical hint for
+                            # 28 consecutive turns while every move_to bounced off
+                            # `It's solid stone.`, ending at Dlvl 1 with
+                            # descent_reward 0. Under fog the hint simply never
+                            # fired that early, so this only bites the revealed
+                            # arms. Unknown reachability keeps the old text.
+                            reachable = True
+                            try:
+                                from nethack_harness.tools.netplay_true import (
+                                    get_agent,
+                                )
+                                _ag = get_agent(state["env"])
+                                reachable = (
+                                    _ag.get_path_to(f0.x, f0.y) is not None
+                                )
+                            except Exception:
+                                reachable = True
+                            if reachable:
+                                hint = (
+                                    f"Stairs DOWN visible at ({f0.x},{f0.y}). "
+                                    f"Call `move_to(x={f0.x}, y={f0.y})` to walk "
+                                    "to them, then `descend`."
+                                )
+                            else:
+                                hint = (
+                                    f"Stairs DOWN are visible at ({f0.x},{f0.y}) "
+                                    "but NO ROUTE to them is known yet — walking "
+                                    "straight there will fail. Find a way through "
+                                    "first: open a closed door on this room's "
+                                    "wall, or explore toward them."
+                                )
                     except Exception:
                         pass
         # Don't let secondary overrides clobber the standing-on-stairs hint.
@@ -1370,6 +1738,13 @@ def format_observation_as_chat(
                 if exit_hint_target is not None:
                     _mark_exit_tried(state, *exit_hint_target)
         if hint and not self_dispatch:
+            hint = _fix_hint_vocabulary(hint, published_tools_for(state))
+        # A dead character has no next action; the HINT ladder is HP/hunger/
+        # adjacency advice that is meaningless (and actively misleading) once the
+        # run is over. GAME OVER above already says what to do.
+        if game_over:
+            hint = None
+        if hint and not self_dispatch:
             lines.append(f"=== HINT === {hint}")
             lines.append("")
     # Hostiles-in-sight + VISIBLE FEATURES: render in BOTH compact and
@@ -1380,7 +1755,7 @@ def format_observation_as_chat(
     from nethack_harness.prompt.features import (
         format_features, monsters_in_sight, stairs_down, visible_features,
     )
-    if state is not None and "raw_obs" in state:
+    if state is not None and "raw_obs" in state and not minimal:
         try:
             feats = visible_features(state["raw_obs"])
             # Memoize stairs DOWN coords across turns so a subsequent step
@@ -1392,16 +1767,61 @@ def format_observation_as_chat(
             if "_seen_stairs_down" in state:
                 _remember_stairs_down(state, structured, feats)
             features = format_features(feats)
+            # Statues belong HERE, in the features area -- not on the map.
+            # A statue draws the monster's letter, and that glyph is the game's
+            # own output: rewriting it would make our ASCII/JSON map an
+            # unfaithful render of the engine, which is the one thing the map
+            # must never be. But nothing else in the observation mentions
+            # statues either (they are excluded from `glyph_is_monster`, from
+            # the NetPlay tracker, and from the feature scan), so the agent
+            # attacks them and gets "There is no monster at (x,y)" at zero
+            # game-turn cost. Naming them in the features list is derived
+            # knowledge in the place derived knowledge goes.
+            try:
+                from nethack_harness.prompt.features import statues as _statues
+                features = list(features) + _statues(state["raw_obs"])
+            except Exception:
+                pass
             if features:
-                lines.append(f"=== VISIBLE FEATURES === {'; '.join(features)}")
-                lines.append("")
+                if not sparse_entities:
+                    lines.append(f"=== VISIBLE FEATURES === {'; '.join(features)}")
+                    lines.append("")
             hostiles = monsters_in_sight(state["raw_obs"])
-            if hostiles:
+            if hostiles and not sparse_entities:
                 lines.append(f"=== VISIBLE MONSTERS === {'; '.join(hostiles)}")
                 lines.append("")
+            # The "unseen" arm of the seen-vs-remembered axis. OPT-IN per
+            # variant so the pair differs in exactly this block and nothing
+            # else. See features.remembered_monsters for why the earlier
+            # always-on version was withdrawn.
+            if state.get("_remember_monsters") and not sparse_entities:
+                try:
+                    from nethack_harness.prompt.features import remembered_monsters
+                    _st = (structured.status or {})
+                    _rm = remembered_monsters(state, state["raw_obs"],
+                                              _st.get("time"), _st.get("depth"))
+                    if _rm:
+                        lines.append(f"=== REMEMBERED MONSTERS (seen earlier, not visible now) === {'; '.join(_rm)}")
+                        lines.append("")
+                except Exception:
+                    pass
+            # (A `REMEMBERED MONSTERS` block lived here. Removed: it was built on
+            # the theory that the char plane retains monsters the glyph plane has
+            # dropped. A 7,500-step audit found ZERO such cells -- chars and glyphs
+            # are two views of one NLE buffer and cannot drift. The block had no
+            # death invalidation (it advertised a kobold 22 turns after the agent
+            # killed it) and counted LLM turns while STATUS reports game turns,
+            # ~15x apart. It manufactured phantom targets rather than preventing
+            # them. The real cause is statues / the `I` marker; fix those.
+
         except Exception:
             pass
-    if structured.messages:
+    # MESSAGES is withheld under `minimal` like the other context blocks, but
+    # with less lost than it looks: the harness's action-feedback prefix
+    # (`[Executing skill ... GAME: <message>]`) already carries the last game
+    # message of the turn, so `minimal` drops only the earlier messages of
+    # multi-message turns.
+    if structured.messages and not minimal:
         lines.append("=== MESSAGES ===")
         msgs = _run_length_encode_messages(structured.messages) if compact else list(structured.messages)
         for m in msgs:

@@ -120,6 +120,49 @@ GAME_SPECS: dict[str, "GameSpec"] = {
     PRIMITIVES_GAME_SPEC.name: PRIMITIVES_GAME_SPEC,
 }
 
+#: [ynq] confirms a skill may open ABOUT ITS OWN INTENT, keyed by the skill.
+#: Deliberately tiny: an entry means "if the agent just called this skill and
+#: NetHack asked this question, the answer is yes". Nothing mentioning
+#: attack/really is ever auto-answered -- "Really attack the watch captain?"
+#: must stay declined (a `y` there is run-ending in Minetown).
+_SKILL_CONFIRMS = {
+    "np_loot": ("loot it",),
+    "np_tip": ("tip it",),
+    "np_apply": ("force its lock", "unlock it"),
+}
+
+
+def _confirm_yes_for(skill_name, messages) -> bool:
+    """Should this [ynq] prompt be answered `y` because `skill_name` opened it?
+
+    True only when the newest [yn...]-bearing message matches the calling
+    skill's own whitelist and mentions neither attack nor really. Pure
+    function so the policy is unit-testable apart from the dismissal loop.
+    """
+    oks = _SKILL_CONFIRMS.get(skill_name or "", ())
+    if not oks:
+        return False
+    for m in reversed(messages or []):
+        if "[yn" in m:
+            q = m.lower()
+            return (any(k in q for k in oks)
+                    and "attack" not in q and "really" not in q)
+    return False
+
+
+#: The NetPlay skills that open a "What do you want to <verb>?" item prompt and
+#: can answer it themselves via `item_letter` -- the vendored
+#: `create_inventory_command` set (drop, read, put_on, remove, takeoff, wield,
+#: wear, apply, eat, drink, tip, dip) plus `zap`, whose signature also takes
+#: item_letter. Used by the post-skill dismissal notice to tell the agent HOW
+#: to retry instead of just that its prompt was closed. Published np_ names;
+#: see netplay_true.NETPLAY_TRUE_TOOL_NAMES.
+_DISMISSAL_ITEM_SKILLS = frozenset({
+    "np_wear", "np_wield", "np_takeoff", "np_put_on", "np_remove",
+    "np_eat", "np_drink", "np_read", "np_drop", "np_apply",
+    "np_zap", "np_dip", "np_tip",
+})
+
 
 # ---------- verifiers 0.1.14 compat shim ----------
 #
@@ -174,6 +217,7 @@ from nethack_harness.prompt.rendering import (
     SYSTEM_PROMPT,
     SYSTEM_PROMPT_VERBOSE,
     render_system_prompt as _render_system_prompt,
+    PUBLISHED_TOOLS_STATE_KEY as _PUBLISHED_TOOLS_STATE_KEY,
     _strip_blank_rows,
     _glyph_run_encode,
     _inventory_fingerprint,
@@ -194,9 +238,12 @@ from nethack_harness.prompt.rendering import (
     format_observation_as_chat,
 )
 from nethack_harness.prompt.interactive_state import detect_blocking_ui
+from nethack_core import trace_schema as TS
 from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
+    TurnRecorder,
+    build_tool_result,
     _drop_before_last_belief,
     _refinement_directive,
     _ch_build_window,
@@ -377,6 +424,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # primitive into the effective action surface and confounding
         # cross-encoding comparisons. None/empty disables the gate (back-compat).
         allowed_skill_names: Optional[set] = None,
+        no_progress_timeout: int = 10_000,
         # Memory-ablation knob (sub-experiment 1c). When False, the tier
         # description is NOT pre-pinned as the journal objective at setup, so a
         # rollout with journal tools excluded and belief_state_interval=0 keeps
@@ -393,16 +441,30 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # block and the HINT ladder for the CLI arms while leaving the control
         # arm's rendering byte-identical to pre-Task-18 behavior.
         self_dispatch: bool = False,
+        # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
+        # setup_state the turn file for this rollout's seed is replayed
+        # byte-for-byte through the freshly seeded engine, so the agent starts
+        # exactly where the recorded session stopped -- with the UNSPENT part
+        # of the budget (set max_turns/MAX_CALLS to the remainder when
+        # launching). The conversation is NOT restored: both CLI scaffolds run
+        # without session persistence (claude_code passes
+        # --no-session-persistence; prime_agent's own auto-resume is a fresh
+        # chat by design), so the first observation instead carries a RESUMED
+        # note with the old session's tail. Replay integrity is verified
+        # against the recorded end state and fails loudly on divergence.
+        resume_from: Optional[str] = None,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
+        self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
         self._setup_character = setup_character
+        self._no_progress_timeout = int(no_progress_timeout)
         self._allowed_skill_names = set(allowed_skill_names or ())
         # BALROG's 80-command surface (tools/balrog_actions.py) makes NetHack's
         # own prompts part of the agent's job: `bal_eat` opens "What do you want
@@ -540,6 +602,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 tune=self._setup_tune,
                 modify=self._setup_modify,
                 level_blob=self._setup_level_blob,
+                # BALROG's `no_progress_timeout: 150` -- 150 consecutive env
+                # steps without the in-game turn counter advancing aborts the
+                # episode. It is the ONLY early stop in their protocol (their
+                # step cap is 100k), so matching it is what makes an
+                # uncapped-ish run affordable: a stalled agent is cut off
+                # instead of grinding to the cap. Default 10_000 = effectively
+                # off, preserving every existing arm byte-for-byte.
+                no_progress_timeout=self._no_progress_timeout,
             )
         env.seed(core=seed, disp=seed)
         # NB: bootstrap_character() is currently a stub; once wired up it
@@ -552,6 +622,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         state["env"] = env
         state["character"] = character
+        # The tool names this rollout actually publishes, carried in state so the
+        # observation renderer can gate HINT vocabulary on them WITHOUT a process
+        # global (docs/HARNESS_DEFECTS.md 3.7: `render_system_prompt` used to
+        # stash the set module-level and nothing ever put it back, so booting an
+        # env changed every later render in the process). See
+        # rendering.PUBLISHED_TOOLS_STATE_KEY.
+        state[_PUBLISHED_TOOLS_STATE_KEY] = set(self._allowed_skill_names)
         # Continual-harness bookkeeping (no-op when self.continual=False).
         state["_orig_seed"] = int(seed)
         state["_continual_life"] = 1
@@ -692,6 +769,97 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             except Exception:
                 pass  # bootstrap failures must never break a rollout
 
+        # --- Resume-from-trace (see the constructor's resume_from note) -----
+        if getattr(self, "_resume_from", None):
+            import glob as _glob, json as _json, os as _os
+            _rroot = self._resume_from
+            _cand = (_glob.glob(_os.path.join(_rroot, "turns", f"{seed}_*.ndjson"))
+                     or _glob.glob(_os.path.join(_rroot, f"{seed}_*.ndjson")))
+            if not _cand:
+                raise RuntimeError(
+                    f"resume_from: no turn file for seed {seed} under {_rroot}")
+            _tf = max(_cand, key=_os.path.getmtime)
+            _recs = [_json.loads(_l) for _l in open(_tf) if _l.strip()]
+            if not _recs:
+                raise RuntimeError(f"resume_from: {_tf} holds no turn records")
+            _bad = [r["turn"] for r in _recs
+                    if not (r.get("actions") or {}).get("replayable", False)]
+            if _bad:
+                raise RuntimeError(
+                    f"resume_from: turn(s) {_bad[:5]} of {_tf} are not replayable")
+            _obs = state["raw_obs"]
+            for _r in _recs:
+                for _b in ((_r.get("actions") or {}).get("bytes") or []):
+                    _obs, _r2, _t2, _tr2, _i2 = env.step(int(_b))
+                    if _t2 or _tr2:
+                        raise RuntimeError(
+                            f"resume_from: episode ended mid-replay of {_tf} "
+                            f"(turn {_r['turn']}) -- the recorded session did "
+                            "not end here, so this is replay divergence")
+            state["raw_obs"] = _obs
+            _scrub_intro_banner(state["raw_obs"])
+            state["structured_obs"] = shape_observation(state["raw_obs"], character)
+            # Verify the reconstruction against the recorded end state. dlvl
+            # and hp together are a strong fingerprint; matching every turn
+            # boundary was verified offline for all candidate seeds.
+            _bl = state["raw_obs"].blstats
+            _last = _recs[-1]
+            for _name, _got, _want in (("dlvl", int(_bl[12]), _last.get("dlvl")),
+                                       ("hp", int(_bl[10]), _last.get("hp"))):
+                if _want is not None and int(_want) != _got:
+                    raise RuntimeError(
+                        f"resume_from: replay divergence on {_name} "
+                        f"(replayed {_got}, recorded {_want}) for {_tf}")
+            state["max_dlvl_reached"] = max(
+                [int(r.get("max_dlvl_reached") or 1) for r in _recs] + [int(_bl[12])])
+            state["_frontier_prev_dlvl"] = int(_bl[12])
+            state["_visited_tiles"].setdefault(int(_bl[12]), set()).add(
+                (int(_bl[0]), int(_bl[1])))
+            # The NetPlay tracker never saw the replayed steps; force re-init.
+            try:
+                from nethack_harness.tools.netplay_true import reset_agent_cache
+                reset_agent_cache()
+            except Exception:
+                pass
+            _tail = []
+            for _r in _recs[-3:]:
+                _am = _r.get("assistant_message") or ""
+                if isinstance(_am, dict):
+                    _am = _am.get("content") or ""
+                _am = " ".join(str(_am).split())
+                if _am:
+                    _tail.append(f"(their turn {_r['turn']}) {_am[:220]}")
+            state["_resume_notice"] = (
+                f"RESUMED SESSION: this game continues a previous session that "
+                f"used {len(_recs)} calls. You are NOT starting fresh -- the "
+                f"dungeon, your position, HP and inventory are exactly as that "
+                f"session left them (check STATUS; use reveal to reorient). "
+                + ("Final notes from that session: " + " | ".join(_tail)
+                   if _tail else ""))
+
+        # Materialize this rollout's turn file NOW, empty, so the stall
+        # watchdog can see the rollout from second zero. The watchdog watches
+        # `turns/*.ndjson` mtimes; a rollout that hangs BEFORE its first trace
+        # write has no file and is therefore invisible to it -- measured
+        # 2026-08-02: a retry wedged pre-first-turn sat undetected for the full
+        # 2h rollout timeout while the 300s stall timeout stood idle. The
+        # run_id is stamped into state exactly as `_write_trace_entry` builds
+        # it, so the lazy path reuses this file rather than creating a second.
+        # An empty file is harmless downstream: `select_turn_files` drops
+        # "no turn rows" files at aggregation.
+        if getattr(self, "trace_dir", None):
+            try:
+                import os as _os, time as _time
+                from pathlib import Path as _Path
+                out_dir = _Path(self.trace_dir)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                seeds = state["env"].current_seeds if state.get("env") else (0, 0)
+                run_id = f"{seeds[0]}_{_os.getpid()}_{int(_time.time())}"
+                state["_trace_run_id"] = run_id
+                (out_dir / f"{run_id}.ndjson").touch()
+            except Exception:
+                pass  # tracing must never break a rollout
+
         return state
 
     def _parse_tool_call(self, messages: vf.Messages, state: vf.State) -> tuple[str, dict]:
@@ -782,20 +950,119 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         return f"{warning}\n{obs_text}" if warning else obs_text
 
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
+        """Instrument one LM turn, run it, and write exactly one trace record.
+
+        The trace write used to live at the bottom of the turn body, which meant
+        every early return (hallucinated tool, journal-only call, no tool call at
+        all) produced an LM turn with NO trace record -- so `len(records)` could
+        not be reconciled with `metrics.num_turns` even before the max_turns
+        off-by-one. Hoisting it here makes the invariant structural: one call to
+        this method == one record, whatever the body does.
+
+        The `TurnRecorder` context wraps the WHOLE body so it captures engine
+        steps taken anywhere inside it, including inside closed-loop skills.
+
+        TWO ROUTES REACH HERE, and they differ only in what they can see of the
+        MODEL, never in what happens to the game. `env_response` gets here via
+        `_parse_tool_call`, which stashes the assistant message and its parsed
+        calls in `state`. An MCP-driven CLI agent (`NetHackToolset._executing`)
+        calls this method directly, in a different process from the one the
+        model talks to, so those breadcrumbs are never set. Measured before this
+        split was made explicit: `tool_calls` was empty on 100% of CLI-arm turns
+        even though the dispatched name and arguments are RIGHT HERE as
+        arguments to this method -- `tool_results[i]["name"]` had already been
+        populated from them. The record now carries the same call on both
+        routes, plus `dispatch_route` saying which one it was.
+        """
+        # `_last_tool_calls` is set on EVERY harness turn (including turns with
+        # no tool call, where it is `[]`), so `is None` distinguishes the routes
+        # without a flag the caller could forget to pass.
+        parsed_calls = state.get("_last_tool_calls")
+        route = "harness" if parsed_calls is not None else "mcp"
+        state["_trace_lm_turn"] = int(state.get("_trace_lm_turn", 0)) + 1
+        tt = state["_turn_trace"] = {
+            "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
+        }
+        clock_before = _game_clock(state)
+        rec = TurnRecorder(state.get("env"))
+        with rec:
+            content = await self._apply_tool_call_inner(state, skill_name, skill_args)
+        clock_after = _game_clock(state)
+        obs_text = content_to_text(content)
+        # Stash what the model was last SHOWN, so the end-of-rollout flush (the
+        # final, never-applied tool call) can record the observation that call
+        # was actually made against.
+        state["_last_rendered_user_message"] = obs_text
+        result = build_tool_result(
+            name=skill_name or None,
+            arguments=skill_args if isinstance(skill_args, dict) else None,
+            feedback=tt.get("feedback") or "",
+            status=tt.get("status"),
+            clock_before=clock_before, clock_after=clock_after,
+            engine_steps=len(rec.actions), reward=tt.get("reward") or 0.0,
+            game_message=rec.messages[-1] if rec.messages else "",
+        )
+        # On the MCP route there is no parsed assistant message to read the call
+        # out of, but the call itself was handed to us -- so synthesize the same
+        # `{"name", "arguments"}` shape the harness route produces. `arguments`
+        # is the already-parsed dict here (the MCP client parsed the JSON), which
+        # matches `tool_results[i]["arguments"]` on every other path; on the
+        # harness route it stays the raw JSON string the model emitted, exactly
+        # as version-0/1 readers expect.
+        if parsed_calls is not None:
+            trace_calls = parsed_calls
+        elif skill_name:
+            trace_calls = [{"name": skill_name,
+                            "arguments": skill_args if isinstance(skill_args, dict) else {}}]
+        else:
+            trace_calls = []
+        _write_trace_entry(
+            self, state, state.get("_last_assistant_msg"),
+            trace_calls,
+            tt.get("action_indices") or [], tt.get("reward") or 0.0,
+            obs_text, obs_content=content,
+            actions=rec.action_record(), tool_results=[result],
+            all_messages=rec.messages,
+            # `applied` = "this LM turn was dispatched by the harness". It is
+            # False only for the end-of-rollout flush, whose tool call the
+            # rollout loop never handed to us at all. A dispatched call that
+            # took zero engine steps (no path found, hallucinated tool) is still
+            # applied=True: `actions.n == 0` is what says nothing ran, and that
+            # is a different fact.
+            applied=True,
+            dispatch_route=route,
+        )
+        return content
+
+    async def _apply_tool_call_inner(self, state: vf.State, skill_name: str, skill_args: dict):
         """Execute one skill against the engine and return the rendered observation.
 
         This is the whole `env_response` body minus tool-call parsing: the gate,
         journal short-circuit, registry dispatch, engine stepping, menu drain,
-        terminal detection, reward bookkeeping, banner re-scrub, render, and
-        trace write. Split out so MCP-driven CLI harnesses (which must return the
-        observation from the tool call itself) share one code path with the
-        native harness.
+        terminal detection, reward bookkeeping, banner re-scrub and render. Split
+        out so MCP-driven CLI harnesses (which must return the observation from
+        the tool call itself) share one code path with the native harness.
+
+        Trace bookkeeping is the caller's job; this body only leaves breadcrumbs
+        in `state["_turn_trace"]` at each of its several return points.
         """
+        tt = state.setdefault("_turn_trace", {})
+        # The skill this turn's observation is a response TO. Stamped before
+        # any render so a turn template can condition on it — variant BBOX_MIN
+        # withholds the entity/message blocks except on `reveal` turns, and
+        # this is how its template knows which turn it is rendering.
+        state["_last_skill_name"] = skill_name or ""
+        # One yes-answer attempt per TURN (see the skill-initiated confirm
+        # branch in the dismissal loop); reset here so the next turn's skill
+        # gets its own attempt.
+        state.pop("_confirm_yes_tried", None)
         # `_parse_tool_call` encodes "the model emitted no tool call at all" as
         # this sentinel (there is no skill to apply, so nothing below — the
         # gate, dispatch, engine stepping — applies). Surface the same
         # "must call a tool" text the pre-split env_response returned verbatim.
         if skill_name == "" and _NO_TOOL_CALL_SENTINEL in skill_args:
+            tt["status"] = "no_tool_call"
+            tt["feedback"] = "model emitted no tool call this turn"
             return skill_args[_NO_TOOL_CALL_SENTINEL]
 
         # Dead character: refuse to step the engine. The native verifiers
@@ -808,6 +1075,34 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # `state["died"]` is set (by the zero-HP check or either terminal
         # detector below), every further call is a no-op against the engine:
         # no `env.step`, no turn-counter advance, no reward.
+        # EXCEPT `rollback`. The system prompt's headline affordance is "if you
+        # are about to die, roll back and choose differently" -- and this gate
+        # sits BEFORE skill dispatch, so death was the one moment rollback could
+        # not be used. Observed live: post-death `rollback(3)` returned "no
+        # further actions are possible" without touching the snapshot stack.
+        # Undoing into a live state clears `died` and the run genuinely resumes.
+        if state.get("died") and skill_name == "rollback":
+            _env = state["env"]          # `env` is not bound this early in the fn
+            _res = skill_registry.call("rollback", _env, state["structured_obs"], **skill_args)
+            for _a in (_res.actions or []):
+                try:
+                    _o, _r, _t, _tr, _i = _env.step(_a)
+                    state["raw_obs"] = _o
+                except Exception:
+                    break
+            state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
+            if (state["structured_obs"].status or {}).get("hitpoints", 0) > 0:
+                state["died"] = False
+                state["terminated"] = False
+            state["_stuck_n"] = 0
+            tt["feedback"] = _res.feedback or ""
+            content = self.spec.turn_template(
+                state["structured_obs"], state["journal"], state,
+                compact=self.compact_obs,
+                journal_max_chars=self.journal_render_max_chars,
+            )
+            return compose_user_content(content, [f"[{_res.feedback}]"])
+
         if state.get("died"):
             content = self.spec.turn_template(
                 state["structured_obs"], state["journal"], state,
@@ -818,10 +1113,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 content,
                 ["[Your character is dead. The game is over; no further actions are possible.]"],
             )
-            _write_trace_entry(
-                self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
-                [], 0.0, content_to_text(content), obs_content=content,
-            )
+            tt["status"] = "dead"
+            tt["feedback"] = "character is dead; call refused without touching the engine"
             return content
 
         env: NetHackCoreEnv = state["env"]
@@ -836,6 +1129,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # compass tools ARE in the exposed set). No NLE step is consumed.
         if self._allowed_skill_names and skill_name not in self._allowed_skill_names:
             avail = ", ".join(sorted(self._allowed_skill_names))
+            tt["status"] = "rejected"
+            tt["feedback"] = f"tool {skill_name!r} is not in this rollout's exposed set"
             obs_text = self._render_obs_text(state)
             content = compose_user_content(
                 obs_text,
@@ -909,6 +1204,21 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 skill_name, env, state["structured_obs"], **skill_args
             )
 
+        # ---- stuck-call breaker: RECORD ONLY --------------------------
+        # The decision cannot be made here. At this point this turn's actions
+        # have not run, so the only clock available is last turn's -- comparing
+        # it against a value also written last turn is trivially equal, which
+        # silently degrades the check back to pure call identity. That is
+        # exactly the bug that made this fire on the kick that smashed a door
+        # open (dtime 96) and on the call that found the stairs. So capture the
+        # signature and the pre-action clock now, and judge after the engine has
+        # actually stepped (see the post-step block below).
+        state["_sig_now"] = (skill_name, repr(sorted(skill_args.items())))
+        try:
+            state["_gt_before"] = (state["structured_obs"].status or {}).get("time")
+        except Exception:
+            state["_gt_before"] = None
+
         # Sub-experiment 1d (delayed-map / DM variants): request_map and reveal
         # are info-only skills (empty actions) that force the FULL map back into
         # this turn's rendered observation. Skills can't reach `state`, so the
@@ -922,6 +1232,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if result.journal_op is not None:
             journal: Journal = state["journal"]
             feedback = result.journal_op(journal)
+            tt["status"] = "no_op"
+            tt["feedback"] = feedback or "journal op; no engine step by design"
             state["scout_delta"] = 0  # no exploration happened
             obs_text = self._render_obs_text(state, journal)
             content = compose_user_content(obs_text, [f"[{feedback}]"] if feedback else [])
@@ -1040,6 +1352,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         esc_action = esc_idx_list[0] if esc_idx_list else (more_idx_list[0] if more_idx_list else None)
         y_action = y_idx_list[0] if y_idx_list else esc_action
         n_action = n_idx_list[0] if n_idx_list else esc_action
+        # What KINDS of thing the loop closes, for the notice below. A one-line
+        # item prompt, a --More-- acknowledgement and a real menu are three
+        # different situations to the agent and must not share one label.
+        saw_prompt, saw_more, saw_menu = False, False, False
+        prompt_txt = None
         for _ in range(8):
             so = state["structured_obs"]
             yn = getattr(so, "yn_prompt", None)
@@ -1049,6 +1366,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             has_more = any("--More--" in m for m in (so.messages or [])) or _obs_tty_has_more(last_obs)
             if so.menu is None and so.inventory_prompt is None and yn is None and not has_more:
                 break
+            if so.inventory_prompt is not None or yn is not None:
+                saw_prompt = True
+                if prompt_txt is None:
+                    for _m in reversed(so.messages or []):
+                        if "?" in _m:
+                            prompt_txt = _m.strip()
+                            break
+            elif has_more:
+                saw_more = True
+            else:
+                saw_menu = True
             # Under the BALROG raw-command surface, answering menus / item
             # prompts / y-n questions is the AGENT's job (see
             # `_balrog_raw_prompts` in __init__). Only --More-- is still
@@ -1057,11 +1385,30 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 break
             if yn is not None:
                 ans = yn["answer"]
+                # Skill-initiated confirmation (exp4 fix 4, RELOCATED): the
+                # first version of this lived in the `else` branch below and
+                # was UNREACHABLE -- `extract_yn_prompt` parses any "[ynq]"
+                # message into `yn_prompt`, so a [ynq] confirm always lands
+                # HERE, where the parsed default for "loot it? [ynq] (q)" is
+                # ESC and the chest never opened (the measured 10-call
+                # brute-force spiral). When the skill the agent JUST called
+                # opened a matching confirm, answer y ONCE; if the prompt
+                # survives, the next iteration falls through to the default
+                # so this can never loop. Attack/really prompts are excluded.
+                if ans != "y" and not state.get("_confirm_yes_tried"):
+                    if _confirm_yes_for(state.get("_last_skill_name"),
+                                        so.messages or []):
+                        ans = "y"
+                        state["_confirm_yes_tried"] = True
                 action = y_action if ans == "y" else (n_action if ans == "n" else esc_action)
             elif has_more:
                 # MORE prompts want CR/space, not ESC.
                 action = more_idx_list[0] if more_idx_list else esc_action
             else:
+                # A real menu / inventory prompt with no yn question: ESC. The
+                # skill-initiated [ynq] whitelist lives in the `yn is not None`
+                # branch above -- its first home here was unreachable, because
+                # any message containing "[ynq]" is parsed into `yn_prompt`.
                 action = esc_action
             if action is None:
                 break
@@ -1074,8 +1421,88 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             if terminated or truncated:
                 break
         if dismissed:
-            halt_reason = (halt_reason or "") + (f" menu auto-dismissed x{dismissed}" if not halt_reason else f" / menu auto-dismissed x{dismissed}")
-            halt_reason = halt_reason.lstrip()
+            # Those ESC/CR/y/n presses went through `env.step` directly, not
+            # through `agent.step`, so the NetPlay tracker never saw them and is
+            # now stale -- the measured cause of map / VISIBLE MONSTERS /
+            # tracker three-way disagreement and spurious "no monster at (x,y)".
+            try:
+                from nethack_harness.tools.netplay_true import reset_agent_cache
+                reset_agent_cache()
+            except Exception:
+                pass
+            # Report the SITUATION, not the mechanism. "menu auto-dismissed xN"
+            # described the harness's plumbing and misnamed the common case (a
+            # one-line item prompt is not a menu); the agent was left with three
+            # open questions -- did the action happen? is something pending?
+            # what now? -- and answered them by retrying: exp3 seed 4 called
+            # `wear` (no item_letter) 11 times in a row. The notice now answers
+            # all three inline, quoting the game's own prompt where one was
+            # captured. Resume semantics are stated flatly because they are
+            # simple: ESC returns the game to the command prompt, nothing is
+            # ever pending after this loop.
+            notices = []
+            if saw_prompt:
+                _last = state.get("_last_skill_name") or ""
+                asked = f'NetHack asked "{prompt_txt}"' if prompt_txt else "NetHack asked which item to use"
+                if _last in _DISMISSAL_ITEM_SKILLS:
+                    # Suggest a letter the prompt actually offered ("[bcde or
+                    # ?*]" -> 'b'), so the example is directly usable.
+                    _m = re.search(r"\[\$?([A-Za-z])", prompt_txt or "")
+                    _eg = _m.group(1) if _m else "a"
+                    notices.append(
+                        f"{asked} -- '{_last}' ended without choosing, so the "
+                        f"harness pressed ESC. Nothing happened and no game time "
+                        f"passed. Nothing is pending. To do it, call "
+                        f"{_last} again with the item's inventory letter from "
+                        f"that prompt, e.g. {_last}(item_letter='{_eg}')"
+                    )
+                else:
+                    notices.append(
+                        f"{asked} -- the harness pressed ESC, so nothing "
+                        f"happened and nothing is pending"
+                    )
+            if saw_menu:
+                notices.append("harness closed a leftover menu; the game is back at the command prompt")
+            if saw_more:
+                notices.append("harness acknowledged --More--")
+            # NOT merged into halt_reason: "autohalt" is a skill being
+            # interrupted mid-run, and this is post-skill cleanup. Each gets
+            # its own bracketed prefix so the agent never reads a closed
+            # prompt as an interrupted plan.
+            state["_dismiss_notice"] = "; ".join(notices) or f"harness cleared a blocking prompt x{dismissed}"
+        # Snapshot the post-turn state so `rollback(n)` has somewhere to go.
+        # Only when the tool is actually published, because each snapshot is a
+        # full engine heap image -- every other arm must not pay for a feature
+        # it cannot use. Taken AFTER the menu auto-dismiss loop so a restored
+        # frame is a clean, actionable state rather than a half-open menu.
+        if "rollback" in self._allowed_skill_names and not (terminated or truncated):
+            from nethack_harness.tools.skills import push_rollback_snapshot
+            try:
+                push_rollback_snapshot(env, state.get("turn_count", 0))
+            except Exception:
+                pass  # never let snapshotting break a rollout
+        # ---- stuck-call breaker: JUDGE ---------------------------------
+        # Now the engine HAS stepped, so `gt_after` vs `gt_before` is a real
+        # measurement of whether this turn moved the game at all. Repeating
+        # `explore_level` is correct NetHack play and must never be flagged on
+        # its own; what is worth flagging is a call that repeats AND freezes the
+        # clock. Warning goes on `halt_reason`, which reaches the next
+        # observation.
+        try:
+            _gt_after = (state["structured_obs"].status or {}).get("time")
+            _same_call = state.get("_sig_prev") == state.get("_sig_now")
+            _frozen = (_gt_after is not None
+                       and _gt_after == state.get("_gt_before")
+                       and _same_call)
+            state["_stuck_n"] = int(state.get("_stuck_n", 0)) + 1 if _frozen else 0
+            state["_sig_prev"] = state.get("_sig_now")
+            if int(state.get("_stuck_n", 0)) >= 2:
+                _n = int(state["_stuck_n"]) + 1
+                halt_reason = ((halt_reason or "") +
+                    f" [STUCK: this exact call has run {_n} times and the game "
+                    f"clock has not advanced once. Do something DIFFERENT.]").strip()
+        except Exception:
+            pass
         state["last_reward"] = total_reward
         state["terminated"] = terminated or truncated
         # Refiner: on terminal, persist the refined components for the
@@ -1167,6 +1594,26 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["turn_count"] = state.get("turn_count", 0) + 1
         if self.belief_state_interval > 0 and state["turn_count"] > 0 and state["turn_count"] % self.belief_state_interval == 0:
             _maybe_belief_state_summary(state)
+
+        # Path-failure diagnosis (exp4 fix 3): "No valid path found to reach
+        # position (X,Y)" was the single largest waste bucket in BOTH arms of
+        # exp3b (~25% of all move_to calls), because it names no reason -- so
+        # both agents re-issued the identical coordinates within a few calls.
+        # Append WHY: the blocking door/monster on the route, or the nearest
+        # reachable tile when no explored route exists at all.
+        if (skill_name in ("np_move_to", "np_go_to", "move_to")
+                and result.feedback
+                and ("No valid path" in result.feedback or "No path found" in result.feedback)):
+            try:
+                from nethack_harness.navigation.path_explain import explain_path_failure
+                extra = explain_path_failure(state.get("raw_obs"), skill_args)
+                if extra:
+                    from nethack_harness.tools.skills import SkillResult as _SR
+                    result = _SR(actions=result.actions,
+                                 feedback=f"{result.feedback} {extra}",
+                                 interrupted=result.interrupted)
+            except Exception:
+                pass  # a diagnosis must never break the turn
 
         # Move-blocked detection: `move(direction=...)` always reports "Moved
         # S." even when the action bumped a wall. The model can't tell from
@@ -1365,6 +1812,16 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             prefix_parts.append(loop_hint)
         if halt_reason:
             prefix_parts.append(f"[autohalt: {halt_reason}]")
+        # One-shot resume banner (setup_state's resume_from hook). Rendered
+        # ahead of everything else on the first post-resume turn only.
+        _rnote = state.pop("_resume_notice", None)
+        if _rnote:
+            prefix_parts.insert(0, f"[{_rnote}]")
+        # Post-skill prompt/menu cleanup, deliberately NOT under the autohalt
+        # label -- a closed prompt is not an interrupted plan.
+        _dn = state.pop("_dismiss_notice", None)
+        if _dn:
+            prefix_parts.append(f"[{_dn}]")
         dropped = state.get("_dropped_extra_tool_calls", 0)
         if dropped:
             prefix_parts.append(
@@ -1376,19 +1833,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if result.feedback:
             prefix_parts.append(f"[{result.feedback}]")
         content = compose_user_content(obs_text, prefix_parts)
-        # Per-turn trace (NDJSON) for replay/debugging. No-op when trace_dir
-        # is unset; never raises. assistant_msg/tool_calls are stashed on
-        # `state` by `_parse_tool_call` (see comment there) since this method
-        # no longer shares that method's local scope.
-        _write_trace_entry(
-            self, state, state.get("_last_assistant_msg"), state.get("_last_tool_calls") or [],
-            action_indices, total_reward, content_to_text(content), obs_content=content,
-        )
+        # Trace breadcrumbs for the caller (`_apply_tool_call`), which owns the
+        # single per-turn NDJSON write. `action_indices` is kept for the legacy
+        # field only; the authoritative command stream comes from the caller's
+        # TurnRecorder, which also saw the steps this loop did not take (menu
+        # drain, deadlock-breaker, and every step inside a pre_executed skill).
+        tt["action_indices"] = list(action_indices or [])
+        tt["reward"] = float(total_reward)
+        tt["feedback"] = result.feedback or ""
         return content
 
     async def is_completed(self, state: vf.State) -> bool:
         # Game-over (death/ascension/NLE truncation) ends the rollout.
         if bool(state.get("terminated")):
+            self._flush_final_trace_entry(state, "terminated")
             return True
         # Also honor the verifiers per-rollout LM-turn cap (`max_turns`). Without
         # this, the override silently bypassed the base class's
@@ -1398,8 +1856,89 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if getattr(self, "max_turns", -1) and self.max_turns > 0:
             if await self.max_turns_reached(state):
                 state["is_truncated"] = True
+                self._flush_final_trace_entry(state, "max_turns_reached")
                 return True
         return False
+
+    def _flush_final_trace_entry(self, state: vf.State, stop_reason: str) -> None:
+        """Write the trace record for the LM turn the rollout never applied.
+
+        THE OFF-BY-ONE. `verifiers`' rollout loop is
+        `while not is_completed(state): get_prompt_messages() -> env_response()
+        -> get_model_response() -> trajectory.append()`. So the model's LAST
+        assistant message is generated and counted (`num_turns`,
+        `total_tool_calls` both read the trajectory) and only THEN does
+        `is_completed` fire -- `env_response` never runs for it, so the writer
+        never saw it. Measured: `num_turns=100 / total_tool_calls=100` against
+        99 NDJSON records, on every rollout, always short by exactly one.
+
+        We do NOT execute that final call to make the numbers line up: stepping
+        the engine past the cap would change the game the metrics describe.
+        Instead we record it as what it is -- `applied: false`, tool result
+        `status: "not_applied"`, action record `recorded: false` with a reason --
+        against the observation it was made from (the last one we rendered).
+        `len(records) == num_turns == total_tool_calls` after this, and no
+        record claims an action that never ran.
+        """
+        if state.get("_trace_final_written"):
+            return
+        state["_trace_final_written"] = True
+        if not getattr(self, "trace_dir", None):
+            return
+        try:
+            traj = state.get("trajectory") or []
+            if not traj:
+                return
+            completion = traj[-1].get("completion") if isinstance(traj[-1], dict) \
+                else getattr(traj[-1], "completion", None)
+            msgs = completion if isinstance(completion, list) else []
+            assistant, calls = None, []
+            for m in msgs:
+                role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+                if role != "assistant":
+                    continue
+                assistant = m
+                calls = (m.get("tool_calls") if isinstance(m, dict)
+                         else getattr(m, "tool_calls", None)) or []
+            if assistant is None:
+                return
+            name, args = None, None
+            if calls:
+                # Same two shapes `_write_trace_entry` normalizes: OpenAI-style
+                # `{"function": {...}}` and verifiers' flat `ToolCall`.
+                first = calls[0]
+                fn = (first.get("function") if isinstance(first, dict)
+                      else getattr(first, "function", None)) or first
+                name = (fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None))
+                args = (fn.get("arguments") if isinstance(fn, dict)
+                        else getattr(fn, "arguments", None))
+                # `tool_results[i]["arguments"]` is a dict on every other path
+                # (the harness has already parsed them); keep it one type.
+                if isinstance(args, str):
+                    import json as _json
+                    try:
+                        parsed = _json.loads(args)
+                        args = parsed if isinstance(parsed, dict) else {"_raw": args}
+                    except (ValueError, TypeError):
+                        args = {"_raw": args}
+            result = build_tool_result(
+                name=name, arguments=args,
+                feedback=f"rollout ended ({stop_reason}) before this call was applied",
+                status="not_applied" if calls else "no_tool_call",
+                clock_before=_game_clock(state), clock_after=_game_clock(state),
+                engine_steps=0, reward=0.0, game_message="",
+            )
+            _write_trace_entry(
+                self, state, assistant, calls, [], 0.0,
+                state.get("_last_rendered_user_message", ""),
+                actions=TS.empty_action_record(
+                    f"tool call was never applied: rollout ended ({stop_reason})"),
+                tool_results=[result], all_messages=[], applied=False,
+                lm_turn=int(state.get("_trace_lm_turn", 0)) + 1,
+                turn=int(state.get("turn_count", 0)) + 1,
+            )
+        except Exception:
+            pass
 
     async def get_prompt_messages(self, state: vf.State):
         """Override the verifiers default to compact older user-message content
@@ -1445,6 +1984,25 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
 
 # ---------- frontier blacklist (kept here: tests monkeypatch these on the nethack module) ----------
+
+def _game_clock(state) -> Optional[int]:
+    """The in-game turn counter (`status["time"]`), or None if unreadable.
+
+    Sampled either side of a turn, this is the only honest test of "did
+    anything actually happen": the vendored NetPlay skills report `completed`
+    without inspecting the result, so a `move_to` that stopped dead against a
+    wall and a `move_to` that crossed the level are indistinguishable by status
+    alone. See `helpers.classify_tool_result`.
+    """
+    try:
+        so = state.get("structured_obs")
+        if so is None:
+            return None
+        val = (so.status or {}).get("time")
+        return None if val is None else int(val)
+    except Exception:
+        return None
+
 
 def _obs_tty_has_more(obs) -> bool:
     """True if a --More-- prompt is visible on the top tty rows.
@@ -1785,6 +2343,12 @@ def load_environment(
             variant="CH" always implies refine=True.
     """
     explicit_seeds = kwargs.pop("explicit_seeds", None)
+    # The CLI arms' ENV_ARGS override path flattens every leaf to a dotted
+    # scalar, so a list like [3] arrives here as the STRING "[3]" (measured:
+    # int('[') ValueError in _build_task_dataset). Accept the JSON form.
+    if isinstance(explicit_seeds, str):
+        import json as _json
+        explicit_seeds = _json.loads(explicit_seeds)
     # NETHACK_HARNESS overlay: mutates SYSTEM_PROMPT (consumed by _build_task_dataset
     # below) plus returns a HarnessConfig used to filter tools / re-weight rewards.
     # No-op when the env var is unset → bit-identical default behavior.
@@ -1839,10 +2403,22 @@ def load_environment(
     from nethack_harness.prompt import rendering as _rendering
     if interface == "skill" and spec.system_prompt == _base_system_prompt:
         import dataclasses as _dc
-        spec = _dc.replace(
-            spec,
-            system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
-        )
+        # BALROG's raw-command surface gets BALROG's OWN instruction prompt.
+        # `_render_system_prompt` builds its cheat-sheet from `_SKILL_BLURBS`,
+        # which has no `bal_*` entries, so this arm was silently shipping the
+        # macro-skill prompt -- which never says descent needs `down` while
+        # standing on the stairs, nor that `travel` takes a `>`/`<` follow-up.
+        # The agent called `bal_down` once in 12,446 turns and scored a flat
+        # 0.00%. Comparing against BALROG's 3.96 on this surface only means
+        # something if the agent is briefed the way theirs is.
+        if any(n.startswith("bal_") for n in _allowed_skill_names):
+            from nethack_harness.tools.balrog_actions import balrog_instruction_prompt
+            spec = _dc.replace(spec, system_prompt=balrog_instruction_prompt())
+        else:
+            spec = _dc.replace(
+                spec,
+                system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
+            )
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,
@@ -1887,6 +2463,7 @@ def load_environment(
         setup_level_blob=level_blob,
         setup_character=character,
         allowed_skill_names=_allowed_skill_names,
+        no_progress_timeout=int(kwargs.pop('no_progress_timeout', 10_000)),
         pin_objective_on_setup=pin_objective_on_setup,
         self_dispatch=self_dispatch,
         **kwargs,
@@ -1921,6 +2498,9 @@ __all__ = [
     "format_observation_as_chat",
     "_continual_reset",
     "_write_trace_entry",
+    "TurnRecorder",
+    "build_tool_result",
+    "_game_clock",
     "_drop_before_last_belief",
     "_refinement_directive",
     "_ch_build_window",

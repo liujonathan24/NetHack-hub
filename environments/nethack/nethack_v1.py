@@ -67,6 +67,8 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import json
+import time
 import inspect
 import random
 from collections.abc import Callable, Iterable
@@ -113,6 +115,13 @@ class NetHackState(vf.State):
     # Cross-arm referee (see NetHackToolsetConfig.max_skill_calls).
     skill_calls: int = 0
     budget_exhausted: bool = False
+    # Parallel-batch bookkeeping (see NetHackToolsetConfig.max_parallel_skill_calls).
+    # `batch_started_at` is a monotonic timestamp; `batch_count` is how many calls
+    # this batch has already executed. Published so the refusal is auditable in
+    # the trace rather than being invisible harness behaviour.
+    batch_started_at: float = 0.0
+    batch_count: int = 0
+    parallel_refusals: int = 0
     # A CANARY for one specific gate-leak mode, NOT independent evidence that
     # the gate holds. `tool_functions` only wraps adapters the v0 env published,
     # and under skill_set="netplay" no `move` adapter exists — so the increment
@@ -128,6 +137,14 @@ class NetHackState(vf.State):
     moves_executed: int = 0
     # Engine-side termination (death / ascension / step cap).
     terminated: bool = False
+    # The per-turn NDJSON this rollout is writing, as `<run_id>.ndjson` under
+    # the toolset's `trace_dir`. Published because the FILE is written in the
+    # tool-server process while the model's assistant messages only exist on the
+    # `Trace` in the driver process -- `NetHackTask.finalize` needs both to join
+    # them, and `run_id` embeds a pid + epoch it cannot otherwise guess. Empty
+    # until the first tool call (the writer mints the id lazily) and empty
+    # forever when tracing is off.
+    trace_run_id: str = ""
     # Reward-relevant scalars, mirrored out of the v0 state after each call.
     scout_reward_total: float = 0.0
     descent_count: float = 0.0
@@ -173,6 +190,34 @@ class NetHackToolsetConfig(vf.ToolsetConfig):
     # it binds every harness, including CLI agents whose internal loop we do not
     # control. One call == one v0 LM turn. <= 0 disables the cap.
     max_skill_calls: int = 150
+    # Cap on skills executed per ASSISTANT TURN. 0 = unlimited (a client may batch
+    # as many tool calls as it likes); 1 = one skill per turn.
+    #
+    # Why this exists. The budget above counts CALLS, not decisions, and a client
+    # that batches gets fewer decisions for the same budget. Measured on identical
+    # GLM-5.2/B0/seed-2 runs: the 2026-07-27 cell emitted exactly 1.00 tool calls
+    # per assistant turn on all five seeds and reached the down-stair at ~decision
+    # 250; the 2026-07-30 cell batched (404 tool calls in 175 turns; 34 batches of
+    # 6, five of 10, almost all `press_key 's'`), exhausted the 400-call budget
+    # after 175 decisions, and never left dlvl 1. Same model, same seed, same
+    # dungeon -- the budget silently meant different things.
+    #
+    # The v0 control arm has always had this property (extra parallel tool calls
+    # past the first are dropped), so `1` is what makes a CLI arm comparable to
+    # the control arm and to any pre-batching run.
+    #
+    # Batch detection is a quiescence window, not a turn id: the toolset sees
+    # individual MCP calls and has no view of assistant-turn boundaries. Calls
+    # arriving within `parallel_batch_window_s` of the previous one are treated as
+    # the same batch. This is safe by a wide margin -- batch members arrive within
+    # milliseconds (`_with_state` serializes them and an engine step is ~1ms) while
+    # a genuine next turn costs an LLM round-trip (~5s median measured). The known
+    # false negative: a slow skill (`explore_level` can run seconds) may push a
+    # later batch member outside the window and let it through. That errs toward
+    # the permissive, pre-existing behaviour rather than silently dropping a real
+    # decision.
+    max_parallel_skill_calls: int = 0
+    parallel_batch_window_s: float = 0.5
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob/skill_set, etc.). Kept opaque so
     # the v1 layer never has to track the full v0 kwarg surface.
@@ -213,6 +258,8 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     self_dispatch: bool = True
     obs_mode: str = "push"
     max_skill_calls: int = 150
+    max_parallel_skill_calls: int = 0
+    parallel_batch_window_s: float = 0.5
     env_args: dict = {}
     # Where the tool server runs (colocated = share the harness's runtime).
     colocated: bool = False
@@ -240,6 +287,8 @@ class NetHackTasksetConfig(vf.TasksetConfig):
             self_dispatch=self.self_dispatch,
             obs_mode=self.obs_mode,
             max_skill_calls=self.max_skill_calls,
+            max_parallel_skill_calls=self.max_parallel_skill_calls,
+            parallel_batch_window_s=self.parallel_batch_window_s,
             env_args=dict(self.env_args or {}),
         )
 
@@ -404,10 +453,32 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         name = adapter.__name__
         budget = self.config.max_skill_calls
         obs_mode = self.config.obs_mode
+        max_parallel = self.config.max_parallel_skill_calls
+        batch_window = self.config.parallel_batch_window_s
 
         @functools.wraps(adapter)
         async def _run(**kwargs):
             state = self.state
+            # Parallel-batch cap. Refused calls consume NO budget and never reach
+            # the engine, so the agent keeps the decision it would otherwise have
+            # spent -- the point is to make one budget unit mean one decision, not
+            # to punish batching. Checked before the budget so a refused batch
+            # member cannot also trip the exhaustion terminal.
+            if max_parallel > 0:
+                now = time.monotonic()
+                if now - state.batch_started_at <= batch_window:
+                    state.batch_count += 1
+                else:
+                    state.batch_started_at = now
+                    state.batch_count = 1
+                if state.batch_count > max_parallel:
+                    state.parallel_refusals += 1
+                    self._publish(state)
+                    return (
+                        f"[Only {max_parallel} skill call per turn is executed. "
+                        "This call was dropped -- issue one skill, read the result, "
+                        "then decide the next one.]"
+                    )
             if budget > 0 and state.skill_calls >= budget:
                 state.budget_exhausted = True
                 state.terminated = True
@@ -487,6 +558,7 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
         state.terminated = bool(v0.get("terminated")) or state.terminated
+        state.trace_run_id = str(v0.get("_trace_run_id") or "")
 
     def _register(self, mcp: FastMCP) -> None:
         """Publish the gated tool set over MCP.
@@ -534,6 +606,12 @@ class NetHackTaskData(vf.TaskData):
 
     seed: int = 0
     tier: str = "full_nle"
+
+
+#: Returned when the reasoning backfill could not run at all (tracing off, the
+#: NDJSON is not reachable from this process, ...). Zeroes, not absence: the
+#: metric being present and zero is itself the finding.
+_NO_REASONING = {"recovered": 0, "inline": 0, "unavailable": 0}
 
 
 class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
@@ -610,9 +688,11 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
         :class:`NetHackState` for what it does and does not evidence.
         """
         state = trace.state
+        reasoning = self._backfill_turn_reasoning(trace)
         trace.metrics.update(
             {
                 "skill_calls": float(state.skill_calls),
+                "parallel_refusals": float(state.parallel_refusals),
                 "budget_exhausted": float(state.budget_exhausted),
                 "max_dlvl_reached": float(state.max_dlvl_reached),
                 "descent_count": float(state.descent_count),
@@ -622,6 +702,58 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
                 "moves_executed": float(state.moves_executed),
             }
         )
+        # Published so a run's own output says how much of the agent's reasoning
+        # it captured, instead of that being discoverable only by reading the
+        # NDJSON by hand.
+        trace.metrics.update({f"reasoning_{k}": float(v) for k, v in reasoning.items()})
+
+    def _backfill_turn_reasoning(self, trace) -> dict:
+        """Write the model's own words for each turn into this rollout's NDJSON.
+
+        WHY THIS RUNS HERE AND NOT IN THE WRITER. The trace records are written
+        by the TOOL SERVER, one per `_apply_tool_call`; the model's messages
+        live on the `Trace` in the DRIVER process, because a CLI agent talks to
+        the interception endpoint, not to us. There is no moment inside a tool
+        call at which both are in hand. `finalize` is the first moment there is:
+        every call has been served (so every record exists) and the trace holds
+        every sampled assistant message.
+
+        Best-effort by construction. A failure here must never fail a scored
+        rollout, and a run whose NDJSON is on another host (a container runtime)
+        simply finds no file -- `tools/trace_reasoning.py` then does the same
+        join offline over the collected artifacts.
+
+        Returns `{"recovered", "inline", "unavailable"}` counts. One Task
+        instance is shared across a rollout group (`v1/task.py:224`), so this
+        returns per-rollout numbers rather than stashing them on `self`.
+        """
+        try:
+            from pathlib import Path
+
+            from tools.trace_reasoning import (
+                assistant_turns_from_trace,
+                backfill_records,
+                _write_ndjson_atomically,
+            )
+            from tools.eval_metrics import read_ndjson
+
+            trace_dir = self.config.toolset.trace_dir
+            run_id = getattr(trace.state, "trace_run_id", "")
+            if not trace_dir or not run_id:
+                return _NO_REASONING
+            path = Path(trace_dir) / f"{run_id}.ndjson"
+            if not path.exists():
+                return _NO_REASONING
+            records = read_ndjson(path)
+            stats = backfill_records(records, assistant_turns_from_trace(trace))
+            _write_ndjson_atomically(path, records)
+            return {
+                "recovered": stats["recovered"],
+                "inline": stats["already"],
+                "unavailable": stats["unavailable"],
+            }
+        except Exception:  # pragma: no cover - diagnostics must not fail a rollout
+            return _NO_REASONING
 
     # -- stop conditions ---------------------------------------------------- #
     @vf.stop
@@ -682,10 +814,69 @@ class NetHackTaskset(vf.Taskset[NetHackTask, NetHackTasksetConfig]):
             toolset=cfg.toolset_config(), seed_workspace=cfg.seed_workspace
         )
         rng = random.Random(cfg.seed)
-        if cfg.explicit_seeds is not None:
+        env_args = dict(cfg.env_args or {})
+        # Seed pinning via ENV_ARGS. `env_args` is the opaque per-cell override
+        # channel (launch_cell.sh's ENV_ARGS), and an operator who writes
+        # `ENV_ARGS='{"explicit_seeds":[4], "resume_from":...}'` means "run
+        # THESE seeds". Previously the v1 rows were seeded ONLY from the
+        # taskset-level `explicit_seeds` field (the TOML's pinned [0..15]), so
+        # the ENV_ARGS pin reached the v0 kwargs and did nothing to row
+        # selection: `--num_tasks 1` ran seed 0 regardless. With resume_from
+        # that mismatch surfaced as the tool server dying in setup_task
+        # ("resume_from: no turn file for seed 0") behind a 180s opaque
+        # ToolsetError, because the server's stderr lives in a runtime workdir
+        # that teardown deletes. env_args wins over the taskset field: the TOML
+        # field is the sweep default, ENV_ARGS the per-cell override. The
+        # string form ("[4]") is how dotted CLI overrides deliver it.
+        env_seed_pin = env_args.get("explicit_seeds")
+        if env_seed_pin is not None:
+            if isinstance(env_seed_pin, str):
+                try:
+                    env_seed_pin = json.loads(env_seed_pin)
+                except json.JSONDecodeError as e:
+                    raise ValueError(
+                        "env_args.explicit_seeds is not valid JSON: "
+                        f"{env_seed_pin!r}"
+                    ) from e
+            if not isinstance(env_seed_pin, (list, tuple)):
+                raise ValueError(
+                    "env_args.explicit_seeds must be a list of seeds, got "
+                    f"{type(env_seed_pin).__name__}: {env_seed_pin!r}"
+                )
+            seeds = [int(s) for s in env_seed_pin]
+        elif cfg.explicit_seeds is not None:
             seeds = [int(s) for s in cfg.explicit_seeds]
         else:
             seeds = [rng.randint(0, 2**31 - 1) for _ in range(cfg.n_examples)]
+        # Resume fail-fast, in the DRIVER. The tool server verifies the replay
+        # anyway (nethack.py setup_state), but a server-side crash costs the
+        # 180s port-file timeout per retry and its traceback dies with the
+        # runtime workdir. A row whose seed has no source turn file can never
+        # resume, so refuse to build the taskset at all -- instantly and in a
+        # process whose stderr the operator actually sees.
+        resume_from = env_args.get("resume_from")
+        if resume_from:
+            import glob as _glob
+            import os as _os
+
+            missing = [
+                s
+                for s in seeds
+                if not (
+                    _glob.glob(
+                        _os.path.join(str(resume_from), "turns", f"{s}_*.ndjson")
+                    )
+                    or _glob.glob(_os.path.join(str(resume_from), f"{s}_*.ndjson"))
+                )
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"resume_from: no turn file under {resume_from} for "
+                    f"seed(s) {missing} -- these rollouts could never resume. "
+                    "Pin exactly the seeds that have recorded traces "
+                    "(ENV_ARGS '{\"explicit_seeds\": [...]}' or "
+                    "--taskset.explicit_seeds)."
+                )
         for i, seed_val in enumerate(seeds):
             yield NetHackTask(
                 NetHackTaskData(
