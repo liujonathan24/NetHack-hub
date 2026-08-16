@@ -158,6 +158,62 @@ def test_an_empty_trace_says_the_calls_were_never_intercepted():
     assert "no sampled assistant messages" in reason
 
 
+def test_assistant_turns_harvest_the_call_id_markers_that_follow_them():
+    """The barrier's transcript half: `[call#N]` markers in the messages that
+    FOLLOW a sampled assistant turn are that turn's issued calls
+    (`tools/trace_align.py` owns the join built on them)."""
+    turns = assistant_turns_from_nodes([
+        _node("I look.", ["np_look"]),
+        {"sampled": False, "message": {"role": "tool", "content": "obs\n[call#1]"}},
+        _node("I run a loop.", ["ipython"]),
+        {"sampled": False,
+         "message": {"role": "tool", "content": "[call#2]\n...\n[call#3]"}},
+    ])
+    assert [t["result_call_ids"] for t in turns] == [[1], [2, 3]]
+
+
+def test_the_call_id_barrier_outranks_the_name_walk():
+    """Two turns call the SAME skill, and the transcript order is crossed
+    relative to the records: the name-walk would pair them positionally and
+    lie. The id join is tried first and gets the crossed order right."""
+    records = [_record("np_look"), _record("np_look")]
+    records[0]["tool_results"][0]["call_id"] = 1
+    records[1]["tool_results"][0]["call_id"] = 2
+    turns = assistant_turns_from_nodes([
+        _node("second words", ["np_look"]),
+        {"sampled": False, "message": {"role": "tool", "content": "[call#2]"}},
+        _node("first words", ["np_look"]),
+        {"sampled": False, "message": {"role": "tool", "content": "[call#1]"}},
+    ])
+    mapping, mode, _ = align_records_to_turns(records, turns)
+    assert mode == "call_id"
+    assert [turns[j]["content"] for j in mapping] == ["first words", "second words"]
+
+    stats = backfill_records(records, turns)
+    assert stats["mode"] == "call_id"
+    assert [r["assistant_message"] for r in records] == ["first words", "second words"]
+    assert {r["reasoning"]["alignment"] for r in records} == {"call_id"}
+
+
+def test_pre_barrier_traces_fall_back_to_the_name_walk_and_say_why():
+    """Old records carry no ids; the join refuses explicitly and the name-walk
+    keeps working exactly as before -- and an unalignable rollout's reason now
+    names the missing barrier too."""
+    records = [_record("np_look"), _record("np_move_to")]
+    turns = assistant_turns_from_nodes(
+        [_node("a", ["np_look"]), _node("b", ["np_move_to"])])
+    mapping, mode, _ = align_records_to_turns(records, turns)
+    assert (mapping, mode) == ([0, 1], "tool_call_sequence")
+
+    unalignable = [_record("np_look"), _record("np_move_to"), _record("np_kick")]
+    ipython_only = assistant_turns_from_nodes(
+        [_node("python", ["ipython"]), _node("python", ["ipython"])])
+    _mapping, mode, reason = align_records_to_turns(unalignable, ipython_only)
+    assert mode is None
+    assert "call-id join unavailable" in reason
+    assert "before the call-id barrier" in reason
+
+
 # --------------------------------------------------------------------------- #
 # the self-check                                                               #
 # --------------------------------------------------------------------------- #

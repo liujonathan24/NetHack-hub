@@ -279,10 +279,71 @@ def classify_tool_result(feedback: str, *, default: str = "unknown") -> str:
     return default
 
 
+# ---------------------------------------------------------------------------
+# Tool-call correlation id -- the barrier that aligns the two log streams
+# ---------------------------------------------------------------------------
+#: The LLM-side transcript (``traces.jsonl``) and the game-side turn NDJSON
+#: never referenced each other; name-based joins fail exactly where they
+#: matter (one ipython assistant turn -> many game calls). The only channel
+#: the two streams share is the tool RESULT itself: whatever the server
+#: returns flows back through the model transcript verbatim in every scaffold
+#: (an MCP tool message, or printed output inside an ipython block). So the
+#: server assigns a per-rollout monotonic call number at `_apply_tool_call`
+#: (the single execution path every route shares), stamps it on the turn
+#: record (``tool_results[0]["call_id"]``), and appends this marker to the
+#: result payload. Alignment is then: turn record <-> the transcript message
+#: carrying the same marker <-> the assistant message that issued the call --
+#: exact by construction, no name-walk, no ordinal guessing.
+#:
+#: The marker is a trailing line so it never disturbs `startswith`-style
+#: feedback heuristics (`[Moved ...]`, `[turn -N] ...`), and it deliberately
+#: rides the PAYLOAD, never the published tool schema: the model-visible
+#: function definitions stay byte-identical to an uninstrumented run.
+#: Consumed by ``tools/trace_align.py`` (which owns the parsing regex).
+CALL_ID_MARKER_FORMAT = "[call#{}]"
+
+
+def call_id_marker(call_id) -> str:
+    """The marker text for one call id (kept in one place; see the regex in
+    ``tools/trace_align.py``, which must stay in sync)."""
+    return CALL_ID_MARKER_FORMAT.format(int(call_id))
+
+
+def append_call_marker(content, call_id):
+    """Append the correlation marker to a result payload.
+
+    Handles both payload shapes `_apply_tool_call_inner` produces: a plain
+    string observation, and a multimodal content list (the marker becomes a
+    trailing ``{"type": "text"}`` block, which ``content_to_text`` folds back
+    into the trace's text view). Unknown shapes are returned untouched --
+    losing a marker is recoverable (the join reports the gap); corrupting a
+    payload is not.
+    """
+    if isinstance(content, str):
+        marker = call_id_marker(call_id)
+        return f"{content}\n{marker}" if content else marker
+    if isinstance(content, list):
+        return [*content, {"type": "text", "text": call_id_marker(call_id)}]
+    return content
+
+
 def build_tool_result(*, name, arguments, feedback, status=None,
                       clock_before=None, clock_after=None, engine_steps=0,
-                      reward=0.0, game_message=None) -> dict:
-    """One machine-readable outcome record for one tool call."""
+                      reward=0.0, game_message=None, call_id=None,
+                      native_call_id=None, call_id_echoed=False) -> dict:
+    """One machine-readable outcome record for one tool call.
+
+    ``call_id`` is the per-rollout monotonic correlation id assigned at
+    dispatch (see :data:`CALL_ID_MARKER_FORMAT`); explicitly ``None`` for a
+    record no dispatched call produced (the end-of-rollout flush), so absence
+    of a call is a stated fact rather than a missing key. ``native_call_id``
+    is the transport's own id when the writer can see one (the OpenAI-style
+    ``tool_calls[].id`` on the harness route) -- corroboration only, since the
+    MCP and code-mode transports don't surface one to the server. ``call_id_echoed``
+    records whether the marker was actually appended to the result the model
+    saw (the config knob can disable the echo for token-matched cells), so a
+    post-hoc join knows whether to expect markers in the transcript.
+    """
     if status is None:
         status = classify_tool_result(feedback)
     advanced = None
@@ -302,6 +363,9 @@ def build_tool_result(*, name, arguments, feedback, status=None,
         "engine_steps": int(engine_steps),
         "reward": float(reward),
         "feedback": feedback or "",
+        "call_id": int(call_id) if call_id is not None else None,
+        "native_call_id": str(native_call_id) if native_call_id else None,
+        "call_id_echoed": bool(call_id_echoed),
     }
 
 
