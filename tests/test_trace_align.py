@@ -163,14 +163,40 @@ def test_a_transcript_without_markers_names_the_echo_as_the_gap():
     assert "no [call#N] markers" in reason
 
 
-def test_an_ambiguous_id_refuses_the_whole_join():
-    """The same id under two assistant turns can only mean corruption; a join
-    that picked one silently would be worse than no join."""
+def test_a_replayed_marker_stays_with_its_first_turn():
+    """History compaction rewrites older user messages, so the whole prefix is
+    re-committed as new (unsampled) nodes every turn -- measured: a 10-turn
+    harness rollout serialized 91 nodes, with `[call#1]`'s message appearing
+    twice, the copy sitting after a much later assistant turn. The design
+    guarantees a marker's FIRST appearance directly follows the issuing turn;
+    every later appearance is replayed history and must not re-attribute."""
     nodes = [
-        _assistant("a", names=["np_look"]), _result("[call#1]"),
-        _assistant("b", names=["np_look"]), _result("[call#1]"),
+        _assistant("first", names=["np_look"]),
+        _result("obs A\n[call#1]"),
+        _assistant("second", names=["np_move_to"]),
+        # Compacted replay of the first result, inside a later prefix commit,
+        # followed by the second call's genuine (first-appearance) marker.
+        _result("[turn -1] compacted: obs A\n[call#1]", role="user"),
+        _result("obs B\n[call#2]"),
     ]
     turns = assistant_turns_from_nodes(nodes)
+    assert [t["result_call_ids"] for t in turns] == [[1], [2]]
+
+    mapping, mode, reason = align_records_to_turns_by_call_id(
+        [_record(1), _record(2)], turns)
+    assert (mapping, mode, reason) == ([0, 1], "call_id", "")
+
+
+def test_an_ambiguous_id_refuses_the_whole_join():
+    """Defense in depth at the join layer: hand-built turns claiming the same
+    id twice (the harvest's first-occurrence rule makes this unreachable from
+    real nodes, but the join must never silently pick one)."""
+    turns = [
+        {"content": "a", "reasoning_content": "", "tool_names": [],
+         "game_tool_names": [], "result_call_ids": [1]},
+        {"content": "b", "reasoning_content": "", "tool_names": [],
+         "game_tool_names": [], "result_call_ids": [1]},
+    ]
     mapping, mode, reason = align_records_to_turns_by_call_id([_record(1)], turns)
     assert mode is None
     assert "more than one assistant turn" in reason
