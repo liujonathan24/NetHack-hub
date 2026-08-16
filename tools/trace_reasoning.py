@@ -47,9 +47,18 @@ or several skills. Guessing a 1:1 mapping there would attach the wrong
 paragraph to the wrong move, which is worse than an empty string because it
 looks right.
 
-Two strategies are tried, strongest first, and if neither holds NOTHING is
+Three strategies are tried, strongest first, and if none holds NOTHING is
 written except an explicit `reasoning.available = false` carrying the reason:
 
+  0. `call_id` -- the correlation-id barrier (`tools/trace_align.py`): the
+     harness stamps a per-rollout monotonic id on every turn record AND echoes
+     `[call#N]` into the result payload, which flows back through the model
+     transcript verbatim in every scaffold. When present, the join is exact by
+     construction -- and it is the only strategy that survives the
+     `ipython`-mediated arms, where one assistant turn issues many game calls.
+     (`"call_id"` is an addition to the engine's documented
+     `TS.REASONING_ALIGNMENTS` vocabulary -- doc-only; nothing validates the
+     value -- noted for the engine repo rather than edited here.)
   1. `tool_call_sequence` -- the assistant turns' game tool-call names, in
      order, are walked against the records' dispatched names. Every record must
      find its turn. This is evidence, not an assumption.
@@ -75,6 +84,12 @@ try:  # the engine package is the schema's home; the hub imports it
     from nethack_core import trace_schema as TS
 except ImportError:  # pragma: no cover - only when the engine is not on the path
     TS = None
+
+from tools.trace_align import (
+    align_records_to_turns_by_call_id,
+    content_text,
+    marker_call_ids,
+)
 
 __all__ = [
     "MCP_TOOL_PREFIXES",
@@ -142,23 +157,38 @@ def assistant_turns_from_nodes(nodes) -> list[dict]:
     turns = []
     for node in nodes or []:
         sampled = node.get("sampled") if isinstance(node, dict) else getattr(node, "sampled", None)
-        if not sampled:
-            continue
         message = node.get("message") if isinstance(node, dict) else getattr(node, "message", None)
         if message is None:
             continue
         role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
-        if role != "assistant":
+        if sampled and role == "assistant":
+            raw_calls = (message.get("tool_calls") if isinstance(message, dict)
+                         else getattr(message, "tool_calls", None)) or []
+            names = [n for n in (_call_name(c) for c in raw_calls) if n]
+            turns.append({
+                "content": _msg_field(message, "content"),
+                "reasoning_content": _msg_field(message, "reasoning_content"),
+                "tool_names": names,
+                "game_tool_names": [n for n in names if n.lower() not in NON_GAME_TOOLS],
+                # Correlation ids harvested below from the messages that FOLLOW
+                # this turn -- the `[call#N]` markers the harness echoes into
+                # every result payload (`tools/trace_align.py`).
+                "result_call_ids": [],
+            })
             continue
-        raw_calls = (message.get("tool_calls") if isinstance(message, dict)
-                     else getattr(message, "tool_calls", None)) or []
-        names = [n for n in (_call_name(c) for c in raw_calls) if n]
-        turns.append({
-            "content": _msg_field(message, "content"),
-            "reasoning_content": _msg_field(message, "reasoning_content"),
-            "tool_names": names,
-            "game_tool_names": [n for n in names if n.lower() not in NON_GAME_TOOLS],
-        })
+        # Any other message -- a tool result over MCP, the env-response user
+        # message on the harness route, ipython's printed output -- may carry
+        # `[call#N]` markers. They belong to the assistant turn that PRECEDED
+        # the message, which is the turn that issued those calls. Markers seen
+        # before any sampled assistant turn are prompt-supplied context (a
+        # replayed prefix) and are deliberately dropped, same rule as the
+        # `sampled` gate above.
+        if turns:
+            content = (message.get("content") if isinstance(message, dict)
+                       else getattr(message, "content", None))
+            ids = marker_call_ids(content_text(content))
+            if ids:
+                turns[-1]["result_call_ids"].extend(ids)
     return turns
 
 
@@ -207,6 +237,17 @@ def align_records_to_turns(records: list[dict], turns: list[dict]):
             "(the harness's model calls were not intercepted)"
         )
 
+    # Strongest strategy first: the call-id barrier (`tools/trace_align.py`).
+    # When it holds it is exact by construction -- the id was assigned by the
+    # process that served the call and echoed through the transcript -- and it
+    # is the only strategy that survives ipython-mediated arms, where one
+    # assistant turn issues many game calls and no name ever matches. Absent
+    # ids (pre-barrier traces) or a broken echo fall through to the name-walk
+    # below, unchanged.
+    by_id, id_mode, id_reason = align_records_to_turns_by_call_id(records, turns)
+    if id_mode == "call_id":
+        return by_id, "call_id", ""
+
     rec_names = [record_call_name(r) for r in records]
     if all(n is not None for n in rec_names):
         mapping: list[int | None] = []
@@ -241,9 +282,10 @@ def align_records_to_turns(records: list[dict], turns: list[dict]):
     if len(turns) == len(records):
         return list(range(len(records))), "ordinal", ""
     return [None] * len(records), None, (
-        f"{seq_reason}; and the two channels disagree on length "
-        f"({len(records)} turn records vs {len(turns)} assistant turns), so "
-        "positional pairing would attach the wrong message to the wrong move"
+        f"call-id join unavailable ({id_reason}); {seq_reason}; and the two "
+        f"channels disagree on length ({len(records)} turn records vs "
+        f"{len(turns)} assistant turns), so positional pairing would attach "
+        "the wrong message to the wrong move"
     )
 
 

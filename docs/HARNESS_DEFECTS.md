@@ -259,6 +259,27 @@ Still missing, and honestly labelled rather than guessed: reasoning for any arm
 whose model calls do not pass through the interception endpoint, and per-turn
 attribution for `ipython`-mediated arms.
 
+**The call-id barrier (closes the `ipython` attribution gap):** the harness now
+assigns a per-rollout monotonic id at `_apply_tool_call` — the single dispatch
+path every route shares — stamps it on the turn record
+(`tool_results[0].call_id`; the never-dispatched end-of-rollout flush carries
+an explicit `null`), and appends `[call#N]` to the RESULT payload, the one
+channel that flows back through the model transcript verbatim in every scaffold
+(an MCP tool message, or printed output inside an ipython block). **The
+published tool schemas are untouched** — the comparison's fixed playing field
+stays fixed; the marker rides the payload only, and `call_id_in_results=false`
+disables even that for token-matched cells (the record stamp stays, plus
+`call_id_echoed` says which regime a trace was written under). Alignment is
+then: turn record ↔ transcript message carrying the same marker ↔ the sampled
+assistant message that issued the call — exact by construction, including one
+ipython block issuing many calls (each id echoed in output order, all
+attributed to the block's one assistant message). `tools/trace_align.py`
+performs the join and reports coverage; `tools/trace_reasoning.py` uses it as
+its strongest alignment strategy (`"call_id"`, tried before the name-walk), so
+`NetHackTask.finalize`'s live backfill attaches the issuing message's
+`content`/`reasoning_content` through the barrier automatically. Pre-barrier
+traces have no ids and say so; every fallback above still applies to them.
+
 ### 3.6 Death is not announced on the turn it happens — **FIXED**
 The death turn rendered `HP: 0/N` with no death text and a stale HINT (observed:
 "Hostile adjacent (SE). Call `attack(...)` — your HP is healthy." on a corpse);

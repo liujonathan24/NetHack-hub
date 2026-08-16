@@ -179,6 +179,43 @@ def test_cleanup_releases_the_engine_and_leaves_state_serializable():
     assert toolset.state.model_dump_json()
 
 
+def test_published_tool_schemas_are_byte_identical_to_the_adapters():
+    """The experiment compares scaffolds on a FIXED playing field: trace
+    instrumentation must never change the tool schemas the model sees.
+    The call-id barrier therefore rides the RESULT payload (see the test
+    below), and the advertised signature of every published tool is exactly
+    the v0 adapter's own -- no extra parameters, no overridden signature."""
+    toolset = _toolset()
+    for name, fn in toolset.tool_functions().items():
+        adapter_sig = inspect.signature(fn.__wrapped__)
+        assert inspect.signature(fn) == adapter_sig, name
+        # No instrumentation parameter may appear in the model-visible schema.
+        assert "reasoning" not in adapter_sig.parameters, name
+        assert "call_id" not in adapter_sig.parameters, name
+        # `__signature__` overrides are how a wrapper would smuggle a schema
+        # change past `functools.wraps`. The adapters legitimately carry their
+        # own (built from the skill schema, and copied onto the wrapper by
+        # `functools.wraps`), so the invariant is: any override must BE the
+        # adapter's signature, never an extended one.
+        override = vars(fn).get("__signature__")
+        assert override is None or override == adapter_sig, name
+        # ...and the `_with_state` seam FastMCP publishes from agrees.
+        published = toolset._with_state(fn)
+        assert inspect.signature(published) == adapter_sig, name
+
+
+def test_the_call_id_rides_the_result_payload_not_the_schema():
+    """The barrier: every dispatched call's result ends with `[call#N]`, so the
+    id lands in the model transcript with zero tool-surface changes."""
+    toolset = _toolset()
+    first = asyncio.run(toolset.tool_functions()["search"](times=1))
+    second = asyncio.run(toolset.tool_functions()["search"](times=1))
+    text1 = first if isinstance(first, str) else str(first)
+    text2 = second if isinstance(second, str) else str(second)
+    assert text1.rstrip().endswith("[call#1]")
+    assert text2.rstrip().endswith("[call#2]")
+
+
 def test_terse_drops_the_map_but_keeps_messages_and_feedback():
     from nethack_v1 import _terse
     text = "=== MAP ===\n#####\n\n=== MESSAGES ===\nYou hit it.\n[search: nothing found]"
