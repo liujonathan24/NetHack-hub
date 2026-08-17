@@ -155,6 +155,15 @@ def assistant_turns_from_nodes(nodes) -> list[dict]:
     reasoning about this turn.
     """
     turns = []
+    # First-occurrence rule for marker harvesting. History compaction rewrites
+    # older user messages every turn, so `prepare_turn` re-commits the whole
+    # rewritten prefix as NEW (unsampled) nodes -- measured on a 10-turn
+    # harness rollout: 91 nodes, with `[call#1]`'s message appearing twice,
+    # the copy sitting after a much later assistant turn. The `sampled` flag
+    # cannot gate these (user/tool nodes are never sampled), but the design
+    # guarantees the FIRST appearance of a marker directly follows the turn
+    # that issued the call; every later appearance is a replayed prefix.
+    seen_call_ids: set = set()
     for node in nodes or []:
         sampled = node.get("sampled") if isinstance(node, dict) else getattr(node, "sampled", None)
         message = node.get("message") if isinstance(node, dict) else getattr(node, "message", None)
@@ -186,8 +195,10 @@ def assistant_turns_from_nodes(nodes) -> list[dict]:
         if turns:
             content = (message.get("content") if isinstance(message, dict)
                        else getattr(message, "content", None))
-            ids = marker_call_ids(content_text(content))
+            ids = [i for i in marker_call_ids(content_text(content))
+                   if i not in seen_call_ids]
             if ids:
+                seen_call_ids.update(ids)
                 turns[-1]["result_call_ids"].extend(ids)
     return turns
 
