@@ -199,3 +199,28 @@ def test_residual_ui_blocks_are_dismiss_mode_aware():
     assert "auto-dismiss" not in raw
     legacy = format_observation_as_chat(so, Journal(), {}, **kw)
     assert "=== MENU (harness will auto-dismiss; ignore) ===" in legacy
+
+
+def test_step_frames_capture_opt_in():
+    """record_step_frames=True stores one tty screen per engine step; the
+    default stays byte-identical (no frames, no size cost)."""
+    import numpy as np
+    from nethack_harness.helpers import TurnRecorder
+
+    class Obs:
+        def __init__(s, c): s.tty_chars = np.full((24, 80), ord(c), dtype=np.uint8)
+    class Env:
+        def __init__(s): s.n = 0
+        def step(s, a): s.n += 1; return (Obs(chr(ord("a")+s.n)), 1.0, False, False, {})
+
+    env = Env()
+    with TurnRecorder(env, capture_frames=True) as rec:
+        for k in (ord("l"), ord("k")):
+            env.step(k)
+    assert len(rec.frames) == 2
+    assert all(len(f["g"]) == 24 for f in rec.frames)
+    assert rec.frames[0]["k"] == "l" and rec.frames[0]["b"] == ord("l")
+
+    with TurnRecorder(env) as rec2:   # default off
+        env.step(ord("h"))
+    assert rec2.frames == []

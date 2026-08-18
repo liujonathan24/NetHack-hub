@@ -449,6 +449,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # enter -- and the UI-freeze observation block names the legal answers
         # as np_press_key calls when that tool is published.
         auto_dismiss: bool = True,
+        # Store the tty screen at EVERY engine step (not just the final frame
+        # per LM turn), so a game is replayable move-by-move. Off by default:
+        # existing arms stay byte-identical and pay no size cost. Enable per
+        # cell via load_environment(record_step_frames=True) / env_args.
+        record_step_frames: bool = False,
         # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
         # setup_state the turn file for this rollout's seed is replayed
         # byte-for-byte through the freshly seeded engine, so the agent starts
@@ -475,6 +480,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             auto_dismiss = auto_dismiss.strip().lower() not in (
                 "false", "0", "no", "off", "")
         self.auto_dismiss = bool(auto_dismiss)
+        if isinstance(record_step_frames, str):
+            record_step_frames = record_step_frames.strip().lower() not in (
+                "false", "0", "no", "off", "")
+        self.record_step_frames = bool(record_step_frames)
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -1001,7 +1010,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
         }
         clock_before = _game_clock(state)
-        rec = TurnRecorder(state.get("env"))
+        rec = TurnRecorder(state.get("env"), capture_frames=self.record_step_frames)
         with rec:
             content = await self._apply_tool_call_inner(state, skill_name, skill_args)
         clock_after = _game_clock(state)
@@ -1039,7 +1048,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             tt.get("action_indices") or [], tt.get("reward") or 0.0,
             obs_text, obs_content=content,
             actions=rec.action_record(), tool_results=[result],
-            all_messages=rec.messages,
+            all_messages=rec.messages, step_frames=rec.frames,
             # `applied` = "this LM turn was dispatched by the harness". It is
             # False only for the end-of-rollout flush, whose tool call the
             # rollout loop never handed to us at all. A dispatched call that

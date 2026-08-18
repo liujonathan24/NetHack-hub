@@ -63,9 +63,10 @@ class TurnRecorder:
     """
 
     __slots__ = ("_env", "_orig", "_had_own", "_eng", "_orig_restore",
-                 "actions", "messages", "restores", "_installed")
+                 "actions", "messages", "restores", "_installed",
+                 "_capture_frames", "frames")
 
-    def __init__(self, env) -> None:
+    def __init__(self, env, capture_frames: bool = False) -> None:
         self._env = env
         self._orig = None
         self._had_own = False
@@ -74,6 +75,12 @@ class TurnRecorder:
         self._installed = False
         self.actions: list[int] = []
         self.messages: list[str] = []
+        #: When capture_frames is True, one 24-row tty snapshot per engine step
+        #: -- the missing "screen per move" that shape() collapses to the final
+        #: frame only. Off by default: the existing arms stay byte-identical and
+        #: pay no size/latency cost.
+        self._capture_frames = bool(capture_frames)
+        self.frames: list[dict] = []
         #: Snapshot restores this turn. `rollback` rewinds the engine heap
         #: directly (`engine.restore(handle)`) instead of stepping, so a turn
         #: with restores > 0 is NOT replayable from its byte stream and the
@@ -102,8 +109,17 @@ class TurnRecorder:
             def _recording_step(action, *a, **kw):
                 out = orig(action, *a, **kw)
                 try:
-                    self.actions.append(int(action))
-                    self.note_message(_obs_message(out[0] if isinstance(out, tuple) else out))
+                    ai = int(action)
+                    self.actions.append(ai)
+                    obs0 = out[0] if isinstance(out, tuple) else out
+                    self.note_message(_obs_message(obs0))
+                    if self._capture_frames:
+                        self.frames.append({
+                            "b": ai,
+                            "k": chr(ai) if 32 <= ai < 127 else "",
+                            "g": _tty_rows(obs0),
+                            "m": _obs_message(obs0) or "",
+                        })
                 except Exception:
                     pass
                 return out
@@ -353,7 +369,7 @@ def _reasoning_block(assistant_msg, dispatch_route: str) -> dict:
 def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
                        action_indices, total_reward: float, obs_text: str,
                        obs_content=None, *, actions=None, tool_results=None,
-                       all_messages=None, applied=True, lm_turn=None,
+                       all_messages=None, step_frames=None, applied=True, lm_turn=None,
                        turn=None, gt_obs=True, dispatch_route="harness") -> None:
     """Write one NDJSON line per LM turn. Best-effort; never raises.
 
@@ -467,6 +483,10 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
             "reward": float(total_reward),
             "messages": shaped_msgs,
             "all_messages": full_msgs,
+            # One tty screen per engine step this turn (present only when the
+            # env was built with record_step_frames=True). This is the
+            # move-by-move replay data shape() otherwise collapses.
+            **({"step_frames": list(step_frames)} if step_frames else {}),
             "actions": actions if actions is not None else TS.empty_action_record(
                 "no engine step hook was active for this turn"),
             "tool_results": list(tool_results) if tool_results else [],
@@ -1101,6 +1121,21 @@ def _decode_tty(obs) -> str:
     return "\n".join(
         "".join(chr(c) for c in row) for row in obs.tty_chars
     )
+
+def _tty_rows(obs):
+    """The 24 tty rows as a list of strings (one screen). Right-trimmed.
+
+    Tolerant of dict-shaped or attribute-shaped observations, and of a missing
+    tty plane (returns [] rather than raising -- frame capture must never break
+    a rollout). This is the per-step analogue of the trace's final raw_grid.
+    """
+    tty = obs.get("tty_chars") if isinstance(obs, dict) else getattr(obs, "tty_chars", None)
+    if tty is None:
+        return []
+    try:
+        return ["".join(chr(int(c)) for c in row).rstrip() for row in tty]
+    except Exception:
+        return []
 
 
 def _detect_terminal_outcome(obs, state: dict) -> None:
