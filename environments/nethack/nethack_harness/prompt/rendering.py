@@ -1827,19 +1827,31 @@ def format_observation_as_chat(
         for m in msgs:
             lines.append(f"  {m}")
         lines.append("")
+    # Raw-prompt surfaces (auto_dismiss=False, e7): the harness will NOT close
+    # this UI -- labelling it "harness will auto-dismiss; ignore" is a lie that
+    # leaves the agent waiting for a dismissal that never comes (16 such blocks
+    # rendered across the first NPFULL cell). Default (flag absent) keeps the
+    # historical wording byte-identical.
+    _auto = True if state is None else bool(state.get("_auto_dismiss", True))
     if structured.menu:
-        # Menus are auto-dismissed by the harness via ESC after each step;
-        # if you see this block, dismissal didn't fully clear (rare).
-        lines.append("=== MENU (harness will auto-dismiss; ignore) ===")
+        if _auto:
+            # Menus are auto-dismissed by the harness via ESC after each step;
+            # if you see this block, dismissal didn't fully clear (rare).
+            lines.append("=== MENU (harness will auto-dismiss; ignore) ===")
+        else:
+            lines.append("=== MENU (answer it: press a choice key, or esc to cancel) ===")
         for i, opt in enumerate(structured.menu):
             lines.append(f"  [{i}] {opt.description}")
         lines.append("")
     if structured.inventory_prompt:
         p = structured.inventory_prompt
-        # Inventory prompts are auto-dismissed; eat/quaff/read take an `item`
-        # arg and bundle the selection in-skill, so this block should not
-        # normally appear.
-        lines.append(f"=== PROMPT: {p['action']} (harness will auto-dismiss; pass `item` to eat/quaff/read) ===")
+        if _auto:
+            # Inventory prompts are auto-dismissed; eat/quaff/read take an `item`
+            # arg and bundle the selection in-skill, so this block should not
+            # normally appear.
+            lines.append(f"=== PROMPT: {p['action']} (harness will auto-dismiss; pass `item` to eat/quaff/read) ===")
+        else:
+            lines.append(f"=== PROMPT: {p['action']} (answer it: press the item's letter, or esc to cancel) ===")
         for i, item in enumerate(p["items"]):
             lines.append(f"  [{i}] {item.description}")
         lines.append("")

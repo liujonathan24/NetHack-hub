@@ -746,6 +746,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Task 18 Step 2: gates the JOURNAL block + HINT ladder off for the
         # CLI-agent arms (see the constructor's self_dispatch docstring).
         state["_self_dispatch"] = self.self_dispatch
+        state["_auto_dismiss"] = self.auto_dismiss
         state["last_reward"] = 0.0
         state["terminated"] = False
         state["journal"] = Journal()

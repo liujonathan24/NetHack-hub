@@ -175,3 +175,27 @@ def test_request_map_feedback_classifies_completed():
     'unknown' (3 of 20 calls in the e7 smoke). Pin the marker."""
     from nethack_harness.helpers import classify_tool_result
     assert classify_tool_result("Refreshing the full map this turn.") == "completed"
+
+
+def test_residual_ui_blocks_are_dismiss_mode_aware():
+    """Under auto_dismiss=False the MENU/PROMPT safety blocks must not promise
+    a dismissal that never comes (16 such lies rendered across NPFULL v1)."""
+    from types import SimpleNamespace
+    from nethack_harness.prompt.rendering import format_observation_as_chat
+    from nethack_harness.memory.journal import Journal
+    from nethack_core.observations import StructuredObservation
+
+    so = StructuredObservation(
+        map_view="", messages=[], inventory=[],
+        status={"hitpoints": 16, "max_hitpoints": 16, "armor_class": 6,
+                "depth": 1, "time": 42, "experience_level": 1, "gold": 0,
+                "x": 5, "y": 5, "hunger_state": 1},
+        character={"role": "Valkyrie", "race": "human", "alignment": "neutral"},
+        menu=[SimpleNamespace(description="a - eat it")],
+    )
+    kw = dict(compact=False, journal_max_chars=2000)
+    raw = format_observation_as_chat(so, Journal(), {"_auto_dismiss": False}, **kw)
+    assert "answer it: press a choice key" in raw
+    assert "auto-dismiss" not in raw
+    legacy = format_observation_as_chat(so, Journal(), {}, **kw)
+    assert "=== MENU (harness will auto-dismiss; ignore) ===" in legacy
