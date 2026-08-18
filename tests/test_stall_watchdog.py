@@ -355,3 +355,23 @@ def test_scan_groups_by_pid_and_tracks_each_seed(turns):
     # stale does not make the process stale while seed 1 is 10s fresh.
     assert now - by_pid[111]["newest_mtime"] == pytest.approx(10, abs=2)
     assert sorted(by_pid[111]["seeds"]) == [0, 1]
+
+
+def test_config_ports_extracts_mcp_urls():
+    """Agent-first kill: the writer->agent join matches on ports referenced by
+    per-rollout config URLs (settings.json / .mcp.json)."""
+    import stall_watchdog as sw
+    settings = ('{"mcpServers": {"nethack": {"type": "http", '
+                '"url": "http://127.0.0.1:43571/mcp", '
+                '"bearerTokenEnvVar": "NETHACK_MCP_TOKEN"}}}')
+    assert sw.config_ports(settings) == {43571}
+    assert sw.config_ports('{"url": "https://api.pinference.ai/api/v1"}') == set()
+    assert sw.config_ports("") == set()
+    assert sw.config_ports(None) == set()
+
+
+def test_agent_pids_for_ports_empty_and_no_match():
+    import stall_watchdog as sw
+    assert sw.agent_pids_for_ports(set(), {1}) == []
+    # A port nothing on the box references: scan must return [] and not raise.
+    assert sw.agent_pids_for_ports({1}, set()) == []
