@@ -126,3 +126,45 @@ def test_bbox_min_reveal_cells_render_exactly_as_before():
     txt2 = _render(state)
     assert "=== MAP ===" not in txt2
     assert "_force_map" not in state
+
+
+def test_auto_dismiss_coerces_cli_string_false():
+    """env_args reach the ctor as dotted-scalar strings; bool("false") is True,
+    so the ctor must parse the string form. Caught in the e7 smoke test."""
+    import inspect
+    import nethack as nethack_mod
+    src = inspect.getsource(nethack_mod.NetHackVerifiersEnv.__init__)
+    assert 'isinstance(auto_dismiss, str)' in src
+    # Behavior-level check without building an env: replicate the clause.
+    for raw, expected in [("false", False), ("False", False), ("0", False),
+                          ("off", False), ("true", True), ("1", True),
+                          (True, True), (False, False)]:
+        v = raw
+        if isinstance(v, str):
+            v = v.strip().lower() not in ("false", "0", "no", "off", "")
+        assert bool(v) is expected, (raw, expected)
+
+
+def test_path_explain_names_published_map_tool():
+    import numpy as np
+    from nethack_harness.navigation.path_explain import explain_path_failure
+
+    class Raw:
+        # 21x79 chars grid: player on floor at (5,5); target floor at (70,18)
+        # provably disconnected, so the no-route branch ALWAYS fires.
+        chars = np.full((21, 79), ord(" "), dtype=np.uint8)
+        blstats = [5, 5]
+    Raw.chars[5, 4:7] = ord(".")
+    Raw.chars[18, 69:72] = ord(".")
+
+    args = {"x": 70, "y": 18}
+    out_np = explain_path_failure(Raw, args, published_tools={"np_press_key", "request_map", "search"})
+    out_reveal = explain_path_failure(Raw, args, published_tools={"reveal", "search"})
+    out_default = explain_path_failure(Raw, args)
+    for out, want, banned in [
+        (out_np, "request_map", "`reveal`"),
+        (out_reveal, "`reveal`", "request_map"),
+        (out_default, "`reveal`", "request_map"),
+    ]:
+        assert out is not None, "no-route branch must fire on this fixture"
+        assert want in out and banned not in out, out

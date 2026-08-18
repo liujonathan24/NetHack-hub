@@ -468,6 +468,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
+        # env_args flow through the eval CLI as dotted-scalar STRINGS, so
+        # auto_dismiss can arrive as "false" -- and bool("false") is True.
+        # (Caught in the e7 smoke: the dumped config showed the string form.)
+        if isinstance(auto_dismiss, str):
+            auto_dismiss = auto_dismiss.strip().lower() not in (
+                "false", "0", "no", "off", "")
         self.auto_dismiss = bool(auto_dismiss)
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
@@ -1616,7 +1622,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 and ("No valid path" in result.feedback or "No path found" in result.feedback)):
             try:
                 from nethack_harness.navigation.path_explain import explain_path_failure
-                extra = explain_path_failure(state.get("raw_obs"), skill_args)
+                extra = explain_path_failure(
+                    state.get("raw_obs"), skill_args,
+                    published_tools=state.get("_published_tools"))
                 if extra:
                     from nethack_harness.tools.skills import SkillResult as _SR
                     result = _SR(actions=result.actions,
