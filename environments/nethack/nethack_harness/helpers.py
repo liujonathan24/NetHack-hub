@@ -1267,6 +1267,29 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params))
         return out
+    elif skill_set == "np_core":
+        # e7 seeding experiment (2026-08-18): the NARROW, individually-debugged
+        # core of netplay_true. Selection rationale:
+        #   np_move_to over np_go_to     -- coordinates subsume room ids
+        #   np_press_key over np_type_text -- press_key reaches esc/space/enter,
+        #       which type_text cannot; type_text is repeated press_key minus
+        #       the specials, so press_key is the generator
+        #   np_pray / np_apply / np_rest -- survival essentials
+        # Everything else (eat/quaff/wield/kick/zap/menu answers) is reachable
+        # through np_press_key answering NetHack's OWN prompts -- which is the
+        # point: this surface is designed to run with auto_dismiss=False, so
+        # the model answers prompts itself instead of the harness ESCing them.
+        from nethack_harness.tools import netplay_true as _npt  # registers np_*
+        keep = {"np_explore_level", "np_melee_attack", "np_move_to",
+                "np_press_key", "np_pray", "np_apply", "np_rest"}
+        missing = keep - set(skill_registry.all_schemas())
+        assert not missing, f"np_core tools not registered: {missing}"
+        out = []
+        for name, schema in skill_registry.all_schemas().items():
+            if name not in keep: continue
+            params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        return out
     elif skill_set == "balrog80":
         # BALROG's published NLE action surface: the 80 text commands in their
         # `balrog/environments/nle/__init__.py` ACTIONS dict, and nothing else.
@@ -1303,7 +1326,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # `request_map` (1 tool). Expanding presets by recursion keeps this
         # correct as the presets themselves change.
         tokens = [s.strip() for s in skill_set.split(",") if s.strip()]
-        presets = {"netplay", "netplay_true", "dir8", "move", "full", "balrog80"}
+        presets = {"netplay", "netplay_true", "np_core", "dir8", "move", "full", "balrog80"}
         out = []
         seen: set = set()
         for tok in tokens:

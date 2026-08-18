@@ -459,6 +459,14 @@ _BBOX_MIN_PLACEHOLDER = (
     "ADJACENT / VISIBLE FEATURES / VISIBLE MONSTERS / MESSAGES) ==="
 )
 
+#: e7 raw-prompt cells publish `request_map` instead of `reveal` -- the
+#: standing notice must name the tool that is actually callable, or we
+#: recreate the dead-vocabulary failure class (3,058 dead hints, rendering.py).
+_BBOX_MIN_PLACEHOLDER_REQUEST_MAP = (
+    "=== SURROUNDINGS (hidden; call request_map for the full map plus "
+    "ADJACENT / VISIBLE FEATURES / VISIBLE MONSTERS / MESSAGES) ==="
+)
+
 
 def _bbox_min_template(structured, journal, state, *, compact, journal_max_chars):
     """BBOX_MIN: the quiet turn is feedback + STATUS, nothing else.
@@ -477,13 +485,28 @@ def _bbox_min_template(structured, journal, state, *, compact, journal_max_chars
     and `reveal` still consumes no game turn, so buying the sections is free
     on the in-game clock and costs exactly one unit of the call budget.
     """
+    # env_response sets _force_map for both reveal and request_map. Pop it
+    # unconditionally (it must never linger across turns), but only a
+    # request_map turn pushes the inline MAP -- reveal turns carry the grid in
+    # the tool result and must render exactly as they always have.
+    force = bool(state.pop("_force_map", False)) if state else False
     reveal_turn = bool(state) and state.get("_last_skill_name") == "reveal"
+    request_turn = (force and bool(state)
+                    and state.get("_last_skill_name") == "request_map")
     text = format_observation_as_chat(
         structured, journal, state, compact=compact,
-        journal_max_chars=journal_max_chars, include_map=False,
-        minimal=not reveal_turn,
+        journal_max_chars=journal_max_chars, include_map=request_turn,
+        minimal=not (reveal_turn or request_turn),
     )
-    return _splice_placeholder(text, _BBOX_MIN_PLACEHOLDER)
+    if request_turn:
+        # The full section set incl. MAP is inline this turn; the "hidden"
+        # placeholder would contradict it.
+        return text
+    pub = {str(t) for t in ((state or {}).get("_published_tools") or ())}
+    placeholder = _BBOX_MIN_PLACEHOLDER
+    if pub and "reveal" not in pub and "request_map" in pub:
+        placeholder = _BBOX_MIN_PLACEHOLDER_REQUEST_MAP
+    return _splice_placeholder(text, placeholder)
 
 
 def _sparse_template(structured, journal, state, *, compact, journal_max_chars):

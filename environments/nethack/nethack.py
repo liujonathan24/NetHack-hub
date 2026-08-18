@@ -441,6 +441,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # block and the HINT ladder for the CLI arms while leaving the control
         # arm's rendering byte-identical to pre-Task-18 behavior.
         self_dispatch: bool = False,
+        # e7 raw-prompt surfaces: when False, the post-call auto-dismiss loop
+        # stops answering menus / item prompts / [yn] questions and only
+        # acknowledges --More-- (the exact contract the BALROG-80 surface
+        # already runs under, see _balrog_raw_prompts below). The agent answers
+        # its own prompts -- np_press_key reaches every key incl. esc/space/
+        # enter -- and the UI-freeze observation block names the legal answers
+        # as np_press_key calls when that tool is published.
+        auto_dismiss: bool = True,
         # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
         # setup_state the turn file for this rollout's seed is replayed
         # byte-for-byte through the freshly seeded engine, so the agent starts
@@ -460,6 +468,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
+        self.auto_dismiss = bool(auto_dismiss)
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -946,7 +955,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             compact=self.compact_obs,
             journal_max_chars=self.journal_render_max_chars,
         )
-        warning = detect_blocking_ui(state.get("raw_obs"))
+        warning = detect_blocking_ui(
+            state.get("raw_obs"), published_tools=state.get("_published_tools"))
         return f"{warning}\n{obs_text}" if warning else obs_text
 
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
@@ -1381,7 +1391,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # prompts / y-n questions is the AGENT's job (see
             # `_balrog_raw_prompts` in __init__). Only --More-- is still
             # acknowledged for it, matching BALROG's own `skip_more: True`.
-            if self._balrog_raw_prompts and not has_more:
+            if (self._balrog_raw_prompts or not self.auto_dismiss) and not has_more:
                 break
             if yn is not None:
                 ans = yn["answer"]

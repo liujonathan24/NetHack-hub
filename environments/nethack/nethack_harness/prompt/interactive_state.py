@@ -77,7 +77,7 @@ def _tty_row0(raw_obs) -> str:
         return ""
 
 
-def detect_blocking_ui(raw_obs) -> str | None:
+def detect_blocking_ui(raw_obs, published_tools=None) -> str | None:
     """Return a warning block if the game is blocked on UI input, else None.
 
     The returned string is inserted directly above `=== MAP ===` so the agent
@@ -112,7 +112,7 @@ def detect_blocking_ui(raw_obs) -> str | None:
     if row0:
         lines.append(f"Prompt line: {row0}")
 
-    answers = _offered_answers(row0)
+    answers = _offered_answers(row0, published_tools)
     if answers:
         lines.append(f"ONLY these answers do anything right now: {answers}.")
         lines.append("Any other key is swallowed and changes nothing.")
@@ -128,7 +128,7 @@ def detect_blocking_ui(raw_obs) -> str | None:
 _OFFER_RE = re.compile(r"\[([^\]]+)\]")
 
 
-def _offered_answers(row0: str) -> str:
+def _offered_answers(row0: str, published_tools=None) -> str:
     """Name the prompt's legal replies as callable tools, not as raw keys.
 
     Measured need (`p1/nle_lang_glm`, glm-5.2 on the 80-command surface): the
@@ -165,19 +165,28 @@ def _offered_answers(row0: str) -> str:
             keys.append(body[i])
         i += 1
 
+    # Name keys in the vocabulary of whatever answer surface is actually
+    # published: `np_press_key(key='b')` on the netplay_true / np_core raw
+    # surfaces, `bal_b` on the BALROG-80 surface (the historical default,
+    # kept verbatim so those arms render exactly as before).
+    tools = {str(t) for t in (published_tools or ())}
+    use_np = "np_press_key" in tools
     named = []
     for k in keys:
-        if k.isalnum():
-            named.append(f"`bal_{k}`")
-        elif k == "-":
-            named.append("`bal_minus` (the '-' key)")
-        elif k == "*":
+        if k == "*":
             named.append("'*' to list every item")
         elif k == "?":
             named.append("'?' to list valid choices")
+        elif use_np and (k.isalnum() or k in "-$#,.<>"):
+            named.append(f"`np_press_key(key='{k}')`")
+        elif not use_np and k.isalnum():
+            named.append(f"`bal_{k}`")
+        elif not use_np and k == "-":
+            named.append("`bal_minus` (the '-' key)")
     if not named:
         return ""
-    named.append("`bal_esc` to cancel")
+    named.append("`np_press_key(key='esc')` to cancel" if use_np
+                 else "`bal_esc` to cancel")
     # Dedupe while preserving order; NetHack sometimes repeats a key across the
     # bracket group and the default hint "[yn] (n)".
     seen, out = set(), []
