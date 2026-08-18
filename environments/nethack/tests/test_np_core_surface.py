@@ -168,3 +168,10 @@ def test_path_explain_names_published_map_tool():
     ]:
         assert out is not None, "no-route branch must fire on this fixture"
         assert want in out and banned not in out, out
+
+
+def test_request_map_feedback_classifies_completed():
+    """request_map takes no NLE step and had no status marker -- it tallied as
+    'unknown' (3 of 20 calls in the e7 smoke). Pin the marker."""
+    from nethack_harness.helpers import classify_tool_result
+    assert classify_tool_result("Refreshing the full map this turn.") == "completed"

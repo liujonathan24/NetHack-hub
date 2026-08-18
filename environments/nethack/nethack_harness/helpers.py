@@ -256,6 +256,9 @@ _STATUS_MARKERS: tuple[tuple[str, str], ...] = (
     ("rolled back ", "completed"),
     ("reveal: ", "failed"),          # "reveal: map unavailable this turn."
     ("reveal (x", "completed"),      # "reveal (x1-x20, y3-y9):\n..."
+    # request_map takes no NLE step, so no skill envelope; without a marker it
+    # tallied as "unknown" in status distributions (e7 smoke, 3 of 20 calls).
+    ("Refreshing the full map", "completed"),
 )
 
 
