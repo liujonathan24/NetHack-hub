@@ -25,7 +25,7 @@ from nethack_harness.prompt.interactive_state import _offered_answers  # noqa: E
 
 NP_CORE_EXPECTED = {
     "np_explore_level", "np_melee_attack", "np_move_to",
-    "np_press_key", "np_pray", "np_apply", "np_rest",
+    "np_press_key", "np_pray", "np_apply", "np_rest", "np_kick",
 }
 
 

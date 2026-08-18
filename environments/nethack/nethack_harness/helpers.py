@@ -1284,7 +1284,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # the model answers prompts itself instead of the harness ESCing them.
         from nethack_harness.tools import netplay_true as _npt  # registers np_*
         keep = {"np_explore_level", "np_melee_attack", "np_move_to",
-                "np_press_key", "np_pray", "np_apply", "np_rest"}
+                "np_press_key", "np_pray", "np_apply", "np_rest", "np_kick"}
         missing = keep - set(skill_registry.all_schemas())
         assert not missing, f"np_core tools not registered: {missing}"
         out = []
