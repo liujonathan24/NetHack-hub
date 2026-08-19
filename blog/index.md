@@ -1,10 +1,28 @@
-# A strong model, NetPlay's own tools, full vision — and it still doesn't beat the game
+# Revisiting NetHack with Agents.
+<!--A strong model, NetPlay's own tools, full vision — and it still doesn't beat the game -->
 
 *Draft. Prose here; the live gameplay archive is `e7_viewer.html`.*
 
-GLM-5.2 driving NetPlay's published action surface, Prime Agent scaffold, the
+Games have been a popular method for benchmarking language models in recent years due to their ability to detect usability errors in models (Jeurissen et al., 2024). Although knowledge-based benchmarks for language models have steadily improved over time, perceived LLM strengths continue to lag what their benchmarks report. Games, which are, at their core, long-horizon tasks that require agents to plan and act over extended periods, offer us a better evaluation on the capabilities of language models since game environments are arguably simpler than many of the real-world tasks we ultimately hope autonomous agents can solve. If they can’t do well on games, then they are not yet ready for real-world long-running tasks. 
+
+
+As a result, substantial research has focused on optimizing language models for game playing, with particularly rapid progress over the past year.
+Language models have achieved human-level or superhuman performance on games such as Pokémon Red and Blue, Baba Is You, and several games in the BALROG benchmark suite. However, one notable exception remains NetHack. Originally released in the 1980s, NetHack appears to be orders of magnitude more difficult than the other games that have been successfully tackled. Even notoriously challenging environments such as Montezuma's Revenge have now seen strong performance, yet NetHack remains largely unsolved (e.g., zero neural agents were able to complete the NetHack Learning Environment during the NeurIPS 2021 competition, and symbolic approaches continue to outperform neural networks; Onuki et al., 2025). In the BALROG paper on LLMs and games, the strongest language models solve only about 7% of NetHack, leaving it as an open challenge. 
+
+A year later, we revisit NetHack with agentic harnesses and the newest generation of models. We find that models still fail spectacularly to beat the game, raising some alarm bells: What makes NetHack fundamentally different from other game environments? Are current evaluation methods adequately capturing the capabilities of language models, or is the game presented in a way that is particularly inaccessible for agents? Or are there limitations in today's language models that prevent them from succeeding in such long-horizon, complex environments? 
+
+In this blog, we investigate the failures of the current training stack and summarize meta patterns across research on this topic. We present a modernized harness for the game through Prime Intellect’s Verifiers package and an evaluation method with a refactored game engine to bring it up to standards with modern reinforcement learning and LLMs for games. 
+
+# NetHack in BALROG
+
+BALROG introduced a new metric that compared two key etrics
+
+
+
+
+<!--GLM-5.2 driving NetPlay's published action surface, Prime Agent scaffold, the
 whole level revealed. Across three tool-surface variants and 15 games it never
-clears the early dungeon...
+clears the early dungeon... -->
 
 ## How they die
 <!-- taxonomy: underleveled dive → swarmed → mistimed prayer; reward is pure depth -->
