@@ -29,7 +29,7 @@ BALROG used fixed horizon and full action and full observation descriptions, wit
 <!-- ✅ DONE (Claude): Show the table of NetPlay reduced actions v3 and how each skill works. Also add a table of nethack actions and what they do. -->
 The reduced surface we call **np_core** exposes eight skills — the narrow, individually-debugged core of NetPlay's action layer. Each skill is a small program over the raw NetHack keys: `np_move_to`, for instance, runs A\* to a target tile and emits the whole run of movement keys in a single tool call. Anything not covered by a dedicated skill (eating, quaffing, wielding, answering a menu) is reachable through `np_press_key`, which answers NetHack's own prompts.
 
-**np_core skills (reduced actions v3)**
+**NetPlay reduced skills**
 
 | Skill | Arguments | What it does |
 |---|---|---|
@@ -44,7 +44,7 @@ The reduced surface we call **np_core** exposes eight skills — the narrow, ind
 
 Under the skills sit the raw NetHack action classes they compose. A single `np_move_to` might expand into a dozen movement keys; `np_kick` into a kick command plus a direction; `np_pray` into the extended `#pray` command plus a `y`.
 
-**Raw NetHack actions the skills compose**
+**Raw NetHack actions**
 
 | Raw action | Keys | What it does |
 |---|---|---|
@@ -60,19 +60,16 @@ Under the skills sit the raw NetHack action classes they compose. A single `np_m
 
 
 <!-- ✅ DONE (Claude): Navigate from one room to another with netplay skills and show the number of moves; two rows of actions (skills / NetHack letters). -->
-Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task. This is the opening of NPCORE_v3 seed 0: the Valkyrie leaves her spawn room and works across the level toward the downstairs. Three `np_move_to` calls expand into **29 raw NetHack keystrokes** — a ~10× reduction in tool calls, and the model never has to spell out a single movement key.
+Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task.
 
-| # | Skill call (what the model emits) | Raw NetHack keys (what the engine runs) | Keys |
+<div class="game-embed" data-demo="opening"></div>
+
+| # | Skill call (what the model emits) | Raw NetHack actions (what the engine runs) | Keys |
 |---|---|---|---|
 | 1 | `np_move_to(x=3, y=5)` | `k` | 1 |
 | 2 | `np_move_to(x=15, y=9)` | `llllllllnnnn` | 12 |
 | 3 | `np_move_to(x=27, y=10)` | `hbnllllulullllln` | 16 |
 | | **3 skill calls** | | **29 keys** |
-
-<div style="font-family:monospace;font-size:0.9em;border:1px solid #ccc;border-radius:6px;padding:0.6em 0.8em;overflow-x:auto;">
-<div><strong>skills&nbsp;→</strong>&nbsp; np_move_to(3,5) &nbsp;·&nbsp; np_move_to(15,9) &nbsp;·&nbsp; np_move_to(27,10) &nbsp;&nbsp;<em>(3 calls)</em></div>
-<div><strong>keys&nbsp;&nbsp;&nbsp;→</strong>&nbsp; k &nbsp;·&nbsp; l l l l l l l l n n n n &nbsp;·&nbsp; h b n l l l l u l u l l l l l n &nbsp;&nbsp;<em>(29 keys)</em></div>
-</div>
 
 (Keys are vi-style: `h j k l` step W/S/N/E and `y u b n` the diagonals, so `np_move_to` is turning a target tile into the walk that reaches it.)
 
@@ -84,21 +81,23 @@ With this setup, we create a custom port of NetHack 3.6.7 that enables flexibili
 TODO (Seth): Do I need justification here for why we don't have results without full visibility?
 
 <!-- ✅ DONE (Claude): Insert results (X and Y) and the table of results and the HTML widget to view games. -->
-On our initial harness, we see high variance in results with an overall median of **3.54** and an average of **4.93** BALROG score across the three tool-surface variants (NPCORE_v3, NPCORE_v2, NPFULL; 15 games in all). Every score reported here is the real BALROG progression metric (the max over the dungeon-level and experience-level percentiles), reported ×100 as a 0–100%.
+On our initial harness, we see high variance across five seeds, with a mean BALROG score of **3.06** and every game ending in death. Every score reported here is the real BALROG progression metric (the max over the dungeon-level and experience-level percentiles), reported ×100 as a 0–100%.
 
-| Cell | Median BALROG | Mean BALROG | Deaths | Max Dlvl | Max XL |
-|---|---|---|---|---|---|
-| NPCORE_v3 | 2.12 | 3.06 | 5/5 | 7 | 3 |
-| NPFULL | 3.54 | 5.96 | 5/5 | 11 | 5 |
-| **All 15 games** | **3.54** | **4.93** | **14/15** | **11** | **5** |
-
-The best single game reached only dungeon level 11 (BALROG 16.13); 14 of 15 rollouts died, and the median run barely cleared the first few levels. The full move-by-move archive is in `e7_viewer.html` (open in a browser; no server needed).
+| Seed | BALROG | Max Dlvl | Max XL | Outcome |
+|---|---|---|---|---|
+| Seed 0 | 1.75 | 3 | 1 | died |
+| Seed 1 | 4.85 | 7 | 3 | died |
+| Seed 2 | 1.75 | 3 | 1 | died |
+| Seed 3 | 2.12 | 4 | 2 | died |
+| Seed 4 | 4.85 | 7 | 1 | died |
+| **Mean** | **3.06** | **4.8** | **1.6** | **5/5 died** |
 
 <!-- ✅ DONE (Claude): Insert our observations that led to new experiments (list items 2-4). -->
-Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues: 
-1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in all 15 games (e.g. NPFULL seed 3 reached Dlvl 6 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the **E8a descent gate**, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
+Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues:
+
+1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in every game (e.g. seed 4 reached Dlvl 7 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the **E8a descent gate**, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
 2. **Reasoning is accurate but inert (PLANNING).** The model narrates the game well — it names monsters, judges which are safe to fight, identifies items, and even times prayer correctly (3 of 4 control prayers fired at critical HP) — yet this reasoning rarely changes the policy it then executes. That gap between good narration and unchanged behavior is the central question of the **E8 "does telling the model help?"** experiments (E8a descent gate, E8b prayer hint).
-3. **Pathfinding stalls on dense maps (CONTROL/PERCEPTION).** When `np_move_to` cannot find a route it returns having moved nothing, and the model re-issues the same target instead of re-planning — NPCORE_v3 seed 0 alone aimed `np_move_to(57,13)` at the downstairs nine times, three of them advancing zero squares. This route-failure mode motivated the **E8d density sweep**, which thins the map to separate route-finding from decision-making.
+3. **Pathfinding stalls on dense maps (CONTROL/PERCEPTION).** When `np_move_to` cannot find a route it returns having moved nothing, and the model re-issues the same target instead of re-planning — seed 0 alone aimed `np_move_to(57,13)` at the downstairs nine times, three of them advancing zero squares. This route-failure mode motivated the **E8d density sweep**, which thins the map to separate route-finding from decision-making.
 4. **Locked doors drain the run (CONTROL of execution).** With no dedicated unlock skill, the model falls back to `np_kick` and simply repeats it — seed 0 kicked the same door four times in a row. Door/kick friction motivated **E8c**, which hands the model a seed-matched dungeon with the doors already unlocked.
 
 

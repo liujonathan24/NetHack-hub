@@ -11,7 +11,19 @@ Run it after every edit to the Markdown:
 Gameplay viewers (e7_viewer.html, e8*_viewer.html, all_games.html) are separate
 standalone files in the same blog/ directory; references to them in the prose
 (`e7_viewer.html` in backticks) become links. Raw HTML blocks in the Markdown
-(e.g. the two-row navigation demo) pass through untouched.
+pass through untouched.
+
+In-article gameplay embeds: where the Markdown carries
+
+    <div class="game-embed" data-demo="opening"></div>
+
+this splices in `blog/embeds/opening.html` -- a self-contained widget built by
+`tools/game_viewer/build_demo.py`. The marker renders as nothing in a plain
+Markdown previewer, so the source stays readable; the built page shows the game.
+
+Table convention: a table's final row is treated as a summary/total row (and
+given a heavier rule above it) when its cells are bolded -- e.g.
+`| **Mean (seeds 0-4)** | **3.06** | ... |`.
 """
 from __future__ import annotations
 import argparse
@@ -77,6 +89,8 @@ th,td{text-align:left;padding:.5em .72em;border-bottom:1px solid var(--line);ver
 th{background:var(--th-bg);font-weight:600;color:var(--ink);}
 tbody tr:nth-child(even){background:var(--row);}
 tbody tr:last-child td{border-bottom:0;}
+/* a bolded final row is a summary/total row: set it off with a heavier rule */
+tbody tr:last-child:has(strong) td{border-top:2px solid var(--ink2);}
 td code,th code{background:color-mix(in oklab,var(--code-bg) 60%,transparent);}
 ol,ul{padding-left:1.4em;}
 li{margin:.3em 0;}
@@ -117,9 +131,24 @@ def render_md(text: str) -> str:
     return html
 
 
+EMBED_RE = re.compile(
+    r'<div class="game-embed" data-demo="([\w-]+)"\s*>\s*</div>')
+
+
+def splice_embeds(html: str, embed_dir: str) -> str:
+    """Replace `<div class="game-embed" data-demo="X">` with blog/embeds/X.html."""
+    def sub(m):
+        path = os.path.join(embed_dir, m.group(1) + ".html")
+        if not os.path.exists(path):
+            raise SystemExit(f"missing embed {path} -- run tools.game_viewer.build_demo")
+        return open(path, encoding="utf-8").read()
+    return EMBED_RE.sub(sub, html)
+
+
 def build(md_path: str, out_path: str) -> str:
     text = open(md_path, encoding="utf-8").read()
     body = render_md(text)
+    body = splice_embeds(body, os.path.join(os.path.dirname(os.path.abspath(md_path)), "embeds"))
     m = re.search(r"^#\s+(.+?)\s*$", text, re.M)
     title = (m.group(1).strip().rstrip(".") if m else "NetHack blog")
     html = TEMPLATE.format(title=title, css=CSS, body=body)

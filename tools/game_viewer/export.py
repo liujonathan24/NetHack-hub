@@ -30,9 +30,12 @@ OBS_CAP = 500000  # obs text per turn; keep it generous but bounded
 # runs even from a bare checkout (falls back to a depth-only estimate).
 def _balrog(dlvl, xp):
     try:
+        # reached_planes/ascended are keyword-only; passing them positionally
+        # raised TypeError and silently dropped every viewer onto the
+        # depth-only fallback below.
         from nethack_harness.prompt.balrog import balrog_progress, balrog_progress_min
-        return round(balrog_progress(dlvl, xp, [], False) * 100, 2), \
-               round(balrog_progress_min(dlvl, xp, [], False) * 100, 2)
+        return round(balrog_progress(dlvl, xp) * 100, 2), \
+               round(balrog_progress_min(dlvl, xp) * 100, 2)
     except Exception:
         return round(min(dlvl, 50) / 50 * 80.68, 2), 0.0
 

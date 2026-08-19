@@ -28,6 +28,19 @@ when step_frames exist) · per-turn keystrokes + step messages · collapsible fu
 reasoning · function-call log with per-call game-clock deltas · per-game
 annotation box · sortable stats table.
 
+## The blog page itself
+- `build_viewers.py` — the standing set of standalone viewers (`blog/all_games.html`,
+  `blog/e7_viewer.html`, …). `--data-root` points at a *backfilled* copy of the
+  outputs (`python -m tools.trace_reasoning <run_dir>` first); `--with-e6` is the
+  blog variant, and the default omits that cell to stay under the 16 MB artifact cap.
+- `build_demo.py` — the small **in-article** embed. Writes a fragment to
+  `blog/embeds/<name>.html` (scoped CSS/JS, no `<html>`), which `build_index.py`
+  splices in wherever `blog/index.md` carries
+  `<div class="game-embed" data-demo="<name>"></div>`. The fragment is committed,
+  so `index.html` rebuilds from checked-in files alone.
+- `build_index.py` — `blog/index.md` → `blog/index.html`. **Re-run after every
+  Markdown edit** so the rendered page never goes stale.
+
 ## Drafting a blog around it
 The exporter runs where the data is (remote); the output is a standalone file you
 edit anywhere. Recommended flow: generate on the remote, commit to a `blog/*`
