@@ -153,3 +153,18 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def prayer_hp_timing(turn_ndjson_path):
+    """Pre-prayer HP at each np_pray (the record's own hp is POST-heal -- reading
+    it reports full HP and inverts the finding; use the PRIOR turn's hp)."""
+    import json
+    recs = [json.loads(l) for l in open(turn_ndjson_path)]
+    out = []
+    for i, r in enumerate(recs):
+        if any(tc.get("name") == "np_pray" for tc in (r.get("tool_calls") or [])):
+            hp = recs[i-1].get("hp") if i > 0 else None
+            mx = recs[i-1].get("max_hp") if i > 0 else None
+            out.append({"pre_hp": hp, "max_hp": mx,
+                        "in_heal_band": bool(hp is not None and mx and (hp < mx/7 or hp < 6))})
+    return out
