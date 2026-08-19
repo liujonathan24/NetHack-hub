@@ -32,9 +32,9 @@ the one with the most rows wins -- the same rule `export.py` uses. A rollout tha
 neither died nor hit the call budget is still in flight and is labelled as such.
 """
 from __future__ import annotations
-import argparse, glob, html, json, os
+import argparse, glob, html, json, os, re
 
-from .export import _balrog
+from .export import _balrog, _reasoning_items
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -124,6 +124,22 @@ def _diff(prev, rows):
     return [[i, row] for i, row in enumerate(rows) if i >= len(prev) or prev[i] != row]
 
 
+MAP_BLOCK = re.compile(r"=== (MAP|SURROUNDINGS)[^\n]*===\n(?:.*?)(?=\n=== |\Z)", re.S)
+
+
+def _obs(r):
+    """The observation the model received, minus the map block.
+
+    The map is already on screen in the ground-truth panel at full size, and it
+    is by far the largest part of the message -- carrying it twice would roughly
+    double the page for no information. Everything else the model was told
+    (feedback, status, inventory, visible features/monsters, messages) is kept.
+    """
+    obs = r.get("rendered_user_message") or ""
+    out = MAP_BLOCK.sub("[map omitted here — it is the screen above]\n\n", obs)
+    return out.strip()
+
+
 def collect_games(data_root, arms, seeds):
     """One entry per rollout: headline stats + per-turn screens (row diffs)."""
     games = []
@@ -148,6 +164,7 @@ def collect_games(data_root, arms, seeds):
                         "hp": r.get("hp"), "mhp": r.get("max_hp"),
                         "dl": r.get("dlvl"), "T": stt.get("time"),
                         "d": _diff(prev, rows),
+                        "o": _obs(r),
                     })
                     prev = rows
                 dlvl = max((r.get("max_dlvl_reached") or 0) for r in recs)
@@ -159,6 +176,9 @@ def collect_games(data_root, arms, seeds):
                     "bal": bal, "dlvl": dlvl, "xl": xl, "died": died,
                     "live": not died and len(recs) < BUDGET,   # still being played
                     "turns": turns,
+                    # aligned by tools/trace_reasoning.py; empty when that
+                    # backfill judged the two channels unalignable
+                    "reasoning": _reasoning_items(recs),
                 })
     return games
 
@@ -170,7 +190,6 @@ GATE_RE = ("[descent check: you are XL ", "Typical successful human runs reach X
 
 def collect_gates(data_root, cell, seeds):
     """Each descent-gate panel, the call that tripped it, and the next call."""
-    import re
     pat = re.compile(r"\[descent check: you are XL (\d+) on Dlvl (\d+)\. "
                      r"Typical successful human runs reach XL (\d+) before leaving this depth\.[^\]]*\]")
     out = []
@@ -230,6 +249,42 @@ CSS_COMMON = """
 .gamedemo .gd-key.gd-now{border-color:var(--gd-accent);color:var(--gd-accent);font-weight:700;}
 """
 
+CSS_GAMES = """
+.gamedemo.gd-wide{width:min(94vw,1180px);margin-left:calc(50% - min(47vw,590px));}
+.gamedemo .gd-grid{display:grid;grid-template-columns:minmax(620px,1.6fr) minmax(270px,1fr);
+  gap:0;align-items:stretch;}
+@media (max-width:900px){.gamedemo .gd-grid{grid-template-columns:1fr;}}
+.gamedemo .gd-col{display:flex;flex-direction:column;min-width:0;}
+.gamedemo .gd-side{border-left:1px solid var(--gd-line);}
+@media (max-width:900px){.gamedemo .gd-side{border-left:0;border-top:1px solid var(--gd-line);}}
+.gamedemo .gd-h{margin:0;padding:.45rem .8rem;border-bottom:1px solid var(--gd-line);
+  font:600 .66rem/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--gd-muted);}
+.gamedemo .gd-h-in{border-bottom:0;padding-bottom:.15rem;}
+.gamedemo .gd-under{border-top:1px solid var(--gd-line);}
+.gamedemo .gd-fn{padding:0 .8rem .35rem;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--gd-ink2);}
+.gamedemo .gd-fn b{color:var(--gd-accent);font-weight:600;}
+.gamedemo .gd-fn .gd-bad{color:#b23a3a;}
+.gamedemo .gd-pane{display:flex;flex-direction:column;min-height:0;flex:1;}
+.gamedemo .gd-pane+.gd-pane{border-top:1px solid var(--gd-line);}
+.gamedemo .gd-reason{overflow-y:auto;max-height:20rem;min-height:8rem;}
+.gamedemo .gd-ritem{padding:.45rem .8rem;border-bottom:1px solid var(--gd-line);
+  font-size:.8rem;line-height:1.5;color:var(--gd-muted);white-space:pre-wrap;
+  word-break:break-word;cursor:pointer;}
+.gamedemo .gd-ritem:hover{background:color-mix(in oklab,var(--gd-accent) 6%,transparent);}
+.gamedemo .gd-ritem.cur{color:var(--gd-ink2);
+  background:color-mix(in oklab,var(--gd-accent) 10%,transparent);
+  border-left:3px solid var(--gd-accent);padding-left:calc(.8rem - 3px);}
+.gamedemo .gd-ritem .gd-rt{display:block;margin-bottom:.15rem;
+  font:.65rem/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--gd-muted);}
+.gamedemo .gd-none{padding:.6rem .8rem;font-size:.78rem;color:var(--gd-muted);font-style:italic;}
+.gamedemo .gd-obs{margin:0;padding:.5rem .8rem;overflow:auto;max-height:20rem;min-height:8rem;
+  font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:var(--gd-ink2);white-space:pre-wrap;word-break:break-word;background:none;}
+"""
+
 CSS_GATES = """
 .gamedemo .gd-gate{border-bottom:1px solid var(--gd-line);padding:.7rem .8rem;
   display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:baseline;}
@@ -259,6 +314,43 @@ FRAGMENT = """<div class="gamedemo" id="{eid}">
   <input type="range" data-role="scrub" min="0" value="0" aria-label="position">
 </div>
 <div class="gd-status" data-role="status"></div>
+<script type="application/json" data-role="data">{data}</script>
+<script>{js}</script>
+</div>
+"""
+
+# The games widget wants more width than the article column: it is laid out
+# edge-to-edge (centred on the column, capped at the viewport) so the 80-column
+# screen and the two text panels can sit side by side.
+FRAGMENT_GAMES = """<div class="gamedemo gd-wide" id="{eid}">
+<style>{css}</style>
+{picks}<div class="gd-grid">
+  <section class="gd-col">
+    <h4 class="gd-h">Ground truth &mdash; engine screen (80&times;24)</h4>
+    <div class="gd-screen"><pre data-role="screen"></pre></div>
+    <div class="gd-bar">
+      <button type="button" data-role="prev" aria-label="previous turn">&#8592;</button>
+      <button type="button" data-role="play" aria-label="play">&#9654;</button>
+      <button type="button" data-role="next" aria-label="next turn">&#8594;</button>
+      <input type="range" data-role="scrub" min="0" value="0" aria-label="LLM turn">
+    </div>
+    <div class="gd-under">
+      <h4 class="gd-h gd-h-in">Function call</h4>
+      <div class="gd-fn" data-role="fn"></div>
+      <div class="gd-status" data-role="status"></div>
+    </div>
+  </section>
+  <section class="gd-col gd-side">
+    <div class="gd-pane">
+      <h4 class="gd-h">Model reasoning</h4>
+      <div class="gd-reason" data-role="reason"></div>
+    </div>
+    <div class="gd-pane">
+      <h4 class="gd-h">Observation received</h4>
+      <pre class="gd-obs" data-role="obs"></pre>
+    </div>
+  </section>
+</div>
 <script type="application/json" data-role="data">{data}</script>
 <script>{js}</script>
 </div>
@@ -411,6 +503,49 @@ __PLAYER__
     pick(first, 1);
   }
 
+  // the reasoning panel is rebuilt per game: one entry per distinct narration,
+  // labelled with the first turn it governs (a plan narrated once then executed
+  // over several silent moves stays lit across them)
+  function buildReasoning(){
+    var host = q("reason"), items = games[G].reasoning || [];
+    host.innerHTML = "";
+    if (!items.length){
+      var p = document.createElement("div");
+      p.className = "gd-none";
+      p.textContent = "No reasoning recovered for this run — the backfill could not "
+        + "align the model's messages to these moves, so nothing is shown rather "
+        + "than the wrong words against the wrong move.";
+      host.appendChild(p);
+      return;
+    }
+    items.forEach(function(it, k){
+      var d = document.createElement("div");
+      d.className = "gd-ritem";
+      var t = document.createElement("span");
+      t.className = "gd-rt";
+      t.textContent = "turn " + (it.turn + 1);
+      var b = document.createElement("span");
+      b.textContent = it.text;
+      d.appendChild(t); d.appendChild(b);
+      d.onclick = function(){ stop(); show(it.turn); };
+      host.appendChild(d);
+    });
+  }
+
+  function markReasoning(turn){
+    var items = games[G].reasoning || [], host = q("reason");
+    if (!items.length) return;
+    var k = 0;
+    for (var j = 0; j < items.length; j++){ if (items[j].turn <= turn) k = j; else break; }
+    Array.prototype.forEach.call(host.children, function(el, n){
+      el.className = "gd-ritem" + (n === k ? " cur" : "");
+    });
+    var cur = host.children[k];
+    if (cur && cur.offsetTop < host.scrollTop ||
+        cur && cur.offsetTop + cur.offsetHeight > host.scrollTop + host.clientHeight)
+      host.scrollTop = cur.offsetTop - 8;
+  }
+
   function pick(seed, run){
     var n = games.findIndex(function(g){
       return g.arm === A && g.seed === seed && g.run === run; });
@@ -428,20 +563,29 @@ __PLAYER__
              false, function(){ stop(); pick(seed, g.run); });
       });
     mark(runHost, run);
+    buildReasoning();
     show(0);
   }
+
+  var esc = function(s){ return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;"); };
 
   function show(n){
     i = Math.max(0, Math.min(LAST(), n));
     var g = games[G], t = g.turns[i];
     screen.textContent = screenAt(i);
     scrub.value = i;
+    // the call made on this turn, in the section under the bars
+    q("fn").innerHTML =
+      "turn <b>" + (i + 1) + "</b>/" + g.turns.length + " \\u2192 <b>" + esc(t.c) +
+      "(" + esc(t.a) + ")</b>" +
+      (t.s && t.s !== "completed"
+        ? ' <span class="gd-bad">' + esc(t.s) + "</span>" : "") +
+      (t.k ? " \\u00b7 keys " + esc(t.k) : " \\u00b7 no keys");
     status.innerHTML =
-      "turn <b>" + (i + 1) + "/" + g.turns.length + "</b> \\u00b7 <b>" + t.c +
-      "(" + t.a + ")</b>" + (t.s === "failed" ? " \\u2192 failed" : "") +
-      (t.k ? " \\u00b7 keys <b>" + t.k + "</b>" : "") +
-      " \\u00b7 HP " + t.hp + "/" + t.mhp + " \\u00b7 Dlvl " + t.dl + " \\u00b7 T " + t.T +
+      "HP " + t.hp + "/" + t.mhp + " \\u00b7 Dlvl " + t.dl + " \\u00b7 game turn " + t.T +
       (g.live ? " \\u00b7 <b>run still in progress</b>" : "");
+    q("obs").textContent = t.o || "(nothing recorded for this turn)";
+    markReasoning(i);
   }
   pickArm(0);
 })();
@@ -472,10 +616,12 @@ def render(name, kind, payload):
     if kind == "gates":
         return render_gates(payload)
     data = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
-    js = (JS_KEYSTROKES if kind == "keystrokes" else JS_GAMES)
-    js = js.replace("__PLAYER__", JS_PLAYER).replace("__EID__", eid)
-    picks = PICKS_ONE if kind == "keystrokes" else PICKS_GAMES
-    return FRAGMENT.format(eid=eid, css=CSS_COMMON, picks=picks, data=data, js=js)
+    if kind == "keystrokes":
+        js = JS_KEYSTROKES.replace("__PLAYER__", JS_PLAYER).replace("__EID__", eid)
+        return FRAGMENT.format(eid=eid, css=CSS_COMMON, picks=PICKS_ONE, data=data, js=js)
+    js = JS_GAMES.replace("__PLAYER__", JS_PLAYER).replace("__EID__", eid)
+    return FRAGMENT_GAMES.format(eid=eid, css=CSS_COMMON + CSS_GAMES,
+                                 picks=PICKS_GAMES, data=data, js=js)
 
 
 def main(argv=None):

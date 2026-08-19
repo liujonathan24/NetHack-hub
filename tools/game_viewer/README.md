@@ -33,6 +33,9 @@ annotation box · sortable stats table.
   `blog/e7_viewer.html`, …). `--data-root` points at a *backfilled* copy of the
   outputs (`python -m tools.trace_reasoning <run_dir>` first); `--with-e6` is the
   blog variant, and the default omits that cell to stay under the 16 MB artifact cap.
+- `build_charts.py` — the in-article charts (`blog/embeds/pace.html`): our seeds
+  against the NLD-NAO human populations, built from `prep_compare.py`'s
+  `compare_data.json`. Static SVG plus a JS crosshair.
 - `build_demo.py` — the small **in-article** embed. Writes a fragment to
   `blog/embeds/<name>.html` (scoped CSS/JS, no `<html>`), which `build_index.py`
   splices in wherever `blog/index.md` carries
