@@ -454,6 +454,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # existing arms stay byte-identical and pay no size cost. Enable per
         # cell via load_environment(record_step_frames=True) / env_args.
         record_step_frames: bool = False,
+        # Append a plain-language "Args:" clause to each published tool's
+        # description so the model doesn't PROBE for arguments at session start
+        # (the MCP inputSchema does not survive transport to Prime Agent's
+        # client). Default off = pinned arms byte-identical; launcher turns it
+        # on for new runs. See helpers._args_clause.
+        describe_args: bool = False,
         # E8a planning injection: soft-gate np_down. "off" (default) | "norm"
         # (human-anchored) | "directive" (imperative). First np_down per dungeon
         # level returns the gate line at zero engine cost; the second proceeds
@@ -492,6 +498,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             record_step_frames = record_step_frames.strip().lower() not in (
                 "false", "0", "no", "off", "")
         self.record_step_frames = bool(record_step_frames)
+        if isinstance(describe_args, str):
+            describe_args = describe_args.strip().lower() not in ("false","0","no","off","")
+        self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
         self._setup_tune = setup_tune
@@ -1252,7 +1261,15 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # E8a descent gate: the FIRST np_down on a given dungeon level returns
         # the norm line at zero engine cost; the second proceeds. Soft gate --
         # agency preserved, the game is never blocked. docs/EXPERIMENT_E8.md.
-        if self.descent_gate in ("norm", "directive") and skill_name == "np_down":
+        # Gate the descent ACTION, not one tool name: np_core has no np_down —
+        # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
+        # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
+        _is_descent = (
+            skill_name == "np_down"
+            or (skill_name == "np_press_key"
+                and str((skill_args or {}).get("key", "")).strip() == ">")
+        )
+        if self.descent_gate in ("norm", "directive") and _is_descent:
             try:
                 st_now = (state["structured_obs"].status or {})
                 dlvl = int(st_now.get("depth") or 1)
@@ -1267,11 +1284,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 if self.descent_gate == "norm":
                     gate = (f"[descent check: you are XL {xl} on Dlvl {dlvl}. "
                             f"Typical successful human runs reach XL {norm} "
-                            f"before leaving this depth. Call np_down again "
-                            f"to descend.]")
+                            f"before leaving this depth. Repeat the call to "
+                            f"descend anyway.]")
                 else:
                     gate = (f"[descent check: level to XL {norm} before moving "
-                            f"on. Call np_down again to descend.]")
+                            f"on. Repeat the call to descend anyway.]")
                 tt = state["_turn_trace"]
                 tt["status"] = "interrupted"
                 tt["feedback"] = gate
@@ -2445,9 +2462,13 @@ def load_environment(
     _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
     rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
+    _describe_args = kwargs.get("describe_args", False)
+    if isinstance(_describe_args, str):
+        _describe_args = _describe_args.strip().lower() not in ("false","0","no","off","")
     if interface == "skill":
         tool_callables = _build_skill_adapter_callables(
-            skill_set=spec.tools.skill_set or kwargs.pop("skill_set", "full")
+            skill_set=spec.tools.skill_set or kwargs.pop("skill_set", "full"),
+            describe_args=bool(_describe_args),
         )
         # Spec-declared extra tools (e.g. CH's run_macro adapter).
         for make_tool in spec.tools.extra_tools:
