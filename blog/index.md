@@ -99,8 +99,28 @@ Despite the poor performance, we see that the model reasons fairly reasonably ab
 4. **Locked doors drain the run (CONTROL of execution).** With no dedicated unlock skill, the model falls back to `np_kick` and simply repeats it — seed 0 kicked the same door four times in a row. Door/kick friction motivated **E8c**, which hands the model a seed-matched dungeon with the doors already unlocked.
 
 
+# Fixing Failure modes
 
+## Short-term Rewards
+We've observed that our LLM over-indexes into descending in the dungeon, but we haven't yet measured its pace against a human. Below, we extract human gameplay data from the NetHack Learning Dataset to plot our models against human gameplay. Notably, we actually descend with the same speed as the top 1-5% of humans! 
 
+<!-- TODO: claude. add plots like in https://claude.ai/code/artifact/772d0d6c-3cfe-4886-8769-5f84876d3b40?org=e8e04b44-e81a-4556-9290-f8103fec7728, comparing the nethack reduced seeds to human gameplay. -->
+
+To mitigate these short-term tendencies, we try to add scaffolding for the model to understand what typical, successful gameplay looks like. Each time the model tries to descend to the next level, we add a new confirmation panel that alerts the model to the average experience level a human would descend at. 
+
+<!-- TODO: claude. Add widget to show confirmation insertion-->
+
+<!-- TODO: claude. Add results and pairwise comparisons on each seed (to original). Also add widget to view these games-->
+
+## Simplifying Path-finding 
+Similarly, X% of tool calls in our initial set of evaluations resulted in no-ops due to navigation errors.<!-- TODO: claude. figure out what x% is --> As a result, we try two simplifications. First, we unlock all the doors, allowing navigation tool calls to go uninterrupted for longer durations; and 2) we rewire the dungeon map generation to create fewer dungeon rooms. 
+
+<!-- TODO: claude. Add results and pairwise comparisons on each seed (to original). Also add widget to view these games-->
+
+## 
+
+# Harness Optimization
+So far, we have only tested the ability to manually customize a harness. However, how well do models do in optimizing for their errors? In other words, is a model able to continually improve its performance by leveraging previous gameplay?
 
 
 
