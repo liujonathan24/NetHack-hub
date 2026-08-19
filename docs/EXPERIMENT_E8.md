@@ -117,3 +117,82 @@ E8b-vs-E8a comparison: prompt-block guidance vs in-loop planning injection.
 1. E8a NORM (the headline experiment: planning injection).
 2. E8b PRAYER (cheapest targeted fix, direct NetPlay comparison).
 3. E8a DIR and E8b STACK (the framing/stacking contrasts).
+
+---
+
+# E8c / E8d — control (doors) and perception (density). Deferred: infinite life.
+
+Run AFTER E8a/E8b. Infinite life (deathless planning probe) is deferred to a
+later round (E8e): the descent gate already probes the planning axis, and a
+deathless cell needs a much larger call budget to reach winning depth (~1,400
+game turns at 200 calls vs ~42,000 for a human win).
+
+## How the two knobs actually work (verified in the engine)
+
+Both are **generation-time**, applied automatically in `mklev.c` every time a
+level is created — set the tune value once in the cell config and every level
+the agent descends into is generated with it. No per-level or per-step work.
+
+- **`locked_door`** (`mklev.c:427`) scales the door-lock chance. The `rn2()`
+  draw is preserved, so the RNG stream is unchanged and **layouts stay
+  byte-identical to the baseline for the same seed** — only whether each door
+  ends up locked vs closed changes. `locked_door <= 0` -> lock modulus 100000
+  -> doors are effectively **never locked**. => E8c is seed-matched to
+  NPCORE_v3; a clean paired A/B.
+- **`room_density`** (`mklev.c:233`) caps room count at
+  `round(room_density * MAXNROFROOMS)`, MAXNROFROOMS = 40. Fewer rooms consume
+  different generation RNG, so the level **regenerates** — NOT seed-matched.
+  Note the cap only bites BELOW NetHack's natural ~6-9 rooms/level, so the
+  meaningful sweep is LOW values: 1.0 (baseline, cap 40, non-binding) ->
+  0.25 (cap 10, ~vanilla) -> 0.1 (cap 4) -> 0.025 (cap 1, one big room).
+
+## E8c — unlock every door (CONTROL)
+
+**Question:** doors are an execution tax (kick sequences, direction prompts,
+approach pathing, the `#`-extended-command trap that killed two NPCORE v1
+seeds). Remove them and does progress improve?
+
+**Cell:** `outputs/e8c_doors/UNLOCKED__prime_agent` — `tune.locked_door=0`,
+everything else byte-identical to NPCORE_v3, seed-matched. Control = NPCORE_v3.
+
+**Readouts:** deaths/5, median bal_max, and specifically the control-error
+budget: `np_kick` calls, door-related failed `np_move_to`, freeze turns from
+kick/direction prompts, `np_press_key('#')` occurrences (the trap). A control
+win shows up as fewer wasted calls per depth, not necessarily a higher ceiling.
+
+## E8d — minimum room density sweep (PERCEPTION, control-mixed)
+
+**Question:** simpler topology = less map to read/model (perception), and also
+mechanically fewer route-execution failures (49 of 58 baseline failures are
+`np_move_to` no-route). With one big room, how far do we get?
+
+**Cells** (5 seeds each, self-controlled within the sweep — NOT seed-matched to
+the baseline; keep out of the baseline table):
+- `outputs/e8d_density/D100__prime_agent` — `room_density=1.0` (in-sweep anchor)
+- `outputs/e8d_density/D025__prime_agent` — `room_density=0.25`
+- `outputs/e8d_density/D010__prime_agent` — `room_density=0.1`
+- `outputs/e8d_density/D0025__prime_agent` — `room_density=0.025` (~one room)
+
+**Readouts:** bal_max vs density (the dose-response), `np_move_to` failure rate
+vs density (isolates the control component — if failures fall but bal_max
+doesn't, the win was mechanical not perceptual), turns-to-first-descent.
+
+## Indexing / no-overwrite
+
+- New dirs `outputs/e8c_doors/` and `outputs/e8d_density/` — nothing touched.
+- E8c seed-matched to NPCORE_v3 (RNG-preserved). E8d self-controlled.
+- Both use only existing engine tune knobs (no new code), so no pins needed
+  beyond the E8 knobs already merged. Full logging (frames + glyph ids) is on
+  by the launcher default.
+- Launch (per cell, with the per-cell daemon clean the E8 driver already does):
+  `ENV_ARGS='{"skill_set":"np_core,request_map,search","auto_dismiss":false,"tune":{"reveal_map":1.0,"locked_door":0}}'`
+  (E8c); swap `locked_door` for `room_density` per E8d cell.
+
+## Category summary (control / perception / planning matrix)
+
+- **Control:** E8c doors; (later) the pursue-until-dead vs single-swing melee A/B.
+- **Planning:** E8a descent gate; (later) E8e infinite life.
+- **Perception:** E8d density (control-mixed — read with the np_move_to-failure
+  covariate); the observation-encoding comparisons (BBOX_MIN / reveal_map) are
+  the cleaner perception axis. A pure perception probe (oracle stairs hint)
+  remains the one open cell if we want the matrix fully square.
