@@ -224,3 +224,30 @@ def test_step_frames_capture_opt_in():
     with TurnRecorder(env) as rec2:   # default off
         env.step(ord("h"))
     assert rec2.frames == []
+
+
+def test_e8_knobs_default_off():
+    """descent_gate/mechanic_hints default off: existing arms byte-identical."""
+    import inspect
+    import nethack as nethack_mod
+    sig = inspect.signature(nethack_mod.NetHackVerifiersEnv.__init__)
+    assert sig.parameters["descent_gate"].default == "off"
+    assert sig.parameters["mechanic_hints"].default == ""
+
+
+def test_e8_norm_lookup():
+    from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+    # leaving Dlvl d uses arrival norm of d+1 (NAO ascended medians)
+    assert norm_xl_for_leaving(1) == 1   # arrive Dl2 at XL1
+    assert norm_xl_for_leaving(4) == 3   # arrive Dl5 at XL3
+    assert norm_xl_for_leaving(6) == 5   # arrive Dl7 at XL5
+    assert norm_xl_for_leaving(30) == 11  # beyond table -> nearest lower
+
+
+def test_e8_mechanic_hint_blocks():
+    from nethack_harness.prompt.human_norms import MECHANIC_HINT_BLOCKS
+    assert "1/7" in MECHANIC_HINT_BLOCKS["prayer"]
+    assert "experience level" in MECHANIC_HINT_BLOCKS["descend_pacing"]
+    # prompt-only: block text must never mention tool schemas
+    for b in MECHANIC_HINT_BLOCKS.values():
+        assert "parameters" not in b

@@ -454,6 +454,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # existing arms stay byte-identical and pay no size cost. Enable per
         # cell via load_environment(record_step_frames=True) / env_args.
         record_step_frames: bool = False,
+        # E8a planning injection: soft-gate np_down. "off" (default) | "norm"
+        # (human-anchored) | "directive" (imperative). First np_down per dungeon
+        # level returns the gate line at zero engine cost; the second proceeds
+        # unconditionally. docs/EXPERIMENT_E8.md.
+        descent_gate: str = "off",
+        # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
+        # "descend_pacing"). Prompt-only; published tool schemas untouched.
+        mechanic_hints: str = "",
         # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
         # setup_state the turn file for this rollout's seed is replayed
         # byte-for-byte through the freshly seeded engine, so the agent starts
@@ -484,6 +492,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             record_step_frames = record_step_frames.strip().lower() not in (
                 "false", "0", "no", "off", "")
         self.record_step_frames = bool(record_step_frames)
+        self.descent_gate = str(descent_gate or "off").strip().lower()
+        self.mechanic_hints = str(mechanic_hints or "").strip().lower()
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -1239,6 +1249,36 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # open (dtime 96) and on the call that found the stairs. So capture the
         # signature and the pre-action clock now, and judge after the engine has
         # actually stepped (see the post-step block below).
+        # E8a descent gate: the FIRST np_down on a given dungeon level returns
+        # the norm line at zero engine cost; the second proceeds. Soft gate --
+        # agency preserved, the game is never blocked. docs/EXPERIMENT_E8.md.
+        if self.descent_gate in ("norm", "directive") and skill_name == "np_down":
+            try:
+                st_now = (state["structured_obs"].status or {})
+                dlvl = int(st_now.get("depth") or 1)
+                xl = int(st_now.get("experience_level") or 1)
+            except Exception:
+                dlvl, xl = 1, 1
+            ack = state.setdefault("_descent_gate_ack", set())
+            if dlvl not in ack:
+                ack.add(dlvl)
+                from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+                norm = norm_xl_for_leaving(dlvl)
+                if self.descent_gate == "norm":
+                    gate = (f"[descent check: you are XL {xl} on Dlvl {dlvl}. "
+                            f"Typical successful human runs reach XL {norm} "
+                            f"before leaving this depth. Call np_down again "
+                            f"to descend.]")
+                else:
+                    gate = (f"[descent check: level to XL {norm} before moving "
+                            f"on. Call np_down again to descend.]")
+                tt = state["_turn_trace"]
+                tt["status"] = "interrupted"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+
         state["_sig_now"] = (skill_name, repr(sorted(skill_args.items())))
         try:
             state["_gt_before"] = (state["structured_obs"].status or {}).get("time")
@@ -2447,6 +2487,17 @@ def load_environment(
                 spec,
                 system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
             )
+    # E8b mechanic guidance: append system-prompt blocks only (published tool
+    # schemas untouched). Default "" leaves every existing arm byte-identical.
+    _hints = str(kwargs.get("mechanic_hints") or "").strip().lower()
+    if _hints:
+        from nethack_harness.prompt.human_norms import MECHANIC_HINT_BLOCKS
+        _blocks = [MECHANIC_HINT_BLOCKS[h.strip()] for h in _hints.split(",")
+                   if h.strip() in MECHANIC_HINT_BLOCKS]
+        if _blocks:
+            spec = _dc.replace(
+                spec, system_prompt=spec.system_prompt + "\n\n" + "\n\n".join(_blocks))
+
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,
