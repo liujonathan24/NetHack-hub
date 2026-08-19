@@ -23,7 +23,7 @@ import argparse, glob, json, os, re, sys
 CALL_RE = re.compile(r"nethack\.([a-z_0-9]+)\s*\(")
 MAP_TOOLS = {"reveal", "request_map"}
 HERE = os.path.dirname(os.path.abspath(__file__))
-OBS_CAP = 5000  # obs text per turn; keep it generous but bounded
+OBS_CAP = 500000  # obs text per turn; keep it generous but bounded
 
 # balrog table is vendored in the env package; import lazily so the exporter
 # runs even from a bare checkout (falls back to a depth-only estimate).
