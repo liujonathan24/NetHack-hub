@@ -26,10 +26,53 @@ LLMs have been most famously introduced to NetHack in the BALROG paper. BALROG i
 # Initial Agent Harness 
 BALROG used fixed horizon and full action and full observation descriptions, with no active memory, as well as NetHack actions at a single action granularity. However, much progress over in RL for both games and for agents has been made by changing this basic setup. Encoding manipulations, full horizon with compaction, and action chunking via skills are now de facto settings for the most capable agents. As a result, we design a basic setup based on a previous paper, NetPlay, that retains the expressiveness of the original keys while also saving time up to 50 actions per LLM tool call. 
 
-<!-- TODO: claude. Show the table of NetPlay reduced actions v3 and how each skill works. Also add a table of nethack actions and what they do.-->
+The reduced surface we call **np_core** exposes eight skills — the narrow, individually-debugged core of NetPlay's action layer. Each skill is a small program over the raw NetHack keys: `np_move_to`, for instance, runs A\* to a target tile and emits the whole run of movement keys in a single tool call. Anything not covered by a dedicated skill (eating, quaffing, wielding, answering a menu) is reachable through `np_press_key`, which answers NetHack's own prompts.
+
+**np_core skills (reduced actions v3)**
+
+| Skill | Arguments | What it does |
+|---|---|---|
+| `np_explore_level` | *(none)* | Auto-explores the level to reveal new rooms, corridors, and hidden doors; opens up to four doors it encounters. |
+| `np_move_to` | `x`, `y` | Pathfinds (A\*) to tile `(x, y)`, emitting the full sequence of movement keys. |
+| `np_melee_attack` | `x`, `y` | Pursues the monster at `(x, y)` and attacks it in melee until it is dead. |
+| `np_kick` | `x`, `y` | Steps adjacent to `(x, y)` and kicks toward it (e.g. to force a locked door). |
+| `np_press_key` | `key` | Presses a single key — answers NetHack's own prompts and menus (any letter, plus ESC/SPACE/ENTER). |
+| `np_apply` | `item_letter` *(optional)* | Applies (uses) a tool from the inventory. |
+| `np_rest` | `count` *(optional, default 5)* | Waits in place for `count` turns, or until something happens. |
+| `np_pray` | *(none)* | Prays to your god for help, auto-confirming the "Are you sure?" prompt. |
+
+Under the skills sit the raw NetHack action classes they compose. A single `np_move_to` might expand into a dozen movement keys; `np_kick` into a kick command plus a direction; `np_pray` into the extended `#pray` command plus a `y`.
+
+**Raw NetHack actions the skills compose**
+
+| Raw action | Keys | What it does |
+|---|---|---|
+| Move | `h j k l` / `y u b n` | One step W/S/N/E, and the four diagonals; skills chain these into paths. |
+| Melee | move into a monster | Walking into an adjacent hostile swings your wielded weapon. |
+| Kick | `Ctrl-D` + direction | Kick in a direction — break down doors, etc. |
+| Open | `o` + direction | Open an adjacent door. |
+| Search | `s` | Search adjacent tiles for hidden doors and traps. |
+| Apply | `a` + item | Use a tool from the inventory. |
+| Pray | `#pray` | Pray to your god (a last-ditch rescue). |
+| Wait | `.` | Do nothing for one turn (rest / heal). |
+| Key press | any key | Answer a prompt/menu or issue any raw NetHack command. |
 
 
-Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task.} <!-- TODO: claude. Navigate from 1 room to another with netplay skills and show the number of moves on the left side. Should be one viewer with two rows of actions below one w/ skills, other with nethack letters-->
+Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task. This is the opening of NPCORE_v3 seed 0: the Valkyrie leaves her spawn room and works across the level toward the downstairs. Three `np_move_to` calls expand into **29 raw NetHack keystrokes** — a ~10× reduction in tool calls, and the model never has to spell out a single movement key.
+
+| # | Skill call (what the model emits) | Raw NetHack keys (what the engine runs) | Keys |
+|---|---|---|---|
+| 1 | `np_move_to(x=3, y=5)` | `k` | 1 |
+| 2 | `np_move_to(x=15, y=9)` | `llllllllnnnn` | 12 |
+| 3 | `np_move_to(x=27, y=10)` | `hbnllllulullllln` | 16 |
+| | **3 skill calls** | | **29 keys** |
+
+<div style="font-family:monospace;font-size:0.9em;border:1px solid #ccc;border-radius:6px;padding:0.6em 0.8em;overflow-x:auto;">
+<div><strong>skills&nbsp;→</strong>&nbsp; np_move_to(3,5) &nbsp;·&nbsp; np_move_to(15,9) &nbsp;·&nbsp; np_move_to(27,10) &nbsp;&nbsp;<em>(3 calls)</em></div>
+<div><strong>keys&nbsp;&nbsp;&nbsp;→</strong>&nbsp; k &nbsp;·&nbsp; l l l l l l l l n n n n &nbsp;·&nbsp; h b n l l l l u l u l l l l l n &nbsp;&nbsp;<em>(29 keys)</em></div>
+</div>
+
+(Keys are vi-style: `h j k l` step W/S/N/E and `y u b n` the diagonals, so `np_move_to` is turning a target tile into the walk that reaches it.)
 
 Specifically, the attribute that we deem important are expressivity. One common case is doing an action will prompt the game to ask the user for a confirmation, for example, whether to attack an enemy or not. We find that these are essential to the game due to innate mechanics based on navigation. For example, oftentimes, if a user is running past a monster, they will automatically try to attack it. However, this may not be the model's intention, so if this ever occurs in one of our skills, we break from the skill and the confirmation message is displayed to the model.
 
@@ -38,12 +81,22 @@ With this setup, we create a custom port of NetHack 3.6.7 that enables flexibili
 
 TODO (Seth): Do I need justification here for why we don't have results without full visibility?
 
-On our initial harness, we see high variance in results with an overall median of X and an average of Y BALROG score. 
-<!-- TODO: Claude. Insert results (X and Y) and the table of results and the html widget to view games with the NetHack-->
+On our initial harness, we see high variance in results with an overall median of **3.54** and an average of **4.93** BALROG score across the three tool-surface variants (NPCORE_v3, NPCORE_v2, NPFULL; 15 games in all). Every score reported here is the real BALROG progression metric (the max over the dungeon-level and experience-level percentiles), reported ×100 as a 0–100%.
+
+| Cell | Median BALROG | Mean BALROG | Deaths | Max Dlvl | Max XL |
+|---|---|---|---|---|---|
+| NPCORE_v3 | 2.12 | 3.06 | 5/5 | 7 | 3 |
+| NPCORE_v2 | 4.85 | 5.75 | 4/5 | 10 | 5 |
+| NPFULL | 3.54 | 5.96 | 5/5 | 11 | 5 |
+| **All 15 games** | **3.54** | **4.93** | **14/15** | **11** | **5** |
+
+The best single game reached only dungeon level 11 (BALROG 16.13); 14 of 15 rollouts died, and the median run barely cleared the first few levels. The full move-by-move archive is in `e7_viewer.html` (open in a browser; no server needed).
 
 Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues: 
-1. All seeds reach higher dungeon levels than experience levels
-2. <!-- TODO: Claude. Insert our observations that led to new experiments -->
+1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in all 15 games (e.g. NPFULL seed 3 reached Dlvl 6 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the **E8a descent gate**, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
+2. **Reasoning is accurate but inert (PLANNING).** The model narrates the game well — it names monsters, judges which are safe to fight, identifies items, and even times prayer correctly (3 of 4 control prayers fired at critical HP) — yet this reasoning rarely changes the policy it then executes. That gap between good narration and unchanged behavior is the central question of the **E8 "does telling the model help?"** experiments (E8a descent gate, E8b prayer hint).
+3. **Pathfinding stalls on dense maps (CONTROL/PERCEPTION).** When `np_move_to` cannot find a route it returns having moved nothing, and the model re-issues the same target instead of re-planning — NPCORE_v3 seed 0 alone aimed `np_move_to(57,13)` at the downstairs nine times, three of them advancing zero squares. This route-failure mode motivated the **E8d density sweep**, which thins the map to separate route-finding from decision-making.
+4. **Locked doors drain the run (CONTROL of execution).** With no dedicated unlock skill, the model falls back to `np_kick` and simply repeats it — seed 0 kicked the same door four times in a row. Door/kick friction motivated **E8c**, which hands the model a seed-matched dungeon with the doors already unlocked.
 
 
 
