@@ -65,26 +65,63 @@ launch rollouts.
   sessions at it (`:570`), so "nothing here reads or writes the operator's
   `~/.prime/agent`" (module docstring).
 
-### 1.4 The native continual harness does not carry across episodes *as configured*
+### 1.4 The native continual harness — inert by default, and how it is switched on
 
 Prime Agent ships exactly the mechanism E10 wants: `rlm.harness.create_skill /
 update_skill / delete_skill / create_memory / create_prompt_note /
-create_subagent`, plus `refine.run()`, persisting prompt notes, memories,
-reusable skill descriptions and sub-agent specs, rendered back into the system
-prompt at session start (`docs/rlm-runtime.md` §Continual Harness State). Under
-this harness it is inert across episodes:
+create_subagent`, persisting prompt notes, memories, reusable skill descriptions
+and sub-agent specs, and rendering them into the system prompt of every new
+session — `buildSystemPrompt` is called with `harnessState:
+_loadMergedHarnessState()`, which is
+`mergeHarnessStates(loadHarnessState(getGlobalHarnessStateDir(), "global"), local)`.
+So a global entry written by one game is in the next game's system prompt.
 
-- *Local* harness state lives in session artifacts — and the arm runs
-  `--no-session` (`:597`), so there are none. ("Local harness refinement requires
-  a persisted session.")
-- *Global* harness state lives at `<agentDir>/harness/harness_state.json`, and
-  `agentDir` is the **per-rollout** `agent-{trace.id}`. So "global" is per-game.
+Under this harness it is inert, for two independent reasons:
 
-Pointing the agent dir at a shared path would fix that and simultaneously share
-the daemon supervisor state across rollouts — which is precisely the wedge that
-`run_e9.sh`'s reset recipe exists to clear. **Do not do this for E10.** Use the
-explicit file carrier instead; revisit `refine` only as a later variant, with
-its own control.
+- *Local* state lives in session artifacts, and the arm runs `--no-session`
+  (`__init__.py:597`) — so there are none. `rlm.harness` says so itself: "Use
+  get_harness_state(global_=True) for global state."
+- *Global* state lives at `<agentDir>/harness/`, and `agentDir` is the
+  **per-rollout** `agent-{trace.id}`. "Global" is really "per game".
+
+**The fix is one symlink.** `getGlobalHarnessStateDir()` is
+`join(agentDir, "harness")` with no env override of its own, and the kernel is
+handed that same path as `RLM_GLOBAL_HARNESS_STATE_DIR` (`rlm/harness.py:80`).
+So linking `agent-<id>/harness` → a shared directory redirects both the host and
+the kernel, and **only** the harness state: `settings.json`, `models.json` and
+`auth.json` stay per-rollout, which they must — seeds run concurrently and each
+carries its own MCP URL and interception secret, so sharing the whole agent
+directory would race five rollouts onto one settings file and point agents at
+each other's games. That is `harness.continual_harness_dir` (default `""`, which
+leaves every existing arm byte-identical).
+
+The store must live under `install_dir`: the sandbox binds that path and little
+else, so a store outside it would leave the symlink dangling and every rollout
+would start empty — which reads exactly like "the agent learned nothing". The
+harness refuses to launch in that case rather than producing that result.
+
+**What this does not switch on.** `_autoRefineAllowedForSession()` returns
+`this._rlmDepth === 0 && this._localHarnessStateDir() !== undefined`, so under
+`--no-session` automatic refinement never fires — and auto-refine writes *local*
+entries anyway ("Only create/update/delete local harness entries"). Entries reach
+the shared store only through an explicit `global_=True` call. For an experiment
+that is a feature: every write is deliberate and attributable, not a background
+process editing the arm mid-cell.
+
+**Verified round-trip** (kernel venv, no prime-agent process): `create_memory`,
+`create_skill`, `create_prompt_note` and `delete_memory` against
+`RLM_GLOBAL_HARNESS_STATE_DIR` all persist to `harness_state.json` and are read
+back by a second process. `create_skill` is validated — it requires
+`reference={"type": "python", "import": ..., "callable"|"call_pattern": ...}` and
+raises otherwise.
+
+**The render budget is the real cap.** `formatHarnessStateForPrompt` shows at
+most `DEFAULT_OVERVIEW_ENTRY_LIMIT = 6` entries **per kind**, each compacted to
+`DEFAULT_OVERVIEW_CONTENT_LIMIT = 180` characters, plus the 5 most recent
+refinement events. Everything past that is invisible to the player. So the
+"delete something before you add something" pressure that makes §3.2 an actual
+research question is enforced by the scaffold, not by us — we only have to hold
+the orchestrator to it.
 
 ### 1.5 The orchestrator must not be resident during a cell
 
@@ -101,15 +138,22 @@ each round is a feature, not a limitation.
 
 ```
 round r:
-  [orchestrator]  one `prime-agent --print` process, own kernel
-       reads   outputs/e10/round<r-1>/**/turns/*.ndjson + traces.jsonl
-       writes  playbooks/v<r>.md   (token-capped, see §3.2)
-       writes  playbooks/v<r>.rationale.json  (what changed and why)
-  [daemon reset]  the run_e9.sh recipe
-  [train cell]    launch_cell.sh prime_agent outputs/e10/round<r>/train ... playbook=v<r>
   [daemon reset]
-  [eval cell]     launch_cell.sh prime_agent outputs/e10/round<r>/eval  ... playbook=v<r>
+  [orchestrator]  one `prime-agent --print` process, private agent dir whose
+                  `harness` symlinks to the shared store
+       reads   outputs/e10/round<r-1>/train__prime_agent/{turns/*.ndjson,traces.jsonl}
+       writes  the store, via rlm.harness.{create,update,delete}_*(global_=True)
+       writes  outputs/e10/round<r>/orchestrator_rationale.json
+  [daemon reset]
+  [train cell]    CONTINUAL_HARNESS=<store> launch_cell.sh prime_agent .../train  (seeds 0-4)
+  [daemon reset]
+  [eval  cell]    CONTINUAL_HARNESS=<store> launch_cell.sh prime_agent .../eval   (seeds 5-9)
 ```
+
+`run_e10.sh` drives this; `e10_orchestrate.sh` is the orchestrator step. Each
+cell snapshots the store before and after itself (contents + sha256) and warns
+when a store we believe is read-only changed under it.
+
 
 Cells sequential, seeds concurrent within a cell, daemon reset before each —
 the E8/E9 pattern. `run_e10.sh` is modelled on `run_e9.sh`.
@@ -128,42 +172,43 @@ vs. a fixed script, on identical rails.
 
 ## 3. The learning carrier
 
-### 3.1 Primary: `playbook` env knob (guaranteed delivery)
+### 3.1 Primary: the shared continual-harness store
 
-A one-knob ctor param on `NetHackEnv`, mirroring `descent_gate` / `reflect` /
-`mechanic_hints`:
+`CONTINUAL_HARNESS=/tmp/vf-prime-agent/continual-harness/e10` on
+`launch_cell.sh` (prime_agent only). Every rollout in the cell boots with the
+accumulated entries rendered into its system prompt; the orchestrator edits them
+between cells. **No change to `nethack.py`, no new env knob, no published tool
+schema touched** — the learning lives entirely in Prime Agent's own store.
 
-```python
-playbook: str = ""          # path to a markdown file; "" = off, byte-identical
-```
+Preferring this over a hand-written playbook file is not just economy. The store
+is typed (memory / skill / prompt_note / subagent), versioned per entry, carries
+an id the orchestrator can update or delete by name, and is rendered by the
+scaffold in a fixed budget — so "add the right skills, remove the wrong ones" is
+a first-class operation with an audit trail, not prose editing.
 
-parsed with the string-coercion pattern (env_args arrive as strings), a no-op
-when empty, with the block appended to the system prompt through a new
-`nethack_harness/prompt/playbook.py` (like `reflection.py` / `human_norms.py`).
-Passed as `ENV_ARGS={"...","playbook":"/root/nld/e10/playbooks/v2.md"}`. **No
-published tool schema changes** — prompt-side only, per the frozen-tool-surface
-rule.
+### 3.2 Single-writer by default
 
-Why primary: delivery is guaranteed, so the experiment measures *whether the
-lessons are good*, not whether the player happened to retrieve them.
+`continual_harness_writable = false` (the default) re-binds the store read-only
+inside the sandbox, on top of the read-write `install_dir` bind. Players read;
+only the orchestrator writes. That keeps each cell reproducible from the snapshot
+taken before it ran, and stops five concurrent seeds racing one JSON file
+(writes are last-write-wins).
 
-### 3.2 Token cap — the part that makes "remove the wrong skills" real
+`CONTINUAL_HARNESS_WRITABLE=1` is the **self-directed variant**: the player
+itself decides what to persist mid-game, via `rlm.harness.create_memory(...,
+global_=True)`. That is a genuinely different and more interesting experiment —
+online, in-episode learning rather than between-round curation — but it is
+shared mutable state across concurrent seeds, so run it with `MAX_CONCURRENT=1`
+and expect the cell to change what later cells read. Treat it as a follow-up
+arm, after the curated version establishes there is signal.
 
-The playbook is capped (proposal: **1500 tokens**, enforced by the launcher,
-which refuses to launch an over-budget playbook). Without a cap, "learning" is
-indistinguishable from "the prompt got longer every round", and the orchestrator
-is never forced to delete anything. With a cap, adding a lesson *requires*
-evicting one — which is the actual research question.
+### 3.3 Alternative carrier, kept in reserve
 
-### 3.3 Secondary: `SKILL.md` in the shared skills dir (agentic retrieval)
-
-Write `/tmp/vf-prime-agent/skills/e10_playbook/SKILL.md`; every later rollout
-discovers it at process start, no code change (§1.3). This tests something
-different and harder: whether the player *retrieves* the right lesson at the
-right time, at zero context cost when unused. Run it as a later arm, after the
-primary carrier establishes there is any signal to retrieve.
-
----
+`/tmp/vf-prime-agent/skills/<name>/SKILL.md` is discovered by every later rollout
+with zero code change (§1.3), and tests something harder: whether the player
+*retrieves* the right lesson, at zero context cost when unused. The
+continual-harness store is always in context; a skill file is only read if the
+agent decides to. Run this after the primary carrier, as a retrieval arm.
 
 ## 4. Protocol
 
@@ -178,8 +223,8 @@ Report both, never merge them.
   are not shown to it — enforce by path, the orchestrator is only given
   `round<r>/train`.
 
-Held-out seeds have no baseline yet: **round 0 must run a no-playbook control on
-seeds 5–9** (≥3 reps, for the null band) before any playbook is applied there.
+Held-out seeds have no baseline yet: **round 0 must run a no-harness control on
+seeds 5–9** (≥3 reps, for the null band) before any entry is written.
 
 ### 4.2 Rounds and arms
 
@@ -187,13 +232,13 @@ seeds 5–9** (≥3 reps, for the null band) before any playbook is applied ther
 |---|---|---|---|
 | `R0_train_ctl` | none | 0–4 | trace corpus for v1 (reuse E9 control reps where byte-identical) |
 | `R0_eval_ctl` | none | 5–9, 3 reps | **held-out baseline + null band** |
-| `R<r>_train` | `v<r>` | 0–4 | next corpus, and the memorisation curve |
-| `R<r>_eval` | `v<r>` | 5–9 | **the headline curve** |
-| `LEN_ctl` | length-matched filler | 5–9 | controls for "any extra prompt text helps" |
-| `FROZEN_v1` | `v1`, never updated | 5–9 | does *iteration* buy anything past round 1? |
+| `R<r>_train` | store after round r | 0–4 | next corpus, and the memorisation curve |
+| `R<r>_eval` | store after round r | 5–9 | **the headline curve** |
+| `LEN_ctl` | 6 length-matched non-actionable entries | 5–9 | controls for "any extra prompt text helps" |
+| `FROZEN_v1` | store after round 1, frozen | 5–9 | does *iteration* buy anything past round 1? |
 
-`LEN_ctl` filler = same token count of on-topic but non-actionable text (e.g.
-wiki prose). This is the control that most cheap "the agent learned!" results
+`LEN_ctl` filler = the same entry count and content length of on-topic but
+non-actionable text (e.g. wiki prose), so the render budget is identically full. This is the control that most cheap "the agent learned!" results
 fail.
 
 Optional `ANTI` arm (deliberately inverted lessons) if `LEN_ctl` comes out
@@ -212,7 +257,7 @@ Do not commit Stage 1 budget before Stage 0's null band is measured.
 
 ## 5. Metrics and decision rules
 
-The headline is **cost per unit progress**, not raw cost. A playbook adds prompt
+The headline is **cost per unit progress**, not raw cost. The store adds prompt
 tokens on every turn, so `$/rollout` can rise while the agent gets strictly
 better; and `$/rollout` can fall simply because the agent died sooner.
 
@@ -223,7 +268,7 @@ Primary endpoints, all already produced by `tools/cli_harness_eval/aggregate.py`
    over completers only.
 2. `max_dlvl` at fixed 200 calls — did the ceiling move.
 3. `rollout_cost` (`PRICE_TABLE_GLM_5_2`) per rollout **and** per dlvl reached.
-4. Death rate and `post_death_drain` — a playbook that trades survival for depth
+4. Death rate and `post_death_drain` — a store that trades survival for depth
    should be visible, not hidden inside a mean.
 
 **Null band:** within-seed variance across ≥3 reps of the *same* cell (game seed
@@ -232,26 +277,31 @@ inside that band is not a result.
 
 **Ratchet (this is what "remove the wrong skills" means operationally):** keep
 `v<r+1>` only if held-out performance does not regress beyond the null band;
-otherwise roll back to `v<r>` and require the orchestrator to propose a different
-edit. Record every accepted/rejected edit in `v<r>.rationale.json` so the final
-playbook is auditable line-by-line against the round that introduced each line.
+otherwise restore the previous round's snapshot and require the orchestrator to
+propose a different edit. Every edit is already recorded twice — in the store's
+per-entry version and in `orchestrator_rationale.json` — so the final store is
+auditable entry-by-entry against the round and the evidence that introduced it.
 
 ---
 
 ## 6. Hazards
 
-- **Cross-cell contamination.** `/tmp/vf-prime-agent/skills` persists across
-  cells *and across experiments*. A control cell run after an E10 cell would
-  silently inherit a learned skill. `run_e10.sh` must wipe/restore that directory
-  around every cell, and every cell manifest must record a hash of the skills
-  dir and the playbook file.
-- **Player self-writes.** The sandbox binds `install_dir` **read-write**, so a
-  *player* can write into the skills dir that later rollouts read — an
-  uncontrolled learning channel, and the same class of failure as the zombie-seed
-  incident. Hash the dir before and after every rollout and fail the cell on an
-  unexpected change.
+- **Cross-cell contamination.** The store lives under `install_dir`, which
+  persists across cells *and across experiments* and has no teardown. A control
+  cell run after an E10 cell would silently inherit the learned entries — and
+  because `CONTINUAL_HARNESS` is opt-in, that only happens if the operator sets
+  it, which is the point of making it an explicit variable rather than a default
+  path. Every cell still snapshots the store before and after itself, so a cell
+  that ran against a store it should not have is detectable after the fact.
+- **Player self-writes.** Enforced away by default: the store is re-bound
+  read-only inside the sandbox (later, narrower bwrap bind wins over the
+  read-write `install_dir` bind), so a player physically cannot edit what later
+  rollouts read. `run_e10.sh` still hashes before/after and warns on a change,
+  because with `sandbox = false` nothing is enforced and the flag becomes a
+  declaration of intent. This is the same class of failure as the zombie-seed
+  incident, so it gets a mount, not a promise.
 - **Orchestrator reward hacking.** It reads traces and writes the prompt; the
-  cheapest "improvement" is a playbook that games the metric (e.g. dive
+  cheapest "improvement" is an entry that games the metric (e.g. dive
   recklessly to raise `max_dlvl` while dying at turn 40). The death-rate and
   cost-per-dlvl endpoints exist to catch that; do not drop them.
 - **Daemon.** Reset before every cell; never run the orchestrator while a cell is
@@ -262,20 +312,36 @@ playbook is auditable line-by-line against the round that introduced each line.
 
 ## 7. Build order
 
-1. `playbook` knob + `nethack_harness/prompt/playbook.py` (+ test: off ⇒
-   byte-identical prompt; on ⇒ block appended; over-cap ⇒ refuses).
-2. `tools/cli_harness_eval/run_e10.sh` — modelled on `run_e9.sh`, plus the
-   skills-dir wipe/hash and the playbook token-cap check.
-3. Orchestrator prompt + `tools/e10_orchestrate.sh` (one `prime-agent --print`
-   per round, given only `round<r>/train`).
-4. Stage 0 pilot.
-5. Commit as `Jonathan Liu <jl0796@princeton.edu>`.
+1. **Done.** `harness.continual_harness_dir` / `continual_harness_writable` on
+   `PrimeAgentHarness`: symlink `agent-<id>/harness` at the shared store, refuse
+   a store the sandbox would not bind, re-bind read-only unless the writable flag
+   is set. 7 tests in `tests/test_prime_agent_harness.py` (35 pass), covering the
+   byte-identical default, the link name, per-rollout file isolation, both bind
+   modes, the refusal, and the containment check.
+2. **Done.** `CONTINUAL_HARNESS` / `CONTINUAL_HARNESS_WRITABLE` passthrough in
+   `launch_cell.sh`, arm-guarded to `prime_agent`.
+3. **Done.** `tools/cli_harness_eval/run_e10.sh` — round loop, daemon reset per
+   cell, before/after store snapshots with hashes and a warning when a supposedly
+   read-only store changed, held-out seeds pinned through `ENV_ARGS`.
+4. **Done.** `tools/cli_harness_eval/e10_orchestrate.sh` — one `prime-agent
+   --print` per round against a private agent dir whose `harness` links to the
+   shared store, with the render budget and the skill-reference contract in its
+   prompt.
+5. **Not started, blocked on E9.** Smoke: one `--print` orchestrator run against
+   an existing E8/E9 output dir, then a 1-seed cell, checking the store is
+   non-empty and its entries appear in the player's prompt.
+6. Stage 0 pilot (§4.3), then commit as
+   `Jonathan Liu <jl0796@princeton.edu>`.
 
 ## 8. Open decisions
 
 - Held-out pool costs roughly double. Confirm the budget before Stage 1.
-- Whether the orchestrator may edit *only* the playbook, or also propose env-knob
-  settings (e.g. turn `reflect` on). The latter is a bigger claim ("it tunes its
-  own harness") and a much larger search space; recommend playbook-only for E10.
+- Whether the orchestrator may edit *only* the harness store, or also propose
+  env-knob settings (e.g. turn `reflect` on). The latter is a bigger claim ("it
+  tunes its own harness") and a much larger search space; recommend
+  store-only for E10.
+- Whether to run the self-directed (`CONTINUAL_HARNESS_WRITABLE=1`) arm at all in
+  E10, or hold it for E11. It answers a different question — in-episode vs.
+  between-round learning — and it forfeits single-writer reproducibility.
 - Whether to also run the seed-matched (memorisation) arm as a headline result
   rather than a diagnostic.

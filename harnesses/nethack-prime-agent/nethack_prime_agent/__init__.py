@@ -88,6 +88,18 @@ _NO_BATCH_RULE = (
 )
 
 
+def _within(path: str, root: str) -> bool:
+    """Whether `path` is `root` or lives under it, after normalisation.
+
+    Used to refuse a shared continual-harness store the sandbox would not bind.
+    String-prefix comparison would accept `/tmp/vf-prime-agent-other`; this does
+    not.
+    """
+    p = os.path.normpath(os.path.abspath(path))
+    r = os.path.normpath(os.path.abspath(root))
+    return p == r or p.startswith(r + os.sep)
+
+
 def _strip_no_batch_rule(data: bytes) -> bytes:
     """Remove the no-batching instruction from SKILL.md (see `allow_batching`).
 
@@ -138,6 +150,58 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     """Load Prime Agent's bundled `websearch` skill. Off by default: the control
     arm and the Claude Code arm both run without web access, and a live search
     tool would not be capability-matched."""
+
+    continual_harness_dir: str = ""
+    """Share Prime Agent's GLOBAL continual-harness store across rollouts (E10).
+
+    Prime Agent persists prompt notes, memories, reusable skill descriptions and
+    sub-agent specs in a "continual harness" state file, and renders them into
+    the system prompt of every new session (`formatHarnessStateForPrompt`, called
+    from the base-prompt builder with `harnessState: _loadMergedHarnessState()`).
+    That is exactly the cross-episode learning channel E10 needs -- but it is
+    inert under this harness, for two independent reasons:
+
+      * LOCAL state lives in session artifacts, and this arm runs `--no-session`.
+      * GLOBAL state lives at `<agentDir>/harness/`, and `agentDir` here is the
+        PER-ROLLOUT `agent-<trace id>` (see `PRIME_AGENT_CODING_AGENT_DIR`
+        below), so "global" is really "per game".
+
+    Setting this to a directory makes `<agent_dir>/harness` a SYMLINK to it, so
+    every rollout reads and (if `continual_harness_writable`) writes one shared
+    store. Only the harness state is shared: `settings.json`, `models.json` and
+    `auth.json` stay per-rollout, which they must -- seeds run CONCURRENTLY and
+    each carries its own MCP URL and interception secret, so sharing the whole
+    agent directory would race five rollouts onto one settings file and point
+    agents at each other's games.
+
+    Empty (the default) leaves every existing arm byte-identical: no symlink is
+    created and each rollout keeps its own empty per-rollout store.
+
+    Note what this does NOT switch on. `_autoRefineAllowedForSession()` requires
+    a local (session) harness dir, so under `--no-session` automatic refinement
+    never fires; and auto-refine writes LOCAL entries anyway. Entries reach the
+    shared store only through an explicit `rlm.harness.create_*(global_=True)` /
+    `await refine.run(..., global_=True)` call -- from the player, if the prompt
+    asks for one, or from an orchestrator process pointed at the same directory
+    between cells. That is a feature for an experiment: every write is deliberate
+    and attributable, not a background process editing the arm mid-cell."""
+
+    continual_harness_writable: bool = False
+    """Let the PLAYER write to the shared continual-harness store.
+
+    Default False: under `sandbox = true` the store is re-bound READ-ONLY, on top
+    of the read-write `install_dir` bind, so a rollout can read the accumulated
+    lessons and cannot edit them. That keeps the learning channel single-writer
+    (an orchestrator between cells) and makes a cell reproducible from the store
+    snapshot taken before it ran.
+
+    Set True for the self-directed variant, where the player itself decides what
+    to persist. Then the store is shared MUTABLE state across concurrently
+    running seeds: writes are last-write-wins on one JSON file, so run such a
+    cell with one seed at a time, and expect a cell to change the store that
+    later cells read. With `sandbox = false` this flag cannot be enforced at all
+    (nothing is bound read-only) -- it is then a declaration of intent that the
+    launcher's before/after hash of the store has to police."""
 
     reasoning: bool | None = Field(default=None)
     """Declare the model as reasoning-capable in `models.json`. `None` derives it
@@ -449,6 +513,18 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "--bind",
             self.config.install_dir,
             self.config.install_dir,
+            # E10: the shared continual-harness store, re-bound READ-ONLY on top
+            # of the read-write `install_dir` bind above (bwrap applies binds in
+            # order, so the later, narrower one wins for that subtree). This is
+            # what keeps the learning channel single-writer -- see
+            # `continual_harness_writable`.
+            *(
+                ["--ro-bind", self.config.continual_harness_dir,
+                 self.config.continual_harness_dir]
+                if self.config.continual_harness_dir
+                and not self.config.continual_harness_writable
+                else []
+            ),
             "--bind",
             workdir,
             workdir,
@@ -562,6 +638,50 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # A missing auth.json is fine, but an empty one keeps the host from ever
         # reading (or migrating into) the operator's real credential store.
         await runtime.write(f"{agent_dir}/auth.json", b"{}\n")
+
+        # E10: point this rollout's GLOBAL continual-harness directory at the
+        # shared store, so lessons written by an earlier game are in this game's
+        # system prompt. `getGlobalHarnessStateDir()` is `join(agentDir,
+        # "harness")` with no env override of its own, and the kernel is handed
+        # the same path as `RLM_GLOBAL_HARNESS_STATE_DIR`, so a symlink at that
+        # one name redirects both the host (refine) and the kernel
+        # (`rlm.harness.*`) without touching anything else in `agent_dir`.
+        if self.config.continual_harness_dir:
+            ch = self.config.continual_harness_dir
+            if self.config.sandbox and not _within(ch, self.config.install_dir):
+                # The sandbox binds `install_dir`, the workdir and a short
+                # allowlist -- nothing else exists inside it. A store outside
+                # those would leave the symlink dangling and every rollout would
+                # silently start from an empty harness, which reads exactly like
+                # "the agent learned nothing".
+                raise ValueError(
+                    f"harness.continual_harness_dir ({ch!r}) is outside "
+                    f"install_dir ({self.config.install_dir!r}) while "
+                    "harness.sandbox is true, so it is not bound into the "
+                    "sandbox and the shared store would be invisible to the "
+                    "agent. Put the store under install_dir, or set "
+                    "harness.sandbox = false."
+                )
+            # `ln -sfn` so a re-run replaces a previous link instead of creating
+            # `harness/<basename>` inside it; `rm -rf` first because a REAL
+            # directory left by an earlier no-symlink run would swallow the link
+            # the same way.
+            probe = await runtime.run(
+                [
+                    "sh",
+                    "-c",
+                    f"mkdir -p {shlex.quote(ch)} && rm -rf {shlex.quote(agent_dir + '/harness')} "
+                    f"&& ln -sfn {shlex.quote(ch)} {shlex.quote(agent_dir + '/harness')}",
+                ],
+                self._env_with_path(),
+            )
+            if probe.exit_code != 0:
+                raise RuntimeError(
+                    "could not link the shared continual-harness store "
+                    f"({ch!r} -> {agent_dir}/harness): "
+                    f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}. "
+                    "Running on would silently give this rollout an empty store."
+                )
 
         env = self._env_with_path(
             {

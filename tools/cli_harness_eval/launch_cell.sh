@@ -294,6 +294,40 @@ if [ -n "${ALLOW_BATCHING:-}" ]; then
   OVERRIDES+=(--harness.allow_batching "${ALLOW_BATCHING}")
 fi
 
+# CONTINUAL_HARNESS points this cell's rollouts at a SHARED Prime Agent
+# continual-harness store, so lessons persisted by an earlier game are rendered
+# into the system prompt of a later one (E10). prime_agent only -- it is a
+# property of that scaffold, not of the game. Unset means every rollout keeps
+# its own empty per-rollout store, i.e. every pre-E10 cell replays unchanged.
+#
+# The store must live under the harness's `install_dir` (default
+# /tmp/vf-prime-agent): the sandbox binds that path and little else, so a store
+# anywhere else is invisible inside the sandbox and the harness refuses to
+# launch rather than handing every rollout an empty harness that reads like "the
+# agent learned nothing".
+#
+# CONTINUAL_HARNESS_WRITABLE=1 lets the PLAYERS write it too (the self-directed
+# variant). Default read-only: single-writer keeps a cell reproducible from the
+# snapshot taken before it ran, and stops five concurrent seeds racing one JSON
+# file. Run a writable cell with MAX_CONCURRENT=1.
+if [ -n "${CONTINUAL_HARNESS:-}" ]; then
+  if [ "${ARM}" != "prime_agent" ] && [ "${ARM}" != "prime_agent_b80" ]; then
+    echo "launch_cell: CONTINUAL_HARNESS is a prime_agent knob (Prime Agent's" >&2
+    echo "  continual harness); arm '${ARM}' has no such store. Refusing." >&2
+    exit 2
+  fi
+  OVERRIDES+=(--harness.continual_harness_dir "${CONTINUAL_HARNESS}")
+fi
+if [ -n "${CONTINUAL_HARNESS_WRITABLE:-}" ]; then
+  if [ -z "${CONTINUAL_HARNESS:-}" ]; then
+    echo "launch_cell: CONTINUAL_HARNESS_WRITABLE without CONTINUAL_HARNESS has" >&2
+    echo "  nothing to make writable. Refusing to run a cell that does not do" >&2
+    echo "  what its variables say." >&2
+    exit 2
+  fi
+  OVERRIDES+=(--harness.continual_harness_writable "${CONTINUAL_HARNESS_WRITABLE}")
+fi
+
 # ROLLOUT_TIMEOUT raises the per-rollout wall-clock cap. The default 7200s (2h)
 # is what actually ended live games in the b80 cells -- two of five seeds
 # stopped at `harness_timeout` while the 1200-call budget never bound -- so any
