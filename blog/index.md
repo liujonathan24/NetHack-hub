@@ -19,20 +19,33 @@ In this blog, we investigate the failures of the current training stack and summ
 
 NetHack—a 1987 fork of Hack, which was initially inspired by Rogue—is one of the oldest roguelike games. In the game, a player navigates a procedurally generated dungeon with a single life to retrieve the Amulet of Yendor and escape, battling the hundreds of unique monsters and navigating intricate traps along the way. With over 200 distinct items and 300 entities providing complex interactions, the human win-rate is approximately 1%, with the successes taking a median of 50 thousand moves to complete.
 
-The game is played in a 80x21 character terminal interface, where the entire world is rendered in ASCII characters. Players interact using modified vim keybinds to move, attack, quaff potions, read scrolls, and manage an inventory system. Because the environment is procedurally generated, heavily relies on hidden state (e.g., unidentified items, hidden doors, and unseen monsters), and has unintuitive traps, NetHack requires an incredible ability to plan over long horizons, generalize to new settings, and navigate the text-based dungeon. 
+The game is played in an 80x21 character terminal interface, where the entire world is rendered in ASCII characters. Players interact using modified vim keybinds to move, attack, quaff potions, read scrolls, and manage an inventory system. Because the environment is procedurally generated, heavily relies on hidden state (e.g., unidentified items, hidden doors, and unseen monsters), and has unintuitive traps, NetHack requires an incredible ability to plan over long horizons, generalize to new settings, and navigate the text-based dungeon. 
 
 LLMs have been most famously introduced to NetHack in the BALROG paper. BALROG introduced a new metric that estimated game-progress using two key metrics: experience level and dungeon level percentiles. Specifically, each metric measured the fraction of human-played games that beat NetHack given that they hit a certain experience or dungeon level. Then, the BALROG metric takes the maximum over these two percentiles. We use that as our primary metric for progress.
 
 # Initial Agent Harness 
 BALROG used fixed horizon and full action and full observation descriptions, with no active memory, as well as NetHack actions at a single action granularity. However, much progress over in RL for both games and for agents has been made by changing this basic setup. Encoding manipulations, full horizon with compaction, and action chunking via skills are now de facto settings for the most capable agents. As a result, we design a basic setup based on a previous paper, NetPlay, that retains the expressiveness of the original keys while also saving time up to 50 actions per LLM tool call. 
 
-<!-- TODO: claude. Show the table of NetPlay actions and how each works. Also add a table of nethack actions and what they do.-->
+<!-- TODO: claude. Show the table of NetPlay reduced actions v3 and how each skill works. Also add a table of nethack actions and what they do.-->
 
 
 Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task.} <!-- TODO: claude. Navigate from 1 room to another with netplay skills and show the number of moves on the left side. Should be one viewer with two rows of actions below one w/ skills, other with nethack letters-->
 
+Specifically, the attribute that we deem important are expressivity. One common case is doing an action will prompt the game to ask the user for a confirmation, for example, whether to attack an enemy or not. We find that these are essential to the game due to innate mechanics based on navigation. For example, oftentimes, if a user is running past a monster, they will automatically try to attack it. However, this may not be the model's intention, so if this ever occurs in one of our skills, we break from the skill and the confirmation message is displayed to the model.
 
-# 
+# Evaluations
+With this setup, we create a custom port of NetHack 3.6.7 that enables flexibility in evaluations and game modes[^1]. During experimentation, we find that current models cannot beat the game even without partial observability when we provide full vision over the grid at any given time, so we dedicate our time to exploring what patterns and behaviors cause our models to fail with full observability. The default metric that we report is BALROG Score at a Fixed Expenditure of 200 LLM turns. 
+
+TODO (Seth): Do I need justification here for why we don't have results without full visibility?
+
+On our initial harness, we see high variance in results with an overall median of X and an average of Y BALROG score. 
+<!-- TODO: Claude. Insert results (X and Y) and the table of results and the html widget to view games with the NetHack-->
+
+Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues: 
+1. All seeds reach higher dungeon levels than experience levels
+2. <!-- TODO: Claude. Insert our observations that led to new experiments -->
+
+
 
 
 
