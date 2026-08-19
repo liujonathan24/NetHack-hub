@@ -1269,6 +1269,34 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             or (skill_name == "np_press_key"
                 and str((skill_args or {}).get("key", "")).strip() == ">")
         )
+        # E9a hard enforcement: descent is REFUSED while underleveled, with no
+        # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
+        # E8a's advice (read and ignored) into a constraint, to test whether
+        # underleveling is CAUSAL for death or merely correlated: if forcing the
+        # model to level before descending improves survival, the reasoning->
+        # policy gap is the bottleneck; if it dies anyway (attrition at shallow
+        # depth), the gap is deeper. Ascent is never gated. docs/EXPERIMENT_E9.md.
+        if self.descent_gate == "enforce" and _is_descent:
+            try:
+                st_now = (state["structured_obs"].status or {})
+                dlvl = int(st_now.get("depth") or 1)
+                xl = int(st_now.get("experience_level") or 1)
+            except Exception:
+                dlvl, xl = 1, 1
+            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+            norm = norm_xl_for_leaving(dlvl)
+            if xl < norm:
+                gate = (f"[descent BLOCKED: you are XL {xl} on Dlvl {dlvl}. The "
+                        f"stairs down stay locked until you reach XL {norm}. "
+                        f"Gain experience on this level first, then descend.]")
+                tt = state["_turn_trace"]
+                tt["status"] = "blocked"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+            # XL >= norm: leveled enough -- allow the descent to proceed.
+
         if self.descent_gate in ("norm", "directive") and _is_descent:
             try:
                 st_now = (state["structured_obs"].status or {})
