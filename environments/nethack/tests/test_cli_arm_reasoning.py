@@ -347,6 +347,64 @@ def test_the_missing_reasoning_is_recoverable_from_the_rollout_trace(mcp_records
 
 
 # --------------------------------------------------------------------------- #
+# 4b. timestamp fallback: recover PRE-BARRIER runs with no call-id markers      #
+# --------------------------------------------------------------------------- #
+def test_timestamp_alignment_recovers_pre_barrier_ipython_runs():
+    """The `timestamp` strategy, for a pre-barrier run whose game tools are
+    invisible to the model (Prime Agent: every assistant turn calls `ipython`).
+
+    No `[call#N]` markers (strategy 0 out), no game tool name to walk (1 out),
+    and the counts disagree -- one plan, several silent moves (2 out). The
+    wall-clock join then attributes each move to the last turn emitted at or
+    before it, and carries a silent move back to the plan it is still executing,
+    so several moves honestly share one narration rather than being dropped.
+    """
+    from tools.trace_reasoning import align_records_to_turns, backfill_records
+
+    def turn(text, ts):
+        return {"content": text, "reasoning_content": "", "tool_names": ["ipython"],
+                "game_tool_names": [], "result_call_ids": [], "timestamp": ts}
+
+    turns = [turn("Plan A: head for the downstairs.", 100.0),
+             turn("", 110.0),                                   # silent tool turn
+             turn("Plan B: the newt is next to me, kill it.", 120.0)]
+
+    def rec(name, t_wall):
+        return {"tool_results": [{"name": name}], "tool_calls": [{"name": name}],
+                "assistant_message": "", "t_wall": t_wall}
+
+    records = [rec("np_move_to", 101.0), rec("np_move_to", 112.0),
+               rec("np_move_to", 115.0), rec("np_melee_attack", 121.0)]
+
+    mapping, mode, reason = align_records_to_turns(records, turns)
+    assert mode == "timestamp", reason
+    assert mapping == [0, 0, 0, 2]              # silent moves carried back to Plan A
+
+    stats = backfill_records(records, turns)
+    assert stats["mode"] == "timestamp"
+    assert stats["recovered"] == 4 and stats["unavailable"] == 0
+    assert [r["assistant_message"] for r in records[:3]] == ["Plan A: head for the downstairs."] * 3
+    assert records[3]["assistant_message"] == "Plan B: the newt is next to me, kill it."
+    for r in records:
+        assert r["reasoning"]["alignment"] == "timestamp"
+        assert r["reasoning"]["source"] == "trace_nodes"
+
+
+def test_timestamp_alignment_refuses_when_clocks_are_unusable():
+    """A missing stamp, or a first move that predates the first completion,
+    means the clocks are not comparable -- refuse, do not guess."""
+    from tools.trace_reasoning import align_records_to_turns
+
+    turns = [{"content": "x", "reasoning_content": "", "tool_names": ["ipython"],
+              "game_tool_names": [], "result_call_ids": [], "timestamp": 100.0}]
+    early = [{"tool_results": [{"name": "np_move_to"}], "t_wall": 50.0},
+             {"tool_results": [{"name": "np_move_to"}], "t_wall": 60.0}]
+    _m, mode, reason = align_records_to_turns(early, turns)
+    assert mode is None
+    assert "wrong move" in reason
+
+
+# --------------------------------------------------------------------------- #
 # 5. end to end, over a REAL MCP tool server                                   #
 # --------------------------------------------------------------------------- #
 SEQUENCE = [("search", {"times": 1}), ("search", {"times": 2})]

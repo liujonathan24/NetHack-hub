@@ -47,7 +47,7 @@ or several skills. Guessing a 1:1 mapping there would attach the wrong
 paragraph to the wrong move, which is worse than an empty string because it
 looks right.
 
-Three strategies are tried, strongest first, and if none holds NOTHING is
+Four strategies are tried, strongest first, and if none holds NOTHING is
 written except an explicit `reasoning.available = false` carrying the reason:
 
   0. `call_id` -- the correlation-id barrier (`tools/trace_align.py`): the
@@ -64,6 +64,15 @@ written except an explicit `reasoning.available = false` carrying the reason:
      find its turn. This is evidence, not an assumption.
   2. `ordinal` -- used only when the two channels hold the same number of
      entries AND no record exposes a dispatched name to check against.
+  3. `timestamp` -- the recovery path for PRE-BARRIER data: runs written before
+     the call-id barrier (`tools/trace_align.py`) carry no `[call#N]` markers,
+     so strategy 0 cannot fire, and the ipython arms defeat 1 and 2. But every
+     record has a wall-clock stamp and every node a timestamp, so each record
+     maps to the last assistant turn emitted at or before it, and a silent move
+     is carried back to the plan it is still executing. Approximate at the
+     boundary (a move's `t_wall` is stamped at exit, after the model may have
+     moved on), so it is the weakest strategy -- but it recovers the reasoning
+     of the 200+ existing trace files the barrier came too late for.
 
 Validated against ground truth: on `outputs/pilot_reveal` (control arm, 4
 rollouts x 99 turns) the recovered text equals the `assistant_message` the
@@ -183,6 +192,11 @@ def assistant_turns_from_nodes(nodes) -> list[dict]:
                 # this turn -- the `[call#N]` markers the harness echoes into
                 # every result payload (`tools/trace_align.py`).
                 "result_call_ids": [],
+                # Node wall-clock stamp for the `timestamp` fallback (strategy
+                # 3), the only join left for pre-barrier data. Lives on the
+                # node, not the message.
+                "timestamp": (node.get("timestamp") if isinstance(node, dict)
+                              else getattr(node, "timestamp", None)),
             })
             continue
         # Any other message -- a tool result over MCP, the env-response user
@@ -292,12 +306,78 @@ def align_records_to_turns(records: list[dict], turns: list[dict]):
 
     if len(turns) == len(records):
         return list(range(len(records))), "ordinal", ""
+
+    # 3. timestamp -- the pre-barrier recovery path. No call-id markers, the
+    #    ipython arms defeat the name walk, and the counts disagree, so the
+    #    exact strategies are all out. But a skill is applied after the
+    #    completion that issued it, so a record maps to the last assistant turn
+    #    whose node timestamp is at or before the record's wall-clock time; a
+    #    silent move is then carried back to the plan it is still executing.
+    #    Weakest strategy (exit-time stamps make it boundary-approximate), tried
+    #    last, but it is the only thing that recovers a pre-barrier ipython run.
+    ts_mapping = _timestamp_alignment(records, turns)
+    if ts_mapping is not None:
+        return ts_mapping, "timestamp", ""
+
     return [None] * len(records), None, (
-        f"call-id join unavailable ({id_reason}); {seq_reason}; and the two "
+        f"call-id join unavailable ({id_reason}); {seq_reason}; the two "
         f"channels disagree on length ({len(records)} turn records vs "
-        f"{len(turns)} assistant turns), so positional pairing would attach "
-        "the wrong message to the wrong move"
+        f"{len(turns)} assistant turns); and no usable timestamps were found to "
+        "pair them by, so positional pairing would attach the wrong message to "
+        "the wrong move"
     )
+
+
+def _as_float(value):
+    """A finite float, or None -- and never a bool (`True` is not a timestamp)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _timestamp_alignment(records: list[dict], turns: list[dict]):
+    """Map each record to the assistant turn that governs it, by wall clock.
+
+    First pair each record to the LAST completion emitted at or before it (its
+    issuing turn); then carry the attribution back to the last completion at or
+    before that one which actually SAID something -- because the model narrates
+    a plan once and executes several silent moves under it, so the governing
+    "why" for a silent move is the plan it is still carrying out. Several moves
+    sharing one narration is the honest picture, not a bug.
+
+    Returns the mapping, or `None` when the clocks cannot be trusted -- a
+    missing stamp on either side, either sequence going backwards, or a first
+    move that predates the first completion (the clocks are then not
+    comparable). Refusing is the same contract as the exact strategies: a wrong
+    pairing is worse than an explicit gap.
+    """
+    anchors = [_as_float(r.get("t_wall")) for r in records]
+    stamps = [_as_float(t.get("timestamp")) for t in turns]
+    if any(a is None for a in anchors) or any(s is None for s in stamps):
+        return None
+    if any(anchors[i] > anchors[i + 1] for i in range(len(anchors) - 1)):
+        return None
+    if any(stamps[i] > stamps[i + 1] for i in range(len(stamps) - 1)):
+        return None
+    if anchors[0] < stamps[0]:
+        return None
+    has_text = [bool((t.get("content") or "").strip()
+                     or (t.get("reasoning_content") or "").strip()) for t in turns]
+    last_text_at = [None] * len(turns)
+    seen = None
+    for k in range(len(turns)):
+        if has_text[k]:
+            seen = k
+        last_text_at[k] = seen
+    mapping: list[int | None] = []
+    j = 0
+    for a in anchors:
+        while j + 1 < len(turns) and stamps[j + 1] <= a:
+            j += 1
+        mapping.append(last_text_at[j] if last_text_at[j] is not None else j)
+    return mapping
 
 
 # --------------------------------------------------------------------------- #
