@@ -343,6 +343,14 @@ case "${ENV_ARGS:-}" in
   *record_step_frames*) : ;;  # caller decided; respect it
   *) OVERRIDES+=(--taskset.env_args.record_step_frames true) ;;  # recorded in the resolved config.toml
 esac
+# describe_args: spell each tool's arguments into its description so the model
+# does not burn ~10 calls probing at session start (MCP inputSchema does not
+# survive transport to Prime Agent's client). Default on for new runs; opt out
+# by naming it in ENV_ARGS. See docs/EXPERIMENT_E8.md / helpers._args_clause.
+case "${ENV_ARGS:-}" in
+  *describe_args*) : ;;
+  *) OVERRIDES+=(--taskset.env_args.describe_args true) ;;
+esac
 
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 

@@ -454,6 +454,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # existing arms stay byte-identical and pay no size cost. Enable per
         # cell via load_environment(record_step_frames=True) / env_args.
         record_step_frames: bool = False,
+        # Append a plain-language "Args:" clause to each published tool's
+        # description so the model doesn't PROBE for arguments at session start
+        # (the MCP inputSchema does not survive transport to Prime Agent's
+        # client). Default off = pinned arms byte-identical; launcher turns it
+        # on for new runs. See helpers._args_clause.
+        describe_args: bool = False,
         # E8a planning injection: soft-gate np_down. "off" (default) | "norm"
         # (human-anchored) | "directive" (imperative). First np_down per dungeon
         # level returns the gate line at zero engine cost; the second proceeds
@@ -492,6 +498,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             record_step_frames = record_step_frames.strip().lower() not in (
                 "false", "0", "no", "off", "")
         self.record_step_frames = bool(record_step_frames)
+        if isinstance(describe_args, str):
+            describe_args = describe_args.strip().lower() not in ("false","0","no","off","")
+        self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
         self._setup_tune = setup_tune
@@ -2453,9 +2462,13 @@ def load_environment(
     _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
     rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
+    _describe_args = kwargs.get("describe_args", False)
+    if isinstance(_describe_args, str):
+        _describe_args = _describe_args.strip().lower() not in ("false","0","no","off","")
     if interface == "skill":
         tool_callables = _build_skill_adapter_callables(
-            skill_set=spec.tools.skill_set or kwargs.pop("skill_set", "full")
+            skill_set=spec.tools.skill_set or kwargs.pop("skill_set", "full"),
+            describe_args=bool(_describe_args),
         )
         # Spec-declared extra tools (e.g. CH's run_macro adapter).
         for make_tool in spec.tools.extra_tools:

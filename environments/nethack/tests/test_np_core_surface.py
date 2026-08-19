@@ -275,3 +275,17 @@ def test_descent_gate_covers_press_key_descend():
     import nethack as nethack_mod
     src = inspect.getsource(nethack_mod.NetHackVerifiersEnv._apply_tool_call_inner)
     assert 'skill_name == "np_press_key"' in src and '">"' in src.replace("'>'", '">"') or ' == ">"' in src
+
+
+def test_describe_args_default_off_and_on():
+    """Off = byte-identical descriptions (pinned arms); on = appended Args clause."""
+    from nethack_harness.helpers import _build_skill_adapter_callables
+    off={a.__name__:a.__doc__ for a in _build_skill_adapter_callables("np_core,request_map,search", describe_args=False)}
+    on ={a.__name__:a.__doc__ for a in _build_skill_adapter_callables("np_core,request_map,search", describe_args=True)}
+    assert off["np_move_to"] == "Move to the specified position using pathfinding."
+    assert "Args: x (column 0-78), y (row 0-20)" in on["np_move_to"]
+    assert "np_move_to(x=..., y=...)" in on["np_move_to"]
+    assert on["np_explore_level"].endswith("Args: none.")
+    # pinned-arm safety: default path (no describe_args) unchanged
+    default={a.__name__:a.__doc__ for a in _build_skill_adapter_callables("np_core,request_map,search")}
+    assert default["np_move_to"] == off["np_move_to"]

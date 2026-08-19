@@ -1208,7 +1208,7 @@ def _code_tool_adapter():
     return code
 
 
-def _build_skill_adapter_callables(skill_set: str = "full") -> list:
+def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool = False) -> list:
     """
     Build one callable per registered skill with the right __name__, doc, and
     annotations so verifiers' tool-schema introspection works.
@@ -1256,7 +1256,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "netplay":
         # NetPlay (Jeurissen, CoG 2024): a skill-only action surface with NO
@@ -1282,7 +1282,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "move":
         # `move(direction=...)` + survival, but NO move_to, NO autoexplore,
@@ -1298,7 +1298,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "netplay_true":
         # NetPlay's ACTUAL published action surface, vendored from
@@ -1334,7 +1334,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "np_core":
         # e7 seeding experiment (2026-08-18): the NARROW, individually-debugged
@@ -1357,7 +1357,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "balrog80":
         # BALROG's published NLE action surface: the 80 text commands in their
@@ -1385,7 +1385,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif "," in skill_set:
         # Tokens are tool names, EXCEPT a preset name, which expands to that
@@ -1400,7 +1400,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         seen: set = set()
         for tok in tokens:
             if tok in presets:
-                for adapter in _build_skill_adapter_callables(skill_set=tok):
+                for adapter in _build_skill_adapter_callables(skill_set=tok, describe_args=describe_args):
                     nm = getattr(adapter, "__name__", "")
                     if nm and nm not in seen:
                         seen.add(nm)
@@ -1411,7 +1411,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name not in keep or name in seen: continue
             params = schema.get("parameters", {}) or {}
             seen.add(name)
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     # default 'full'
     out = []
@@ -1437,7 +1437,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         if name == "rollback":
             continue
         params = schema.get("parameters", {}) or {}
-        out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
     return out
 
 
@@ -1476,9 +1476,51 @@ _TYPE_MAP = {
 }
 
 
-def _make_skill_adapter(name: str, description: str, params: dict):
-    """Create a callable that exposes the schema verifiers expects."""
+# Human-useful parameter hints for the common typed tools. The vendored
+# netplay_true schemas describe each param as just its own name ("x" -> "x"),
+# and the inputSchema does not survive MCP transport to Prime Agent's client
+# (rlm.mcp_base renders every tool as **kwargs with an empty JSON Schema), so
+# the model has to PROBE for arguments at session start -- ~10 wasted calls per
+# game, and an asymmetry vs the native-MCP Claude Code arm. When describe_args
+# is on, we append a plain-language "Args:" clause to the DESCRIPTION string,
+# which reaches the model on every arm (proven in-trace). Coordinate frame
+# matches the system prompt: x = column 0-78, y = row 0-20.
+_ARG_HINTS = {
+    "x": "column 0-78", "y": "row 0-20",
+    "key": "one key; '>' descend, '<' ascend, 's' search, ESC/SPACE/ENTER by name",
+    "item_letter": "inventory letter (a-z, A-Z), e.g. 'f'",
+    "direction": "n/e/s/w or ne/se/sw/nw (or 'self' for np_zap)",
+    "count": "number of turns",
+    "times": "number of searches (1-20)",
+    "x1": "left column 0-78", "y1": "top row 0-20",
+    "x2": "right column 0-78", "y2": "bottom row 0-20",
+    "n": "number of turns to undo (1-15)",
+    "room_id": "room/corridor id from the map",
+    "text": "characters to type in order",
+}
+
+
+def _args_clause(name: str, params: dict) -> str:
+    """A one-line 'Args: a (hint), b (hint)' clause, or '' for no-arg tools."""
+    if not params:
+        return "\nArgs: none."
+    parts = []
+    for pname, pschema in params.items():
+        hint = _ARG_HINTS.get(pname) or (pschema.get("description") or "").strip()
+        opt = " optional" if "default" in pschema else ""
+        parts.append(f"{pname} ({hint}{opt})" if hint and hint != pname else f"{pname}{opt}")
+    return "\nArgs: " + ", ".join(parts) + f". Call: {name}(" + \
+        ", ".join(f"{k}=..." for k in params) + ")."
+
+
+def _make_skill_adapter(name: str, description: str, params: dict, describe_args: bool = False):
+    """Create a callable that exposes the schema verifiers expects.
+
+    describe_args=True appends a plain-language Args clause to the docstring so
+    the model does not have to probe for arguments (see _ARG_HINTS)."""
     import inspect
+    if describe_args:
+        description = (description or "").rstrip() + _args_clause(name, params)
 
     # Build a signature with parameters in declared order.
     sig_params = []
