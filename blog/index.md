@@ -89,7 +89,7 @@ On our initial harness, we see high variance across five seeds, with a mean BALR
 | Seed 4 | 4.85 | 7 | 1 | died |
 | **Mean** | **3.06** | **4.8** | **1.6** | **5/5 died** |
 
-Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues:
+Despite the poor performance, we see that the model reasons fairly reasonably about many aspects of the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues:
 
 1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in every game (e.g. seed 4 reached Dlvl 7 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the **E8a descent gate**, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
 2. **Reasoning is accurate but inert (PLANNING).** The model narrates the game well — it names monsters, judges which are safe to fight, identifies items, and even times prayer correctly (3 of 4 control prayers fired at critical HP) — yet this reasoning rarely changes the policy it then executes. That gap between good narration and unchanged behavior is the central question of the **E8 "does telling the model help?"** experiments (E8a descent gate, E8b prayer hint).
