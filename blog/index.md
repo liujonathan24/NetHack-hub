@@ -31,3 +31,17 @@ straight through the human-norm line and prays at full HP despite being told
 the heal band. Removing friction (doors, rooms) removes errors but not deaths.
 24/25 rollouts died. Advice doesn't transfer to policy; the next lever is
 scaffold-enforced constraints.
+
+### E8 correction (traces re-read)
+
+An earlier draft said the prayer hint was "read and ignored — all prayers at
+full HP." That was a measurement bug: the pray-turn record's HP is *post*-heal.
+The true pre-prayer HP was 2/16, 3/43, 5/16 — **all critical, all correctly
+timed** — and the reasoning shows the model did the math ("43/7 ≈ 6.1, I'm at 3,
+pray!"). Corrected story: prayer was already well-timed without the hint (3/4 in
+control), so the hint had little to fix; the score gap is seed variance. And the
+descent gate was *engaged with*, not ignored — on 7/20 gates the model reasoned
+about the XP tradeoff and chose to dive anyway with a defensible argument. The
+theme survives but softens: guidance is read and reasoned about, yet rarely
+changes policy — advice, even correct advice the model understands, doesn't
+reliably transfer to behavior.
