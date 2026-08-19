@@ -333,6 +333,25 @@ if [ -n "${STALL_WATCHDOG:-}" ]; then
        "log=${OUT_ABS}/stall_watchdog.log quarantine=${TRACE_DIR}.stalled"
 fi
 
+# NEW DEFAULT (2026-08-19): every launched experiment logs the FULL baseline
+# telemetry -- every game step's screen + glyph ids (record_step_frames), all
+# observations and all LLM responses (already in turns/ + traces.jsonl). A cell
+# that must opt out sets record_step_frames explicitly in ENV_ARGS; we only
+# inject the default when the caller did not speak to it, so pinned arms that
+# predate this default replay byte-identically from their committed configs.
+case "${ENV_ARGS:-}" in
+  *record_step_frames*) : ;;  # caller decided; respect it
+  *) OVERRIDES+=(--taskset.env_args.record_step_frames true) ;;  # recorded in the resolved config.toml
+esac
+# describe_args: spell each tool's arguments into its description so the model
+# does not burn ~10 calls probing at session start (MCP inputSchema does not
+# survive transport to Prime Agent's client). Default on for new runs; opt out
+# by naming it in ENV_ARGS. See docs/EXPERIMENT_E8.md / helpers._args_clause.
+case "${ENV_ARGS:-}" in
+  *describe_args*) : ;;
+  *) OVERRIDES+=(--taskset.env_args.describe_args true) ;;
+esac
+
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
 exec "${EVAL_BIN}" @ "${CFG}" \

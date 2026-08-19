@@ -63,9 +63,10 @@ class TurnRecorder:
     """
 
     __slots__ = ("_env", "_orig", "_had_own", "_eng", "_orig_restore",
-                 "actions", "messages", "restores", "_installed")
+                 "actions", "messages", "restores", "_installed",
+                 "_capture_frames", "frames")
 
-    def __init__(self, env) -> None:
+    def __init__(self, env, capture_frames: bool = False) -> None:
         self._env = env
         self._orig = None
         self._had_own = False
@@ -74,6 +75,12 @@ class TurnRecorder:
         self._installed = False
         self.actions: list[int] = []
         self.messages: list[str] = []
+        #: When capture_frames is True, one 24-row tty snapshot per engine step
+        #: -- the missing "screen per move" that shape() collapses to the final
+        #: frame only. Off by default: the existing arms stay byte-identical and
+        #: pay no size/latency cost.
+        self._capture_frames = bool(capture_frames)
+        self.frames: list[dict] = []
         #: Snapshot restores this turn. `rollback` rewinds the engine heap
         #: directly (`engine.restore(handle)`) instead of stepping, so a turn
         #: with restores > 0 is NOT replayable from its byte stream and the
@@ -102,8 +109,18 @@ class TurnRecorder:
             def _recording_step(action, *a, **kw):
                 out = orig(action, *a, **kw)
                 try:
-                    self.actions.append(int(action))
-                    self.note_message(_obs_message(out[0] if isinstance(out, tuple) else out))
+                    ai = int(action)
+                    self.actions.append(ai)
+                    obs0 = out[0] if isinstance(out, tuple) else out
+                    self.note_message(_obs_message(obs0))
+                    if self._capture_frames:
+                        self.frames.append({
+                            "b": ai,
+                            "k": chr(ai) if 32 <= ai < 127 else "",
+                            "g": _tty_rows(obs0),
+                            "gid": _glyph_rle(obs0),
+                            "m": _obs_message(obs0) or "",
+                        })
                 except Exception:
                     pass
                 return out
@@ -256,6 +273,9 @@ _STATUS_MARKERS: tuple[tuple[str, str], ...] = (
     ("rolled back ", "completed"),
     ("reveal: ", "failed"),          # "reveal: map unavailable this turn."
     ("reveal (x", "completed"),      # "reveal (x1-x20, y3-y9):\n..."
+    # request_map takes no NLE step, so no skill envelope; without a marker it
+    # tallied as "unknown" in status distributions (e7 smoke, 3 of 20 calls).
+    ("Refreshing the full map", "completed"),
 )
 
 
@@ -350,7 +370,7 @@ def _reasoning_block(assistant_msg, dispatch_route: str) -> dict:
 def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
                        action_indices, total_reward: float, obs_text: str,
                        obs_content=None, *, actions=None, tool_results=None,
-                       all_messages=None, applied=True, lm_turn=None,
+                       all_messages=None, step_frames=None, applied=True, lm_turn=None,
                        turn=None, gt_obs=True, dispatch_route="harness") -> None:
     """Write one NDJSON line per LM turn. Best-effort; never raises.
 
@@ -464,6 +484,10 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
             "reward": float(total_reward),
             "messages": shaped_msgs,
             "all_messages": full_msgs,
+            # One tty screen per engine step this turn (present only when the
+            # env was built with record_step_frames=True). This is the
+            # move-by-move replay data shape() otherwise collapses.
+            **({"step_frames": list(step_frames)} if step_frames else {}),
             "actions": actions if actions is not None else TS.empty_action_record(
                 "no engine step hook was active for this turn"),
             "tool_results": list(tool_results) if tool_results else [],
@@ -1099,6 +1123,51 @@ def _decode_tty(obs) -> str:
         "".join(chr(c) for c in row) for row in obs.tty_chars
     )
 
+def _glyph_rle(obs):
+    """Compact RLE of the 21x79 glyph-id plane ("id xN,id xN,..." row-major).
+
+    The tty chars show WHAT is drawn; glyph ids carry IDENTITY (which monster
+    species, which object class) -- analysis-grade ground truth per step.
+    ~0.2-0.8 KB/step. [] / "" on any failure -- frame capture must never break
+    a rollout.
+    """
+    g = obs.get("glyphs") if isinstance(obs, dict) else getattr(obs, "glyphs", None)
+    if g is None:
+        return ""
+    try:
+        out = []
+        prev = None; run = 0
+        for row in g:
+            for v in row:
+                v = int(v)
+                if v == prev:
+                    run += 1
+                else:
+                    if prev is not None:
+                        out.append(f"{prev}x{run}" if run > 1 else f"{prev}")
+                    prev, run = v, 1
+        if prev is not None:
+            out.append(f"{prev}x{run}" if run > 1 else f"{prev}")
+        return ",".join(out)
+    except Exception:
+        return ""
+
+
+def _tty_rows(obs):
+    """The 24 tty rows as a list of strings (one screen). Right-trimmed.
+
+    Tolerant of dict-shaped or attribute-shaped observations, and of a missing
+    tty plane (returns [] rather than raising -- frame capture must never break
+    a rollout). This is the per-step analogue of the trace's final raw_grid.
+    """
+    tty = obs.get("tty_chars") if isinstance(obs, dict) else getattr(obs, "tty_chars", None)
+    if tty is None:
+        return []
+    try:
+        return ["".join(chr(int(c)) for c in row).rstrip() for row in tty]
+    except Exception:
+        return []
+
 
 def _detect_terminal_outcome(obs, state: dict) -> None:
     """
@@ -1139,7 +1208,7 @@ def _code_tool_adapter():
     return code
 
 
-def _build_skill_adapter_callables(skill_set: str = "full") -> list:
+def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool = False) -> list:
     """
     Build one callable per registered skill with the right __name__, doc, and
     annotations so verifiers' tool-schema introspection works.
@@ -1187,7 +1256,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "netplay":
         # NetPlay (Jeurissen, CoG 2024): a skill-only action surface with NO
@@ -1213,7 +1282,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "move":
         # `move(direction=...)` + survival, but NO move_to, NO autoexplore,
@@ -1229,7 +1298,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name in _HARNESS_OWNED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "netplay_true":
         # NetPlay's ACTUAL published action surface, vendored from
@@ -1265,7 +1334,30 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
+        return out
+    elif skill_set == "np_core":
+        # e7 seeding experiment (2026-08-18): the NARROW, individually-debugged
+        # core of netplay_true. Selection rationale:
+        #   np_move_to over np_go_to     -- coordinates subsume room ids
+        #   np_press_key over np_type_text -- press_key reaches esc/space/enter,
+        #       which type_text cannot; type_text is repeated press_key minus
+        #       the specials, so press_key is the generator
+        #   np_pray / np_apply / np_rest -- survival essentials
+        # Everything else (eat/quaff/wield/kick/zap/menu answers) is reachable
+        # through np_press_key answering NetHack's OWN prompts -- which is the
+        # point: this surface is designed to run with auto_dismiss=False, so
+        # the model answers prompts itself instead of the harness ESCing them.
+        from nethack_harness.tools import netplay_true as _npt  # registers np_*
+        keep = {"np_explore_level", "np_melee_attack", "np_move_to",
+                "np_press_key", "np_pray", "np_apply", "np_rest", "np_kick"}
+        missing = keep - set(skill_registry.all_schemas())
+        assert not missing, f"np_core tools not registered: {missing}"
+        out = []
+        for name, schema in skill_registry.all_schemas().items():
+            if name not in keep: continue
+            params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif skill_set == "balrog80":
         # BALROG's published NLE action surface: the 80 text commands in their
@@ -1293,7 +1385,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         for name, schema in skill_registry.all_schemas().items():
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     elif "," in skill_set:
         # Tokens are tool names, EXCEPT a preset name, which expands to that
@@ -1303,12 +1395,12 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         # `request_map` (1 tool). Expanding presets by recursion keeps this
         # correct as the presets themselves change.
         tokens = [s.strip() for s in skill_set.split(",") if s.strip()]
-        presets = {"netplay", "netplay_true", "dir8", "move", "full", "balrog80"}
+        presets = {"netplay", "netplay_true", "np_core", "dir8", "move", "full", "balrog80"}
         out = []
         seen: set = set()
         for tok in tokens:
             if tok in presets:
-                for adapter in _build_skill_adapter_callables(skill_set=tok):
+                for adapter in _build_skill_adapter_callables(skill_set=tok, describe_args=describe_args):
                     nm = getattr(adapter, "__name__", "")
                     if nm and nm not in seen:
                         seen.add(nm)
@@ -1319,7 +1411,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
             if name not in keep or name in seen: continue
             params = schema.get("parameters", {}) or {}
             seen.add(name)
-            out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
     # default 'full'
     out = []
@@ -1345,7 +1437,7 @@ def _build_skill_adapter_callables(skill_set: str = "full") -> list:
         if name == "rollback":
             continue
         params = schema.get("parameters", {}) or {}
-        out.append(_make_skill_adapter(name, schema.get("description", ""), params))
+        out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
     return out
 
 
@@ -1384,9 +1476,51 @@ _TYPE_MAP = {
 }
 
 
-def _make_skill_adapter(name: str, description: str, params: dict):
-    """Create a callable that exposes the schema verifiers expects."""
+# Human-useful parameter hints for the common typed tools. The vendored
+# netplay_true schemas describe each param as just its own name ("x" -> "x"),
+# and the inputSchema does not survive MCP transport to Prime Agent's client
+# (rlm.mcp_base renders every tool as **kwargs with an empty JSON Schema), so
+# the model has to PROBE for arguments at session start -- ~10 wasted calls per
+# game, and an asymmetry vs the native-MCP Claude Code arm. When describe_args
+# is on, we append a plain-language "Args:" clause to the DESCRIPTION string,
+# which reaches the model on every arm (proven in-trace). Coordinate frame
+# matches the system prompt: x = column 0-78, y = row 0-20.
+_ARG_HINTS = {
+    "x": "column 0-78", "y": "row 0-20",
+    "key": "one key; '>' descend, '<' ascend, 's' search, ESC/SPACE/ENTER by name",
+    "item_letter": "inventory letter (a-z, A-Z), e.g. 'f'",
+    "direction": "n/e/s/w or ne/se/sw/nw (or 'self' for np_zap)",
+    "count": "number of turns",
+    "times": "number of searches (1-20)",
+    "x1": "left column 0-78", "y1": "top row 0-20",
+    "x2": "right column 0-78", "y2": "bottom row 0-20",
+    "n": "number of turns to undo (1-15)",
+    "room_id": "room/corridor id from the map",
+    "text": "characters to type in order",
+}
+
+
+def _args_clause(name: str, params: dict) -> str:
+    """A one-line 'Args: a (hint), b (hint)' clause, or '' for no-arg tools."""
+    if not params:
+        return "\nArgs: none."
+    parts = []
+    for pname, pschema in params.items():
+        hint = _ARG_HINTS.get(pname) or (pschema.get("description") or "").strip()
+        opt = " optional" if "default" in pschema else ""
+        parts.append(f"{pname} ({hint}{opt})" if hint and hint != pname else f"{pname}{opt}")
+    return "\nArgs: " + ", ".join(parts) + f". Call: {name}(" + \
+        ", ".join(f"{k}=..." for k in params) + ")."
+
+
+def _make_skill_adapter(name: str, description: str, params: dict, describe_args: bool = False):
+    """Create a callable that exposes the schema verifiers expects.
+
+    describe_args=True appends a plain-language Args clause to the docstring so
+    the model does not have to probe for arguments (see _ARG_HINTS)."""
     import inspect
+    if describe_args:
+        description = (description or "").rstrip() + _args_clause(name, params)
 
     # Build a signature with parameters in declared order.
     sig_params = []

@@ -52,7 +52,7 @@ def _bfs(chars: np.ndarray, sx: int, sy: int, doors_ok: bool):
     return dist, prev
 
 
-def explain_path_failure(raw_obs, skill_args: dict) -> Optional[str]:
+def explain_path_failure(raw_obs, skill_args: dict, published_tools=None) -> Optional[str]:
     """One sentence of WHY the route to `skill_args`'s (x, y) failed, or None.
 
     The grid is the map-frame `chars` plane (tty row offset already absent).
@@ -109,8 +109,19 @@ def explain_path_failure(raw_obs, skill_args: dict) -> Optional[str]:
     if dist_free:
         near = min(dist_free, key=lambda p: max(abs(p[0] - tx), abs(p[1] - ty)))
         gap = max(abs(near[0] - tx), abs(near[1] - ty))
+        # Name the map tool that is actually published (e7 smoke found this
+        # hint advertising `reveal` on a surface that publishes request_map
+        # only -- the dead-vocabulary failure class interactive_state.py and
+        # rendering.py already guard against).
+        tools = {str(t) for t in (published_tools or ())}
+        if "reveal" in tools or not tools:
+            map_tip = "`reveal` the area between, or "
+        elif "request_map" in tools:
+            map_tip = "call `request_map` to see the full map, or "
+        else:
+            map_tip = ""
         return (f"[why: NO explored route connects you to ({tx},{ty}). The "
                 f"nearest reachable tile is ({near[0]},{near[1]}), {gap} away "
-                f"-- the gap is unexplored or hidden; `reveal` the area "
-                f"between, or `search` near dead ends]")
+                f"-- the gap is unexplored or hidden; {map_tip}"
+                f"`search` near dead ends]")
     return None
