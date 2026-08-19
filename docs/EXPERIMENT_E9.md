@@ -40,11 +40,47 @@ extended from 1 to **3 runs per seed** (same 5 seeds, same BBOX_MIN config; the
 game seed is fixed so the variance is the model's sampling). Median/spread from
 these replicates is the null band every E-cell is judged against.
 
+## E9b — awareness probe (does prompted metacognition change behavior?)
+
+Where E9a removes agency, E9b keeps it and instead makes the model *reflect*.
+E8 found the reasoning is accurate but **inert** — the model narrates the game
+well and then re-issues moves that just failed (E7 seed 0: `np_move_to(57,13)`
+nine times, three at zero progress). The hypothesis: the model has the reasoning
+ability but never *triggers* self-assessment, so forcing it each turn — "is this
+working? what's the new plan?" — may close the reasoning→policy gap without a
+hard constraint.
+
+**Knob:** `reflect` (`nethack.py`, `prompt/reflection.py`). When on, three
+reflection questions are appended to EVERY turn's observation — nothing else. No
+machine analysis of the model's behavior, no stall detection, no map forcing:
+this is deliberately *just a prompt change* asking the model to reflect, so the
+only thing under test is whether prompted reflection changes behavior. The
+published tool schemas stay byte-identical to the control. The block:
+
+```
+[Reflect on the previous steps before acting:
+ 1. What have you been working on in the past steps?
+ 2. What is going wrong, if anything?
+ 3. What is the updated plan?]
+```
+
+**Config:** the NPCORE_v3 control + `reflect=on`. Seeds 0–4.
+
+**What it tests / reads:** whether *prompted* reflection moves behavior off the
+~2.12 baseline. E8 showed the model reasons well but never triggers
+self-assessment; this makes it reflect every turn and asks whether that alone is
+enough to change the policy it executes.
+
+**Contrast with E9a:** E9a *forces* the right pacing; E9b *asks* the model to
+notice and self-correct. Together they bracket the reasoning→policy gap — E9a
+answers "would enforcing the plan help?", E9b answers "would the model fix
+itself if made to look?"
+
 ## Deferred
 
-- **E9b (reward/objective reshaping):** not run — the model's depth-greed may be
-  metric-induced (BALROG rewards depth; descending is one keystroke, leveling is
-  many risky kills), but we test the enforcement lever first.
+- **Reward/objective reshaping:** the model's depth-greed may be metric-induced
+  (BALROG rewards depth; descending is one keystroke, leveling many risky
+  kills). Test the enforcement (E9a) and awareness (E9b) levers first.
 - **Cross-model replication** (Claude / GPT on the same harness) — is
   "reads-and-ignores" GLM-specific or general? Load-bearing for the blog thesis.
 - **Continual life** — does the model learn to pace itself across deaths?

@@ -468,6 +468,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
         # "descend_pacing"). Prompt-only; published tool schemas untouched.
         mechanic_hints: str = "",
+        # E9b awareness probe: comma list of per-turn blocks ("ask", "verify",
+        # "map"). "off"/"" leaves every arm byte-identical. Prompt-only.
+        # docs/EXPERIMENT_E9.md, prompt/reflection.py.
+        reflect: str = "off",
         # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
         # setup_state the turn file for this rollout's seed is replayed
         # byte-for-byte through the freshly seeded engine, so the agent starts
@@ -503,6 +507,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
+        # E9b: append the reflection prompt to every turn. Off (default) leaves
+        # every arm byte-identical. Any truthy value enables it.
+        self.reflect = str(reflect or "").strip().lower() not in (
+            "", "off", "false", "0", "no")
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -992,7 +1000,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         )
         warning = detect_blocking_ui(
             state.get("raw_obs"), published_tools=state.get("_published_tools"))
-        return f"{warning}\n{obs_text}" if warning else obs_text
+        text = f"{warning}\n{obs_text}" if warning else obs_text
+        # E9b awareness probe: append the reflection questions to every turn.
+        if self.reflect:
+            from nethack_harness.prompt.reflection import REFLECT_BLOCK
+            text = f"{text}\n\n{REFLECT_BLOCK}"
+        return text
 
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
         """Instrument one LM turn, run it, and write exactly one trace record.
