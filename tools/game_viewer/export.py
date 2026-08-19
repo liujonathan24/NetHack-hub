@@ -184,9 +184,15 @@ def main(argv=None):
     ap.add_argument("-o", "--out", default="game_viewer.html")
     ap.add_argument("--label", action="append", default=[], help="dir=Label overrides, repeatable")
     ap.add_argument("--template", help="override template.html path")
+    ap.add_argument("--no-frames", action="store_true",
+                    help="strip per-move step_frames (light overview across many cells)")
     args = ap.parse_args(argv)
     labels = dict(x.split("=", 1) for x in args.label if "=" in x)
     games = build_games(args.cell_dirs, labels)
+    if args.no_frames:
+        for g in games:
+            for t in g["turns"]:
+                t["frames"] = []
     html = render(games, args.template)
     open(args.out, "w", encoding="utf-8").write(html)
     fr = sum(g["has_frames"] for g in games)
