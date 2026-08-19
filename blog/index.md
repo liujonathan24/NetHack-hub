@@ -86,7 +86,6 @@ On our initial harness, we see high variance in results with an overall median o
 | Cell | Median BALROG | Mean BALROG | Deaths | Max Dlvl | Max XL |
 |---|---|---|---|---|---|
 | NPCORE_v3 | 2.12 | 3.06 | 5/5 | 7 | 3 |
-| NPCORE_v2 | 4.85 | 5.75 | 4/5 | 10 | 5 |
 | NPFULL | 3.54 | 5.96 | 5/5 | 11 | 5 |
 | **All 15 games** | **3.54** | **4.93** | **14/15** | **11** | **5** |
 
@@ -101,6 +100,10 @@ Despite the poor performance, we see that the model reasons fairly reasonably ab
 
 
 
+
+
+
+[^1] https://github.com/liujonathan24/NetHack. 
 
 
 
