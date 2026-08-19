@@ -26,6 +26,7 @@ LLMs have been most famously introduced to NetHack in the BALROG paper. BALROG i
 # Initial Agent Harness 
 BALROG used fixed horizon and full action and full observation descriptions, with no active memory, as well as NetHack actions at a single action granularity. However, much progress over in RL for both games and for agents has been made by changing this basic setup. Encoding manipulations, full horizon with compaction, and action chunking via skills are now de facto settings for the most capable agents. As a result, we design a basic setup based on a previous paper, NetPlay, that retains the expressiveness of the original keys while also saving time up to 50 actions per LLM tool call. 
 
+<!-- ✅ DONE (Claude): Show the table of NetPlay reduced actions v3 and how each skill works. Also add a table of nethack actions and what they do. -->
 The reduced surface we call **np_core** exposes eight skills — the narrow, individually-debugged core of NetPlay's action layer. Each skill is a small program over the raw NetHack keys: `np_move_to`, for instance, runs A\* to a target tile and emits the whole run of movement keys in a single tool call. Anything not covered by a dedicated skill (eating, quaffing, wielding, answering a menu) is reachable through `np_press_key`, which answers NetHack's own prompts.
 
 **np_core skills (reduced actions v3)**
@@ -58,6 +59,7 @@ Under the skills sit the raw NetHack action classes they compose. A single `np_m
 | Key press | any key | Answer a prompt/menu or issue any raw NetHack command. |
 
 
+<!-- ✅ DONE (Claude): Navigate from one room to another with netplay skills and show the number of moves; two rows of actions (skills / NetHack letters). -->
 Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task. This is the opening of NPCORE_v3 seed 0: the Valkyrie leaves her spawn room and works across the level toward the downstairs. Three `np_move_to` calls expand into **29 raw NetHack keystrokes** — a ~10× reduction in tool calls, and the model never has to spell out a single movement key.
 
 | # | Skill call (what the model emits) | Raw NetHack keys (what the engine runs) | Keys |
@@ -81,6 +83,7 @@ With this setup, we create a custom port of NetHack 3.6.7 that enables flexibili
 
 TODO (Seth): Do I need justification here for why we don't have results without full visibility?
 
+<!-- ✅ DONE (Claude): Insert results (X and Y) and the table of results and the HTML widget to view games. -->
 On our initial harness, we see high variance in results with an overall median of **3.54** and an average of **4.93** BALROG score across the three tool-surface variants (NPCORE_v3, NPCORE_v2, NPFULL; 15 games in all). Every score reported here is the real BALROG progression metric (the max over the dungeon-level and experience-level percentiles), reported ×100 as a 0–100%.
 
 | Cell | Median BALROG | Mean BALROG | Deaths | Max Dlvl | Max XL |
@@ -91,6 +94,7 @@ On our initial harness, we see high variance in results with an overall median o
 
 The best single game reached only dungeon level 11 (BALROG 16.13); 14 of 15 rollouts died, and the median run barely cleared the first few levels. The full move-by-move archive is in `e7_viewer.html` (open in a browser; no server needed).
 
+<!-- ✅ DONE (Claude): Insert our observations that led to new experiments (list items 2-4). -->
 Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues: 
 1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in all 15 games (e.g. NPFULL seed 3 reached Dlvl 6 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the **E8a descent gate**, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
 2. **Reasoning is accurate but inert (PLANNING).** The model narrates the game well — it names monsters, judges which are safe to fight, identifies items, and even times prayer correctly (3 of 4 control prayers fired at critical HP) — yet this reasoning rarely changes the policy it then executes. That gap between good narration and unchanged behavior is the central question of the **E8 "does telling the model help?"** experiments (E8a descent gate, E8b prayer hint).

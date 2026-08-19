@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisiting NetHack with Agents</title>
+<style>
+:root{
+  --bg:#fbfaf7; --surface:#ffffff; --ink:#23202a; --ink2:#544c5e; --muted:#8a8194;
+  --accent:#7a3b8f; --accent2:#b8622a; --line:#e7e2df; --code-bg:#f2eef4;
+  --th-bg:#f4eff6; --row:#faf8fb;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#15131a; --surface:#1c1a22; --ink:#ece8f0; --ink2:#c3bccd; --muted:#8a8194;
+    --accent:#c88fda; --accent2:#e0975c; --line:#2c2833; --code-bg:#241f2c;
+    --th-bg:#241f2c; --row:#1f1c27;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#fbfaf7; --surface:#ffffff; --ink:#23202a; --ink2:#544c5e; --muted:#8a8194;
+  --accent:#7a3b8f; --accent2:#b8622a; --line:#e7e2df; --code-bg:#f2eef4;
+  --th-bg:#f4eff6; --row:#faf8fb;
+}
+:root[data-theme="dark"]{
+  --bg:#15131a; --surface:#1c1a22; --ink:#ece8f0; --ink2:#c3bccd; --muted:#8a8194;
+  --accent:#c88fda; --accent2:#e0975c; --line:#2c2833; --code-bg:#241f2c;
+  --th-bg:#241f2c; --row:#1f1c27;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16.5px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;}
+main{max-width:44rem;margin:0 auto;padding:3.2rem 1.4rem 6rem;}
+h1,h2,h3,h4{line-height:1.2;text-wrap:balance;color:var(--ink);margin:2.4em 0 .6em;font-weight:650;}
+h1{font-size:2.15rem;margin-top:.2em;letter-spacing:-.01em;}
+h1+*{margin-top:.4em}
+h2{font-size:1.5rem;padding-bottom:.28em;border-bottom:1px solid var(--line);}
+h3{font-size:1.2rem;color:var(--accent);}
+p,li{color:var(--ink);}
+a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in oklab,var(--accent) 40%,transparent);}
+a:hover{border-bottom-color:var(--accent);}
+strong{font-weight:650;color:var(--ink);}
+em{color:var(--ink2);}
+code{background:var(--code-bg);border-radius:4px;padding:.08em .34em;font-size:.9em;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+pre{background:var(--code-bg);border-radius:8px;padding:1em;overflow-x:auto;}
+pre code{background:none;padding:0;}
+blockquote{margin:1.2em 0;padding:.2em 1.1em;border-left:3px solid var(--accent2);color:var(--ink2);}
+hr{border:0;border-top:1px solid var(--line);margin:2.4em 0;}
+sup a{border:0;font-size:.8em;}
+.tablewrap{overflow-x:auto;margin:1.4em 0;}
+table{border-collapse:collapse;width:100%;font-size:.92rem;
+  font-variant-numeric:tabular-nums;background:var(--surface);
+  border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+th,td{text-align:left;padding:.5em .72em;border-bottom:1px solid var(--line);vertical-align:top;}
+th{background:var(--th-bg);font-weight:600;color:var(--ink);}
+tbody tr:nth-child(even){background:var(--row);}
+tbody tr:last-child td{border-bottom:0;}
+td code,th code{background:color-mix(in oklab,var(--code-bg) 60%,transparent);}
+ol,ul{padding-left:1.4em;}
+li{margin:.3em 0;}
+img{max-width:100%;height:auto;}
+.masthead{color:var(--muted);font-size:.82rem;letter-spacing:.04em;text-transform:uppercase;
+  margin-bottom:2.2rem;}
+</style>
+</head>
+<body>
+<main>
+<p class="masthead">NetHack · agent evaluation · working draft</p>
+<h1>Revisiting NetHack with Agents.</h1>
+<!--A strong model, NetPlay's own tools, full vision — and it still doesn't beat the game -->
+
+<p><em>Draft. Prose here; the live gameplay archive is <a href="e7_viewer.html"><code>e7_viewer.html</code></a>.</em></p>
+<p>Games have been a popular method for benchmarking language models in recent years due to their ability to detect usability errors in models (Jeurissen et al., 2024). Although knowledge-based benchmarks for language models have steadily improved over time, perceived LLM strengths continue to lag what their benchmarks report. Games, which are, at their core, long-horizon tasks that require agents to plan and act over extended periods, offer us a better evaluation on the capabilities of language models since game environments are arguably simpler than many of the real-world tasks we ultimately hope autonomous agents can solve. If they can’t do well on games, then they are not yet ready for real-world long-running tasks. </p>
+<p>As a result, substantial research has focused on optimizing language models for game playing, with particularly rapid progress over the past year.
+Language models have achieved human-level or superhuman performance on games such as Pokémon Red and Blue, Baba Is You, and several games in the BALROG benchmark suite. However, one notable exception remains NetHack. Originally released in the 1980s, NetHack appears to be orders of magnitude more difficult than the other games that have been successfully tackled. Even notoriously challenging environments such as Montezuma's Revenge have now seen strong performance, yet NetHack remains largely unsolved (e.g., zero neural agents were able to complete the NetHack Learning Environment during the NeurIPS 2021 competition, and symbolic approaches continue to outperform neural networks; Onuki et al., 2025). In the BALROG paper on LLMs and games, the strongest language models solve only about 7% of NetHack, leaving it as an open challenge. </p>
+<p>A year later, we revisit NetHack with agentic harnesses and the newest generation of models. We find that models still fail spectacularly to beat the game, raising some alarm bells: What makes NetHack fundamentally different from other game environments? Are current evaluation methods adequately capturing the capabilities of language models, or is the game presented in a way that is particularly inaccessible for agents? Or are there limitations in today's language models that prevent them from succeeding in such long-horizon, complex environments? </p>
+<p>In this blog, we investigate the failures of the current training stack and summarize meta patterns across research on this topic. We present a modernized harness for the game through Prime Intellect’s Verifiers package and an evaluation method with a refactored game engine to bring it up to standards with modern reinforcement learning and LLMs for games. </p>
+<h1>NetHack Introduction</h1>
+<p>NetHack—a 1987 fork of Hack, which was initially inspired by Rogue—is one of the oldest roguelike games. In the game, a player navigates a procedurally generated dungeon with a single life to retrieve the Amulet of Yendor and escape, battling the hundreds of unique monsters and navigating intricate traps along the way. With over 200 distinct items and 300 entities providing complex interactions, the human win-rate is approximately 1%, with the successes taking a median of 50 thousand moves to complete.</p>
+<p>The game is played in an 80x21 character terminal interface, where the entire world is rendered in ASCII characters. Players interact using modified vim keybinds to move, attack, quaff potions, read scrolls, and manage an inventory system. Because the environment is procedurally generated, heavily relies on hidden state (e.g., unidentified items, hidden doors, and unseen monsters), and has unintuitive traps, NetHack requires an incredible ability to plan over long horizons, generalize to new settings, and navigate the text-based dungeon. </p>
+<p>LLMs have been most famously introduced to NetHack in the BALROG paper. BALROG introduced a new metric that estimated game-progress using two key metrics: experience level and dungeon level percentiles. Specifically, each metric measured the fraction of human-played games that beat NetHack given that they hit a certain experience or dungeon level. Then, the BALROG metric takes the maximum over these two percentiles. We use that as our primary metric for progress.</p>
+<h1>Initial Agent Harness</h1>
+<p>BALROG used fixed horizon and full action and full observation descriptions, with no active memory, as well as NetHack actions at a single action granularity. However, much progress over in RL for both games and for agents has been made by changing this basic setup. Encoding manipulations, full horizon with compaction, and action chunking via skills are now de facto settings for the most capable agents. As a result, we design a basic setup based on a previous paper, NetPlay, that retains the expressiveness of the original keys while also saving time up to 50 actions per LLM tool call. </p>
+<!-- ✅ DONE (Claude): Show the table of NetPlay reduced actions v3 and how each skill works. Also add a table of nethack actions and what they do. -->
+<p>The reduced surface we call <strong>np_core</strong> exposes eight skills — the narrow, individually-debugged core of NetPlay's action layer. Each skill is a small program over the raw NetHack keys: <code>np_move_to</code>, for instance, runs A* to a target tile and emits the whole run of movement keys in a single tool call. Anything not covered by a dedicated skill (eating, quaffing, wielding, answering a menu) is reachable through <code>np_press_key</code>, which answers NetHack's own prompts.</p>
+<p><strong>np_core skills (reduced actions v3)</strong></p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Skill</th>
+<th>Arguments</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>np_explore_level</code></td>
+<td><em>(none)</em></td>
+<td>Auto-explores the level to reveal new rooms, corridors, and hidden doors; opens up to four doors it encounters.</td>
+</tr>
+<tr>
+<td><code>np_move_to</code></td>
+<td><code>x</code>, <code>y</code></td>
+<td>Pathfinds (A*) to tile <code>(x, y)</code>, emitting the full sequence of movement keys.</td>
+</tr>
+<tr>
+<td><code>np_melee_attack</code></td>
+<td><code>x</code>, <code>y</code></td>
+<td>Pursues the monster at <code>(x, y)</code> and attacks it in melee until it is dead.</td>
+</tr>
+<tr>
+<td><code>np_kick</code></td>
+<td><code>x</code>, <code>y</code></td>
+<td>Steps adjacent to <code>(x, y)</code> and kicks toward it (e.g. to force a locked door).</td>
+</tr>
+<tr>
+<td><code>np_press_key</code></td>
+<td><code>key</code></td>
+<td>Presses a single key — answers NetHack's own prompts and menus (any letter, plus ESC/SPACE/ENTER).</td>
+</tr>
+<tr>
+<td><code>np_apply</code></td>
+<td><code>item_letter</code> <em>(optional)</em></td>
+<td>Applies (uses) a tool from the inventory.</td>
+</tr>
+<tr>
+<td><code>np_rest</code></td>
+<td><code>count</code> <em>(optional, default 5)</em></td>
+<td>Waits in place for <code>count</code> turns, or until something happens.</td>
+</tr>
+<tr>
+<td><code>np_pray</code></td>
+<td><em>(none)</em></td>
+<td>Prays to your god for help, auto-confirming the "Are you sure?" prompt.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Under the skills sit the raw NetHack action classes they compose. A single <code>np_move_to</code> might expand into a dozen movement keys; <code>np_kick</code> into a kick command plus a direction; <code>np_pray</code> into the extended <code>#pray</code> command plus a <code>y</code>.</p>
+<p><strong>Raw NetHack actions the skills compose</strong></p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Raw action</th>
+<th>Keys</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Move</td>
+<td><code>h j k l</code> / <code>y u b n</code></td>
+<td>One step W/S/N/E, and the four diagonals; skills chain these into paths.</td>
+</tr>
+<tr>
+<td>Melee</td>
+<td>move into a monster</td>
+<td>Walking into an adjacent hostile swings your wielded weapon.</td>
+</tr>
+<tr>
+<td>Kick</td>
+<td><code>Ctrl-D</code> + direction</td>
+<td>Kick in a direction — break down doors, etc.</td>
+</tr>
+<tr>
+<td>Open</td>
+<td><code>o</code> + direction</td>
+<td>Open an adjacent door.</td>
+</tr>
+<tr>
+<td>Search</td>
+<td><code>s</code></td>
+<td>Search adjacent tiles for hidden doors and traps.</td>
+</tr>
+<tr>
+<td>Apply</td>
+<td><code>a</code> + item</td>
+<td>Use a tool from the inventory.</td>
+</tr>
+<tr>
+<td>Pray</td>
+<td><code>#pray</code></td>
+<td>Pray to your god (a last-ditch rescue).</td>
+</tr>
+<tr>
+<td>Wait</td>
+<td><code>.</code></td>
+<td>Do nothing for one turn (rest / heal).</td>
+</tr>
+<tr>
+<td>Key press</td>
+<td>any key</td>
+<td>Answer a prompt/menu or issue any raw NetHack command.</td>
+</tr>
+</tbody>
+</table></div>
+<!-- ✅ DONE (Claude): Navigate from one room to another with netplay skills and show the number of moves; two rows of actions (skills / NetHack letters). -->
+<p>Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task. This is the opening of NPCORE_v3 seed 0: the Valkyrie leaves her spawn room and works across the level toward the downstairs. Three <code>np_move_to</code> calls expand into <strong>29 raw NetHack keystrokes</strong> — a ~10× reduction in tool calls, and the model never has to spell out a single movement key.</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Skill call (what the model emits)</th>
+<th>Raw NetHack keys (what the engine runs)</th>
+<th>Keys</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>np_move_to(x=3, y=5)</code></td>
+<td><code>k</code></td>
+<td>1</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>np_move_to(x=15, y=9)</code></td>
+<td><code>llllllllnnnn</code></td>
+<td>12</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>np_move_to(x=27, y=10)</code></td>
+<td><code>hbnllllulullllln</code></td>
+<td>16</td>
+</tr>
+<tr>
+<td></td>
+<td><strong>3 skill calls</strong></td>
+<td></td>
+<td><strong>29 keys</strong></td>
+</tr>
+</tbody>
+</table></div>
+<div style="font-family:monospace;font-size:0.9em;border:1px solid #ccc;border-radius:6px;padding:0.6em 0.8em;overflow-x:auto;">
+<div><strong>skills&nbsp;→</strong>&nbsp; np_move_to(3,5) &nbsp;·&nbsp; np_move_to(15,9) &nbsp;·&nbsp; np_move_to(27,10) &nbsp;&nbsp;<em>(3 calls)</em></div>
+<div><strong>keys&nbsp;&nbsp;&nbsp;→</strong>&nbsp; k &nbsp;·&nbsp; l l l l l l l l n n n n &nbsp;·&nbsp; h b n l l l l u l u l l l l l n &nbsp;&nbsp;<em>(29 keys)</em></div>
+</div>
+
+<p>(Keys are vi-style: <code>h j k l</code> step W/S/N/E and <code>y u b n</code> the diagonals, so <code>np_move_to</code> is turning a target tile into the walk that reaches it.)</p>
+<p>Specifically, the attribute that we deem important are expressivity. One common case is doing an action will prompt the game to ask the user for a confirmation, for example, whether to attack an enemy or not. We find that these are essential to the game due to innate mechanics based on navigation. For example, oftentimes, if a user is running past a monster, they will automatically try to attack it. However, this may not be the model's intention, so if this ever occurs in one of our skills, we break from the skill and the confirmation message is displayed to the model.</p>
+<h1>Evaluations</h1>
+<p>With this setup, we create a custom port of NetHack 3.6.7 that enables flexibility in evaluations and game modes[^1]. During experimentation, we find that current models cannot beat the game even without partial observability when we provide full vision over the grid at any given time, so we dedicate our time to exploring what patterns and behaviors cause our models to fail with full observability. The default metric that we report is BALROG Score at a Fixed Expenditure of 200 LLM turns. </p>
+<p>TODO (Seth): Do I need justification here for why we don't have results without full visibility?</p>
+<!-- ✅ DONE (Claude): Insert results (X and Y) and the table of results and the HTML widget to view games. -->
+<p>On our initial harness, we see high variance in results with an overall median of <strong>3.54</strong> and an average of <strong>4.93</strong> BALROG score across the three tool-surface variants (NPCORE_v3, NPCORE_v2, NPFULL; 15 games in all). Every score reported here is the real BALROG progression metric (the max over the dungeon-level and experience-level percentiles), reported ×100 as a 0–100%.</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Cell</th>
+<th>Median BALROG</th>
+<th>Mean BALROG</th>
+<th>Deaths</th>
+<th>Max Dlvl</th>
+<th>Max XL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NPCORE_v3</td>
+<td>2.12</td>
+<td>3.06</td>
+<td>5/5</td>
+<td>7</td>
+<td>3</td>
+</tr>
+<tr>
+<td>NPFULL</td>
+<td>3.54</td>
+<td>5.96</td>
+<td>5/5</td>
+<td>11</td>
+<td>5</td>
+</tr>
+<tr>
+<td><strong>All 15 games</strong></td>
+<td><strong>3.54</strong></td>
+<td><strong>4.93</strong></td>
+<td><strong>14/15</strong></td>
+<td><strong>11</strong></td>
+<td><strong>5</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>The best single game reached only dungeon level 11 (BALROG 16.13); 14 of 15 rollouts died, and the median run barely cleared the first few levels. The full move-by-move archive is in <a href="e7_viewer.html"><code>e7_viewer.html</code></a> (open in a browser; no server needed).</p>
+<!-- ✅ DONE (Claude): Insert our observations that led to new experiments (list items 2-4). -->
+<p>Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues: 
+1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in all 15 games (e.g. NPFULL seed 3 reached Dlvl 6 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the <strong>E8a descent gate</strong>, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
+2. <strong>Reasoning is accurate but inert (PLANNING).</strong> The model narrates the game well — it names monsters, judges which are safe to fight, identifies items, and even times prayer correctly (3 of 4 control prayers fired at critical HP) — yet this reasoning rarely changes the policy it then executes. That gap between good narration and unchanged behavior is the central question of the <strong>E8 "does telling the model help?"</strong> experiments (E8a descent gate, E8b prayer hint).
+3. <strong>Pathfinding stalls on dense maps (CONTROL/PERCEPTION).</strong> When <code>np_move_to</code> cannot find a route it returns having moved nothing, and the model re-issues the same target instead of re-planning — NPCORE_v3 seed 0 alone aimed <code>np_move_to(57,13)</code> at the downstairs nine times, three of them advancing zero squares. This route-failure mode motivated the <strong>E8d density sweep</strong>, which thins the map to separate route-finding from decision-making.
+4. <strong>Locked doors drain the run (CONTROL of execution).</strong> With no dedicated unlock skill, the model falls back to <code>np_kick</code> and simply repeats it — seed 0 kicked the same door four times in a row. Door/kick friction motivated <strong>E8c</strong>, which hands the model a seed-matched dungeon with the doors already unlocked.</p>
+<p>[^1] https://github.com/liujonathan24/NetHack. </p>
+<!--GLM-5.2 driving NetPlay's published action surface, Prime Agent scaffold, the
+whole level revealed. Across three tool-surface variants and 15 games it never
+clears the early dungeon... -->
+
+<h2>How they die</h2>
+<!-- taxonomy: underleveled dive → swarmed → mistimed prayer; reward is pure depth -->
+
+<h2>The games</h2>
+<p>See <a href="e7_viewer.html"><code>e7_viewer.html</code></a> (open in a browser; no server needed).</p>
+<h2>E8 — does telling the model help? (2026-08-19)</h2>
+<p>Four experiments against the NPCORE_v3 baseline (median 2.12, 5/5 died).
+Viewers: <a href="e8a_viewer.html"><code>e8a_viewer.html</code></a> (descent gate), <a href="e8b_viewer.html"><code>e8b_viewer.html</code></a> (prayer hint),
+<a href="e8c_viewer.html"><code>e8c_viewer.html</code></a> (unlocked doors, seed-matched), <a href="e8d_viewer.html"><code>e8d_viewer.html</code></a> (density
+sweep). All E8 games replay <strong>move-by-move</strong> (per-step frames).</p>
+<div class="tablewrap"><table>
+<thead>
+<tr>
+<th>Cell</th>
+<th>Median</th>
+<th>Deaths</th>
+<th>Readout</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E8a norm gate</td>
+<td>2.12 (=control)</td>
+<td>5/5</td>
+<td>20 gates shown, 0 followed</td>
+</tr>
+<tr>
+<td>E8b prayer hint</td>
+<td>6.96 (variance)</td>
+<td>5/5</td>
+<td>all prayers at full HP</td>
+</tr>
+<tr>
+<td>E8c doors unlocked</td>
+<td>3.54</td>
+<td>4/5</td>
+<td>kicks 18→3; only survivor of the round</td>
+</tr>
+<tr>
+<td>E8d density 0.25/0.10/0.025</td>
+<td>3.54/3.54/2.65</td>
+<td>5/5</td>
+<td>route-fails 49→30→19→6, bal flat</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>The story:</strong> verbal guidance is read and ignored — the model re-descends
+straight through the human-norm line and prays at full HP despite being told
+the heal band. Removing friction (doors, rooms) removes errors but not deaths.
+24/25 rollouts died. Advice doesn't transfer to policy; the next lever is
+scaffold-enforced constraints.</p>
+<h3>E8 correction (traces re-read)</h3>
+<p>An earlier draft said the prayer hint was "read and ignored — all prayers at
+full HP." That was a measurement bug: the pray-turn record's HP is <em>post</em>-heal.
+The true pre-prayer HP was 2/16, 3/43, 5/16 — <strong>all critical, all correctly
+timed</strong> — and the reasoning shows the model did the math ("43/7 ≈ 6.1, I'm at 3,
+pray!"). Corrected story: prayer was already well-timed without the hint (3/4 in
+control), so the hint had little to fix; the score gap is seed variance. And the
+descent gate was <em>engaged with</em>, not ignored — on 7/20 gates the model reasoned
+about the XP tradeoff and chose to dive anyway with a defensible argument. The
+theme survives but softens: guidance is read and reasoned about, yet rarely
+changes policy — advice, even correct advice the model understands, doesn't
+reliably transfer to behavior.</p>
+</main>
+</body>
+</html>
