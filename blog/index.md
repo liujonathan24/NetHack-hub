@@ -1,4 +1,6 @@
 # Revisiting NetHack with Agents.
+<!-- TODO: revisit title -->
+
 <!--A strong model, NetPlay's own tools, full vision — and it still doesn't beat the game -->
 
 *Draft. Prose here; the live gameplay archive is `e7_viewer.html`.*
