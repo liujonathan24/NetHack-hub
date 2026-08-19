@@ -26,7 +26,6 @@ LLMs have been most famously introduced to NetHack in the BALROG paper. BALROG i
 # Initial Agent Harness 
 BALROG used fixed horizon and full action and full observation descriptions, with no active memory, as well as NetHack actions at a single action granularity. However, much progress over in RL for both games and for agents has been made by changing this basic setup. Encoding manipulations, full horizon with compaction, and action chunking via skills are now de facto settings for the most capable agents. As a result, we design a basic setup based on a previous paper, NetPlay, that retains the expressiveness of the original keys while also saving time up to 50 actions per LLM tool call. 
 
-<!-- ✅ DONE (Claude): Show the table of NetPlay reduced actions v3 and how each skill works. Also add a table of nethack actions and what they do. -->
 The reduced surface we call **np_core** exposes eight skills — the narrow, individually-debugged core of NetPlay's action layer. Each skill is a small program over the raw NetHack keys: `np_move_to`, for instance, runs A\* to a target tile and emits the whole run of movement keys in a single tool call. Anything not covered by a dedicated skill (eating, quaffing, wielding, answering a menu) is reachable through `np_press_key`, which answers NetHack's own prompts.
 
 **NetPlay reduced skills**
@@ -59,7 +58,6 @@ Under the skills sit the raw NetHack action classes they compose. A single `np_m
 | Key press | any key | Answer a prompt/menu or issue any raw NetHack command. |
 
 
-<!-- ✅ DONE (Claude): Navigate from one room to another with netplay skills and show the number of moves; two rows of actions (skills / NetHack letters). -->
 Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task.
 
 <div class="game-embed" data-demo="opening"></div>
@@ -80,7 +78,6 @@ With this setup, we create a custom port of NetHack 3.6.7 that enables flexibili
 
 TODO (Seth): Do I need justification here for why we don't have results without full visibility?
 
-<!-- ✅ DONE (Claude): Insert results (X and Y) and the table of results and the HTML widget to view games. -->
 On our initial harness, we see high variance across five seeds, with a mean BALROG score of **3.06** and every game ending in death. Every score reported here is the real BALROG progression metric (the max over the dungeon-level and experience-level percentiles), reported ×100 as a 0–100%.
 
 | Seed | BALROG | Max Dlvl | Max XL | Outcome |
@@ -92,7 +89,6 @@ On our initial harness, we see high variance across five seeds, with a mean BALR
 | Seed 4 | 4.85 | 7 | 1 | died |
 | **Mean** | **3.06** | **4.8** | **1.6** | **5/5 died** |
 
-<!-- ✅ DONE (Claude): Insert our observations that led to new experiments (list items 2-4). -->
 Despite the poor performance, we see that the model reasons fairly reasonably about the game, identifying monsters, whether monsters are appropriate to attack, and also what different objects in the game are. However, we see that all of them suffer from similar issues:
 
 1. All seeds reach higher dungeon levels than experience levels — descent outpaces leveling in every game (e.g. seed 4 reached Dlvl 7 still at XL 1). The model dives faster than it grows strong enough to survive down there. This motivated the **E8a descent gate**, which surfaces the human-norm XP-for-depth line and asks the model to consolidate before diving.
