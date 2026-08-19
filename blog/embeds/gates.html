@@ -1,0 +1,73 @@
+<div class="gamedemo" id="gamedemo-gates">
+<style>
+.gamedemo{--gd-term-bg:#0b100e;--gd-term-ink:#c7e6c7;--gd-line:var(--line,#e7e2df);
+  --gd-ink2:var(--ink2,#544c5e);--gd-muted:var(--muted,#8a8194);--gd-accent:var(--accent,#7a3b8f);
+  margin:1.6em 0;border:1px solid var(--gd-line);border-radius:10px;overflow:hidden;
+  background:var(--surface,#fff);}
+.gamedemo .gd-picks{display:flex;flex-wrap:wrap;gap:.35rem;padding:.6rem .7rem;
+  border-bottom:1px solid var(--gd-line);align-items:center;}
+.gamedemo .gd-pick{font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:var(--gd-ink2);background:transparent;border:1px solid var(--gd-line);border-radius:999px;
+  padding:.18em .62em;cursor:pointer;white-space:nowrap;}
+.gamedemo .gd-pick[aria-current="true"]{border-color:var(--gd-accent);color:var(--gd-accent);
+  background:color-mix(in oklab,var(--gd-accent) 10%,transparent);}
+.gamedemo .gd-pick.gd-failed{text-decoration:line-through;opacity:.72;}
+.gamedemo .gd-label{font-size:.75rem;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--gd-muted);margin-right:.15rem;}
+.gamedemo .gd-screen{background:var(--gd-term-bg);padding:.7rem .8rem;overflow-x:auto;}
+.gamedemo .gd-screen pre{margin:0;background:none;padding:0;color:var(--gd-term-ink);
+  font:12.5px/1.28 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  white-space:pre;min-width:max-content;}
+.gamedemo .gd-bar{display:flex;align-items:center;gap:.5rem;padding:.55rem .7rem;
+  border-top:1px solid var(--gd-line);}
+.gamedemo .gd-bar button{font:13px/1 inherit;color:var(--gd-ink2);background:transparent;
+  border:1px solid var(--gd-line);border-radius:6px;padding:.32em .6em;cursor:pointer;}
+.gamedemo .gd-bar button:hover{border-color:var(--gd-accent);color:var(--gd-accent);}
+.gamedemo .gd-bar input[type=range]{flex:1;min-width:4rem;accent-color:var(--gd-accent);}
+.gamedemo .gd-status{padding:0 .7rem .6rem;font-size:.8rem;color:var(--gd-muted);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.gamedemo .gd-status b{color:var(--gd-ink2);font-weight:600;}
+.gamedemo .gd-keys{display:inline-flex;flex-wrap:wrap;gap:.18rem;vertical-align:middle;}
+.gamedemo .gd-key{border:1px solid var(--gd-line);border-radius:4px;padding:0 .3em;min-width:1.2em;
+  text-align:center;color:var(--gd-muted);}
+.gamedemo .gd-key.gd-now{border-color:var(--gd-accent);color:var(--gd-accent);font-weight:700;}
+
+.gamedemo .gd-gate{border-bottom:1px solid var(--gd-line);padding:.7rem .8rem;
+  display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:baseline;}
+.gamedemo .gd-gate:last-child{border-bottom:0;}
+.gamedemo .gd-panel{flex:1 1 22rem;background:var(--gd-term-bg);color:var(--gd-term-ink);
+  border-radius:6px;padding:.45rem .6rem;
+  font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+.gamedemo .gd-who{font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:var(--gd-muted);flex:0 0 6.5rem;}
+.gamedemo .gd-did{font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color:var(--gd-ink2);flex:1 1 16rem;}
+.gamedemo .gd-tag{border-radius:999px;padding:.05em .55em;font-size:10.5px;
+  border:1px solid var(--gd-line);white-space:nowrap;}
+.gamedemo .gd-tag.dove{color:#b23a3a;border-color:color-mix(in oklab,#b23a3a 45%,transparent);}
+.gamedemo .gd-tag.held{color:#2f7d4f;border-color:color-mix(in oklab,#2f7d4f 45%,transparent);}
+.gamedemo .gd-sum{padding:.6rem .8rem;border-bottom:1px solid var(--gd-line);
+  font-size:.85rem;color:var(--gd-ink2);}
+</style>
+<div class="gd-sum">The run showed the model <b>20</b> descent panels across 5 seeds. On <b>15</b> of them the very next call repeated the descend keystroke unchanged; on <b>5</b> the model did something else next.</div>
+<div class="gd-gate"><div class="gd-who">seed 0 · call 30</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 1. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 0 · call 36</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 2. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 0 · call 46</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 3. Typical successful human runs reach XL 2 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 49</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 1. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 59</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 2. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 83</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 3. Typical successful human runs reach XL 2 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_rest(count=None)</b></div><span class="gd-tag held">did something else</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 98</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 4. Typical successful human runs reach XL 3 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>request_map()</b></div><span class="gd-tag held">did something else</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 115</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 5. Typical successful human runs reach XL 4 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_melee_attack(x=32, y=13)</b></div><span class="gd-tag held">did something else</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 151</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 6. Typical successful human runs reach XL 5 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 159</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 7. Typical successful human runs reach XL 6 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_explore_level()</b></div><span class="gd-tag held">did something else</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 165</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 8. Typical successful human runs reach XL 8 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_explore_level()</b></div><span class="gd-tag held">did something else</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 174</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 9. Typical successful human runs reach XL 8 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 1 · call 185</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 10. Typical successful human runs reach XL 9 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 2 · call 19</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 1. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 2 · call 32</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 2. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 3 · call 20</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 2. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 3 · call 29</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 3. Typical successful human runs reach XL 2 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 3 · call 42</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 4. Typical successful human runs reach XL 3 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 4 · call 15</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 1. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+<div class="gd-gate"><div class="gd-who">seed 4 · call 25</div><div class="gd-panel">[descent check: you are XL 1 on Dlvl 2. Typical successful human runs reach XL 1 before leaving this depth. Repeat the call to descend anyway.]</div><div class="gd-did">tripped by <b>np_press_key(key=&gt;)</b><br>next call <b>np_press_key(key=&gt;)</b></div><span class="gd-tag dove">descended anyway</span></div>
+</div>

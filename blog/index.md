@@ -104,18 +104,45 @@ Despite the poor performance, we see that the model reasons fairly reasonably ab
 ## Short-term Rewards
 We've observed that our LLM over-indexes into descending in the dungeon, but we haven't yet measured its pace against a human. Below, we extract human gameplay data from the NetHack Learning Dataset to plot our models against human gameplay. Notably, we actually descend with the same speed as the top 1-5% of humans! 
 
-<!-- TODO: claude. add plots like in https://claude.ai/code/artifact/772d0d6c-3cfe-4886-8769-5f84876d3b40?org=e8e04b44-e81a-4556-9290-f8103fec7728, comparing the nethack reduced seeds to human gameplay. -->
+<div class="game-embed" data-demo="pace"></div>
+
+Turn for turn, the early game is not where we lose. Through the first few hundred game turns our median seed sits at or above both human curves — at game turn 300 our median is 1.75% BALROG against 0.00% for the NAO population and 0.00% for the top ten, and by turn 850 it is 2.12% against 1.85% and 1.75%. Human progression is a step function and half the population has not moved off zero this early, so keeping pace here is a real result rather than an artefact of the metric. What separates us is what comes next: every one of our runs is over by game turn 857, four of the five are dead before turn 400, and the human curves keep climbing for another two orders of magnitude — to a median 3.54% for the population and 12.56% for the ten strongest players. We match strong human pace for as long as we survive, and we do not survive long.
 
 To mitigate these short-term tendencies, we try to add scaffolding for the model to understand what typical, successful gameplay looks like. Each time the model tries to descend to the next level, we add a new confirmation panel that alerts the model to the average experience level a human would descend at. 
 
-<!-- TODO: claude. Add widget to show confirmation insertion-->
+<div class="game-embed" data-demo="gates"></div>
 
-<!-- TODO: claude. Add results and pairwise comparisons on each seed (to original). Also add widget to view these games-->
+The panel fired 20 times across the five seeds. On 15 of them the model's very next call was the same descend keystroke, unchanged — it read the norm and repeated the action that had just been questioned. On the other five the next call was something else: rest, explore, re-request the map, or attack an adjacent monster.
+
+| Seed | Control | Descent gate | Δ |
+|---|---|---|---|
+| Seed 0 | 1.75 | 2.12 | +0.37 |
+| Seed 1 | 4.85 | 16.13 | +11.28 |
+| Seed 2 | 1.75 | 1.75 | ±0 |
+| Seed 3 | 2.12 | 2.65 | +0.53 |
+| Seed 4 | 4.85 | 1.85 | −3.00 |
+| **Mean** | **3.06** | **4.90** | **+1.84** |
+
+The gate looks like a +1.84 improvement, and it is almost certainly not one. Two things in this same data set the noise floor. Re-running the *control* configuration unchanged on the same five seeds moves individual seeds by −3.00 to +0.37 and the mean from 3.06 to 2.13. And a third cell carries a byte-identical eval config to the gated one but never displayed a single panel — 0 gates across its 5 games — yet scores a mean of 7.75, higher than either arm above. A seed-matched difference of +1.84 that rests on one game out of five is smaller than what the same configuration produces when you simply run it again.
+
+<div class="game-embed" data-demo="e8a_games"></div>
 
 ## Simplifying Path-finding 
-Similarly, X% of tool calls in our initial set of evaluations resulted in no-ops due to navigation errors.<!-- TODO: claude. figure out what x% is --> As a result, we try two simplifications. First, we unlock all the doors, allowing navigation tool calls to go uninterrupted for longer durations; and 2) we rewire the dungeon map generation to create fewer dungeon rooms. 
+Similarly, 11% of tool calls in our initial set of evaluations resulted in no-ops due to navigation errors — 49 of 429, or 22% counting only the navigation calls themselves (`np_move_to` and `np_explore_level`). As a result, we try two simplifications. First, we unlock all the doors, allowing navigation tool calls to go uninterrupted for longer durations; and 2) we rewire the dungeon map generation to create fewer dungeon rooms. 
 
-<!-- TODO: claude. Add results and pairwise comparisons on each seed (to original). Also add widget to view these games-->
+Both simplifications did the mechanical thing they were meant to do. Unlocking the doors cut kicks across the five seeds from 18 to 3. Thinning the rooms cut the navigation no-op rate monotonically, from 22.0% in the control to 7.1% at the sparsest setting.
+
+| Cell | Nav no-ops | Kicks | Mean BALROG | Per-seed Δ vs control |
+|---|---|---|---|---|
+| Control | 22.0% (49/223) | 18 | 3.06 | — |
+| Doors unlocked | 26.6% (79/297) | 3 | 4.08 | −2.43 … +5.21 |
+| Density 0.25 | 12.8% (31/242) | 16 | 4.48 | −2.73 … +4.92 |
+| Density 0.10 | 8.6% (21/244) | 13 | 5.70 | −3.00 … +14.01 |
+| Density 0.025 | 7.1% (7/98) | 5 | 4.35 | −3.10 … +10.81 |
+
+The one rate that moves the wrong way is the doors cell, and it moves that way for a mundane reason: its seed 1 was the only game in the whole round to survive to the 200-call budget, and it spent 49 of its 131 navigation calls stuck, which drags the pooled rate up on its own. The score column is the same story as the descent gate. Every mean sits inside the ±3-point band that the control produces against itself, and each of the two largest per-seed gains is a single game that happened to find a staircase. We can remove the friction we set out to remove and measure that we removed it; we cannot yet measure an effect on how far the agent gets.
+
+<div class="game-embed" data-demo="e8cd_games"></div>
 
 ## 
 

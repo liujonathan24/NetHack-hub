@@ -76,11 +76,16 @@
     host.appendChild(b);
     return b;
   }
+  function label(host, text){
+    host.appendChild(Object.assign(document.createElement("span"),
+      {className: "gd-label", textContent: text}));
+  }
   function mark(host, active){
     Array.prototype.forEach.call(host.children, function(b, k){
       if (b.tagName === "BUTTON") b.setAttribute("aria-current", k === active ? "true" : "false");
     });
   }
+  function clear(host){ while (host.children.length > 1) host.removeChild(host.lastChild); }
 
   var chips = q("calls");
   calls.forEach(function(c, ci){
