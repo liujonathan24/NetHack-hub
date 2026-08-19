@@ -1252,7 +1252,15 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # E8a descent gate: the FIRST np_down on a given dungeon level returns
         # the norm line at zero engine cost; the second proceeds. Soft gate --
         # agency preserved, the game is never blocked. docs/EXPERIMENT_E8.md.
-        if self.descent_gate in ("norm", "directive") and skill_name == "np_down":
+        # Gate the descent ACTION, not one tool name: np_core has no np_down —
+        # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
+        # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
+        _is_descent = (
+            skill_name == "np_down"
+            or (skill_name == "np_press_key"
+                and str((skill_args or {}).get("key", "")).strip() == ">")
+        )
+        if self.descent_gate in ("norm", "directive") and _is_descent:
             try:
                 st_now = (state["structured_obs"].status or {})
                 dlvl = int(st_now.get("depth") or 1)
@@ -1267,11 +1275,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 if self.descent_gate == "norm":
                     gate = (f"[descent check: you are XL {xl} on Dlvl {dlvl}. "
                             f"Typical successful human runs reach XL {norm} "
-                            f"before leaving this depth. Call np_down again "
-                            f"to descend.]")
+                            f"before leaving this depth. Repeat the call to "
+                            f"descend anyway.]")
                 else:
                     gate = (f"[descent check: level to XL {norm} before moving "
-                            f"on. Call np_down again to descend.]")
+                            f"on. Repeat the call to descend anyway.]")
                 tt = state["_turn_trace"]
                 tt["status"] = "interrupted"
                 tt["feedback"] = gate

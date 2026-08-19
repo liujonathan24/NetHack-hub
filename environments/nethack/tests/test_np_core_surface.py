@@ -266,3 +266,12 @@ def test_step_frames_carry_glyph_ids():
     with TurnRecorder(env, capture_frames=True) as rec:
         env.step(ord("l"))
     assert rec.frames[0]["gid"] == "2359x1659"  # 21*79 identical ids, one run
+
+
+def test_descent_gate_covers_press_key_descend():
+    """np_core has no np_down — descent is np_press_key('>'). The gate must
+    intercept the ACTION, not one tool name (E8a attempt-1 regression)."""
+    import inspect
+    import nethack as nethack_mod
+    src = inspect.getsource(nethack_mod.NetHackVerifiersEnv._apply_tool_call_inner)
+    assert 'skill_name == "np_press_key"' in src and '">"' in src.replace("'>'", '">"') or ' == ">"' in src
