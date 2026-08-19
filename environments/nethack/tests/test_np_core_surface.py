@@ -251,3 +251,18 @@ def test_e8_mechanic_hint_blocks():
     # prompt-only: block text must never mention tool schemas
     for b in MECHANIC_HINT_BLOCKS.values():
         assert "parameters" not in b
+
+
+def test_step_frames_carry_glyph_ids():
+    import numpy as np
+    from nethack_harness.helpers import TurnRecorder
+    class Obs:
+        def __init__(s):
+            s.tty_chars = np.full((24, 80), ord("."), dtype=np.uint8)
+            s.glyphs = np.full((21, 79), 2359, dtype=np.int16)
+    class Env:
+        def step(s, a): return (Obs(), 1.0, False, False, {})
+    env = Env()
+    with TurnRecorder(env, capture_frames=True) as rec:
+        env.step(ord("l"))
+    assert rec.frames[0]["gid"] == "2359x1659"  # 21*79 identical ids, one run

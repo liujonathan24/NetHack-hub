@@ -118,6 +118,7 @@ class TurnRecorder:
                             "b": ai,
                             "k": chr(ai) if 32 <= ai < 127 else "",
                             "g": _tty_rows(obs0),
+                            "gid": _glyph_rle(obs0),
                             "m": _obs_message(obs0) or "",
                         })
                 except Exception:
@@ -1121,6 +1122,36 @@ def _decode_tty(obs) -> str:
     return "\n".join(
         "".join(chr(c) for c in row) for row in obs.tty_chars
     )
+
+def _glyph_rle(obs):
+    """Compact RLE of the 21x79 glyph-id plane ("id xN,id xN,..." row-major).
+
+    The tty chars show WHAT is drawn; glyph ids carry IDENTITY (which monster
+    species, which object class) -- analysis-grade ground truth per step.
+    ~0.2-0.8 KB/step. [] / "" on any failure -- frame capture must never break
+    a rollout.
+    """
+    g = obs.get("glyphs") if isinstance(obs, dict) else getattr(obs, "glyphs", None)
+    if g is None:
+        return ""
+    try:
+        out = []
+        prev = None; run = 0
+        for row in g:
+            for v in row:
+                v = int(v)
+                if v == prev:
+                    run += 1
+                else:
+                    if prev is not None:
+                        out.append(f"{prev}x{run}" if run > 1 else f"{prev}")
+                    prev, run = v, 1
+        if prev is not None:
+            out.append(f"{prev}x{run}" if run > 1 else f"{prev}")
+        return ",".join(out)
+    except Exception:
+        return ""
+
 
 def _tty_rows(obs):
     """The 24 tty rows as a list of strings (one screen). Right-trimmed.
