@@ -192,7 +192,7 @@ function renderTicks(g){
 }
 function renderReason(g){
   $("reason").innerHTML=g.reasoning.map(r=>{
-    const long=(r.text||"").length>320;
+    const long=(r.text||"").length>10000;
     return `<div class="ritem ${long?"clamped":""}" data-t="${r.turn}"><span class="rt">→ turn ${r.turn+1}</span>`+
       `<span class="body">${esc(r.text)}</span>${long?'<span class="more">⌄ more</span>':""}</div>`;
   }).join("")||'<div class="ritem">(no reasoning captured)</div>';

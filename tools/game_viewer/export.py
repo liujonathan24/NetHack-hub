@@ -8,9 +8,11 @@ A cell dir holds `traces.jsonl` (LLM-side: reasoning) and `turns/*.ndjson`
 `record_step_frames`, per-engine-step screens under `step_frames`).
 
 The emitted HTML embeds the data and needs no server or network -- open it
-locally or push it to a blog branch and edit around it. Reasoning is aligned to
-game turns by ordered `nethack.*` call matching (best-effort until the call-id
-barrier lands on this branch). One <title> and one favicon are the caller's job.
+locally or push it to a blog branch and edit around it. Reasoning is read
+straight from each record's `reasoning` block (populated by
+`tools.trace_reasoning`, the single alignment authority) -- the exporter no
+longer re-derives the move<->reasoning mapping from prose. One <title> and one
+favicon are the caller's job.
 
 Design intent: this is the versioned, reusable form of the ad-hoc blog export --
 the widget layout (wide 80-col engine screen, dual LLM/game-turn scrubbers,
@@ -18,12 +20,11 @@ per-move keystrokes + step frames, collapsible full reasoning, function-call
 log) lives in template.html next to this file so the blog author edits one place.
 """
 from __future__ import annotations
-import argparse, glob, json, os, re, sys
+import argparse, glob, json, os, sys
 
-CALL_RE = re.compile(r"nethack\.([a-z_0-9]+)\s*\(")
 MAP_TOOLS = {"reveal", "request_map"}
 HERE = os.path.dirname(os.path.abspath(__file__))
-OBS_CAP = 5000  # obs text per turn; keep it generous but bounded
+OBS_CAP = 500000  # obs text per turn; keep it generous but bounded
 
 # balrog table is vendored in the env package; import lazily so the exporter
 # runs even from a bare checkout (falls back to a depth-only estimate).
@@ -87,55 +88,37 @@ def _load_turns(path):
     return turns, recs
 
 
-def _load_reasoning(cell_dir):
-    out = {}
-    tf = os.path.join(cell_dir, "traces.jsonl")
-    if not os.path.exists(tf):
-        return out
-    for line in open(tf):
-        try:
-            t = json.loads(line)
-        except Exception:
+def _reasoning_items(recs):
+    """Reasoning entries for the panel, read straight from the records.
+
+    Each record already carries its own `reasoning` block, aligned to the move
+    by `tools.trace_reasoning`'s backfill -- the single alignment authority,
+    which joins the game-side records to the model-side trace nodes by call
+    name/order (control arm) or by wall clock (Prime Agent, whose only tool is
+    `ipython` so names can't be walked). We do NOT re-derive the mapping here;
+    re-deriving from prose is exactly what produced the old "same reasoning on
+    consecutive turns" artifact.
+
+    Consecutive records that share a narration collapse into one entry labeled
+    with the FIRST turn it governs -- because the model narrates a plan once and
+    then executes several silent moves under it. `show()` highlights the last
+    entry whose turn <= the current move, so the governing plan stays lit across
+    those moves. That shared narration is the honest picture, not a bug.
+    """
+    items, last = [], None
+    for i, r in enumerate(recs):
+        rz = r.get("reasoning") or {}
+        content = (rz.get("text") or "").strip()
+        thinking = (rz.get("reasoning_text") or "").strip()
+        # Prefer the richer channel: GLM's `reasoning_content` is usually a
+        # superset of `content`; the control arm fills `content` and leaves
+        # `reasoning_text` empty. Longer wins; ties keep `content`.
+        txt = thinking if len(thinking) > len(content) else content
+        if not txt or txt == last:
             continue
-        idx = ((t.get("task") or {}).get("data") or {}).get("idx")
-        items = []
-        for n in (t.get("nodes") or []):
-            m = n.get("message") or {}
-            if m.get("role") != "assistant":
-                continue
-            txt = (m.get("reasoning_content") or "").strip()
-            content = m.get("content") or ""
-            if isinstance(content, list):
-                content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
-            body = (txt + ("\n---\n" + content.strip() if content.strip() else "")).strip()
-            calls = []
-            for tc in (m.get("tool_calls") or []):
-                a = tc.get("arguments") or ""
-                if isinstance(a, dict):
-                    a = json.dumps(a)
-                calls += CALL_RE.findall(a)
-            if body or calls:
-                items.append({"text": body or "(tool call only)", "calls": calls})
-        if idx is not None:
-            out[idx] = items
-    return out
-
-
-def _align(turns, ritems):
-    ptr = 0
-    seq = [t["call"] for t in turns]
-    for it in ritems:
-        it["turn"] = min(ptr, max(0, len(turns) - 1))
-        for k, name in enumerate(it["calls"]):
-            j = ptr
-            while j < len(seq) and seq[j] != name:
-                j += 1
-            if j < len(seq):
-                if k == 0:
-                    it["turn"] = j
-                ptr = j + 1
-        it.pop("calls", None)
-    return ritems
+        items.append({"text": txt, "turn": i})
+        last = txt
+    return items
 
 
 def build_games(cell_dirs, labels=None):
@@ -143,12 +126,11 @@ def build_games(cell_dirs, labels=None):
     for ci, cdir in enumerate(cell_dirs):
         label = (labels or {}).get(cdir) or os.path.basename(cdir.rstrip("/"))
         chosen = _select_turn_files(cdir)
-        rz = _load_reasoning(cdir)
         for seed, path in sorted(chosen.items()):
             turns, recs = _load_turns(path)
             if not turns:
                 continue
-            ritems = _align(turns, list(rz.get(seed, [])))
+            ritems = _reasoning_items(recs)
             last = turns[-1]
             died = last.get("hp") == 0
             maxdl = max((t.get("mdl") or 0) for t in turns)
@@ -184,9 +166,15 @@ def main(argv=None):
     ap.add_argument("-o", "--out", default="game_viewer.html")
     ap.add_argument("--label", action="append", default=[], help="dir=Label overrides, repeatable")
     ap.add_argument("--template", help="override template.html path")
+    ap.add_argument("--no-frames", action="store_true",
+                    help="strip per-move step_frames (light overview across many cells)")
     args = ap.parse_args(argv)
     labels = dict(x.split("=", 1) for x in args.label if "=" in x)
     games = build_games(args.cell_dirs, labels)
+    if args.no_frames:
+        for g in games:
+            for t in g["turns"]:
+                t["frames"] = []
     html = render(games, args.template)
     open(args.out, "w", encoding="utf-8").write(html)
     fr = sum(g["has_frames"] for g in games)
