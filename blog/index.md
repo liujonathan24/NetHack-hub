@@ -13,9 +13,29 @@ A year later, we revisit NetHack with agentic harnesses and the newest generatio
 
 In this blog, we investigate the failures of the current training stack and summarize meta patterns across research on this topic. We present a modernized harness for the game through Prime Intellect’s Verifiers package and an evaluation method with a refactored game engine to bring it up to standards with modern reinforcement learning and LLMs for games. 
 
-# NetHack in BALROG
 
-BALROG introduced a new metric that compared two key etrics
+
+# NetHack Introduction
+
+NetHack—a 1987 fork of Hack, which was initially inspired by Rogue—is one of the oldest roguelike games. In the game, a player navigates a procedurally generated dungeon with a single life to retrieve the Amulet of Yendor and escape, battling the hundreds of unique monsters and navigating intricate traps along the way. With over 200 distinct items and 300 entities providing complex interactions, the human win-rate is approximately 1%, with the successes taking a median of 50 thousand moves to complete.
+
+The game is played in a 80x21 character terminal interface, where the entire world is rendered in ASCII characters. Players interact using modified vim keybinds to move, attack, quaff potions, read scrolls, and manage an inventory system. Because the environment is procedurally generated, heavily relies on hidden state (e.g., unidentified items, hidden doors, and unseen monsters), and has unintuitive traps, NetHack requires an incredible ability to plan over long horizons, generalize to new settings, and navigate the text-based dungeon. 
+
+LLMs have been most famously introduced to NetHack in the BALROG paper. BALROG introduced a new metric that estimated game-progress using two key metrics: experience level and dungeon level percentiles. Specifically, each metric measured the fraction of human-played games that beat NetHack given that they hit a certain experience or dungeon level. Then, the BALROG metric takes the maximum over these two percentiles. We use that as our primary metric for progress.
+
+# Initial Agent Harness 
+BALROG used fixed horizon and full action and full observation descriptions, with no active memory, as well as NetHack actions at a single action granularity. However, much progress over in RL for both games and for agents has been made by changing this basic setup. Encoding manipulations, full horizon with compaction, and action chunking via skills are now de facto settings for the most capable agents. As a result, we design a basic setup based on a previous paper, NetPlay, that retains the expressiveness of the original keys while also saving time up to 50 actions per LLM tool call. 
+
+<!-- TODO: claude. Show the table of NetPlay actions and how each works. Also add a table of nethack actions and what they do.-->
+
+
+Below, we give an example demonstration in terms of LLM actions and number of in-game NetHack actions required to complete a navigation task.} <!-- TODO: claude. Navigate from 1 room to another with netplay skills and show the number of moves on the left side. Should be one viewer with two rows of actions below one w/ skills, other with nethack letters-->
+
+
+# 
+
+
+
 
 
 
