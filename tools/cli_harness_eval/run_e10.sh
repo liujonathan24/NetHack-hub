@@ -20,6 +20,15 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# THE HARNESS PACKAGE DOES NOT COME FROM THIS WORKTREE unless we put it here.
+# Unlike the env code (which launch_cell.sh puts on PYTHONPATH from $REPO),
+# `nethack_prime_agent` is an EDITABLE INSTALL in the shared venv pointing at
+# /root/NetHack-hub/harnesses/nethack-prime-agent -- the main checkout. Without
+# this line the eval CLI validates against the OLD config class and dies with
+#   "--continual-harness-dir  Extra inputs are not permitted"
+# which reads like a typo in the flag rather than a stale package. Measured.
+# PYTHONPATH beats the .pth-added site-packages entry, so this wins.
+export PYTHONPATH="${REPO}/harnesses/nethack-prime-agent${PYTHONPATH:+:${PYTHONPATH}}"
 export ENG="${ENG:-/root/NetHack-engine}"
 export EVAL_BIN="${EVAL_BIN:-/root/NetHack-hub/.venv-cli-eval/bin/eval}"
 LAUNCH="$REPO/tools/cli_harness_eval/launch_cell.sh"

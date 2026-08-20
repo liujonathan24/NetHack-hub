@@ -20,6 +20,12 @@ TRAIN_DIR="${1:?usage: e10_orchestrate.sh <train_dir> <ch_dir> <round_out>}"
 CH="${2:?}"
 ROUND_OUT="${3:?}"
 MODEL="${ORCH_MODEL:-z-ai/glm-5.2}"
+# PIN THE PROVIDER. `--model z-ai/glm-5.2` alone is a model *pattern*: it matched
+# openrouter's catalog entry first and died with "No API key found for
+# openrouter", even though settings.json names prime-inference as the default.
+# Credentials for prime-inference come from ~/.prime/config.json, which is
+# outside the agent dir, so the private ORCH_DIR does not lose them.
+PROVIDER="${ORCH_PROVIDER:-prime-inference}"
 
 [ -d "$TRAIN_DIR" ] || { echo "e10_orchestrate: no such train dir: $TRAIN_DIR" >&2; exit 2; }
 mkdir -p "$ROUND_OUT" "$CH"
@@ -36,6 +42,10 @@ done
 rm -rf "$ORCH_DIR/harness"
 ln -sfn "$CH" "$ORCH_DIR/harness"
 
+# NOTE: this heredoc is UNQUOTED on purpose, so \${TRAIN_DIR} and \${ROUND_OUT}
+# interpolate. That also makes backticks command substitutions -- bash executed
+# `refine.run(...)` as a command the first time this ran. Keep the prompt free
+# of backticks and of $ followed by anything that is not one of those two vars.
 read -r -d '' PROMPT <<PROMPT_EOF
 You are the E10 orchestrator for a NetHack agent experiment. You are not playing
 the game. Your job is to read how previous games went and to leave better notes
@@ -68,7 +78,7 @@ OUTPUT (the only things you may write):
      ValueError here means your call shape is wrong, not that the store is.
      Read what is already there first: rlm.get_harness_state(global_=True)
      These are SYNCHRONOUS methods on a local JSON store -- do NOT await them.
-     (`refine.run(...)` and the `rlm(...)` subagent call ARE async; the harness
+     ('refine.run(...)' and the 'rlm(...)' subagent call ARE async; the harness
      store is not.)
   2. A rationale file at ${ROUND_OUT}/orchestrator_rationale.json, a JSON list of
      {"action","kind","id","title","evidence","expected_effect"} -- one object per
@@ -93,10 +103,30 @@ skill package. Do not run the game. Do not launch evaluations. When you are done
 print a one-paragraph summary of what you changed and why.
 PROMPT_EOF
 
-echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH"
+# The prompt is the whole instrument; a mangled one silently produces a useless
+# round. (First run: the unquoted heredoc executed the backticked spans and left
+# PROMPT truncated.) Fail before spending a model call on it.
+case "$PROMPT" in
+  *"HARD BUDGET"*) prompt_ok=1 ;;
+  *) prompt_ok=0 ;;
+esac
+case "$PROMPT" in
+  *"orchestrator_rationale.json"*) : ;;
+  *) prompt_ok=0 ;;
+esac
+case "$prompt_ok" in
+  1) : ;;
+  *)
+    echo "e10_orchestrate: PROMPT did not assemble (${#PROMPT} chars) -- refusing" >&2
+    echo "  to run a round on a truncated prompt." >&2
+    exit 3
+    ;;
+esac
+
+echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH (provider=$PROVIDER model=$MODEL)"
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
 PRIME_AGENT_KERNEL_VENV="${PRIME_AGENT_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
-  prime-agent --print --model "$MODEL" -- "$PROMPT" \
+  prime-agent --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
   > "$ROUND_OUT/orchestrator.stdout.txt" 2> "$ROUND_OUT/orchestrator.stderr.txt"
 rc=$?
 echo "[orch ] $(date -u +%H:%M:%S) rc=$rc"

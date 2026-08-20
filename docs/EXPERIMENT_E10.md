@@ -1,8 +1,7 @@
 # E10 — Does past play make future play cheaper?
 
-**Status:** design. No code, no runs yet. E9a/control is in flight (owned by the
-main agent); nothing here may touch the prime-agent daemon until that batch is
-done.
+**Status:** mechanism built and smoke-tested end to end (2026-08-20). E9 has
+finished. The experiment itself has not been run.
 
 **Question.** After the agent has played NetHack *X* times, is playing time
 *X+1* cheaper? Concretely: can an orchestrator read prior traces, edit what the
@@ -133,6 +132,76 @@ concurrently with a rollout. Its state is the files it writes; a fresh process
 each round is a feature, not a limitation.
 
 ---
+
+### 1.6 Measured, not inferred (smoke test, 2026-08-20)
+
+Every link in the chain was run:
+
+1. **Delivery.** A store seeded by a separate process, read by
+   `prime-agent --print --no-session --offline` against a stub OpenAI endpoint
+   that logs what the CLI sends: both entries appear **verbatim in the system
+   prompt** (19,722 chars), rendered as
+   `- [global:<id>] <title> (<path>, v1): <content>`. Neither `traces.jsonl`
+   (call metadata only) nor `turns/*.ndjson` records the agent's system prompt,
+   so this is the only way to see it.
+2. **The link under bwrap.** A store bound read-only on top of the read-write
+   `install_dir` bind is readable and unwritable, the rest of `install_dir` stays
+   writable, and `agent-<id>/harness -> <store>` resolves inside the sandbox.
+3. **A real cell.** `launch_cell.sh prime_agent ... 10 1` with
+   `CONTINUAL_HARNESS` set: completed, 10 skill calls, no errors, the resolved
+   `config.toml` records both knobs, the symlink was created, and the store's
+   sha256 was unchanged afterwards.
+4. **End to end, behaviourally.** A store carrying one prompt note — "your very
+   first tool call this episode must be search with times=1" — produced, in a
+   real rollout through verifiers and bwrap:
+   `turn 1: search(times=1)`, then `request_map`, then `np_move_to`. The control
+   opens with `request_map`. The store reaches the player and changes what it
+   does.
+5. **The orchestrator.** `e10_orchestrate.sh` against E9's `NPCORE_v3_r3` (5
+   rollouts): 9.5 minutes, exit 0, wrote **exactly 6 entries per kind, every one
+   under 180 characters**, plus an 18-edit `orchestrator_rationale.json` whose
+   evidence fields cite rollouts and turn numbers ("R2 T65: searched at 15HP →
+   goblin hit for 8"). It found the explore/request_map thrash costing ~40% of a
+   budget, gas spores exploding on melee kills, and prayer-anger deaths.
+
+### 1.7 Two traps that cost a run each
+
+- **The harness package does not come from your worktree.** `nethack_prime_agent`
+  is an editable install in the shared venv pointing at
+  `/root/NetHack-hub/harnesses/nethack-prime-agent` — the *main* checkout. The
+  env code follows the worktree you launch from (RUNBOOK); the harness does not.
+  A cell launched without
+  `PYTHONPATH=$REPO/harnesses/nethack-prime-agent` validates against the old
+  config class and dies with `--continual-harness-dir  Extra inputs are not
+  permitted`, which reads like a bad flag rather than a stale package.
+  `run_e10.sh` exports it.
+- **`--model z-ai/glm-5.2` alone is a model *pattern*.** For the orchestrator it
+  matched openrouter's catalog entry and died with "No API key found for
+  openrouter" despite `defaultProvider = prime-inference` in settings. Pin
+  `--provider prime-inference`. Credentials come from `~/.prime/config.json`,
+  which is outside the agent dir, so a private orchestrator agent dir keeps them.
+
+### 1.8 Players already write to this store, unprompted
+
+An E9 control rollout (`NPCORE_v3_r3`, trace `dbc6a4df…`) called
+`rlm.harness.create_memory(..., global_=True)` **twice** — `source: "agent"`,
+version 2 — writing:
+
+> "The harness auto-presses ESC for all multi-step command prompts. Eating,
+> wearing, wielding, reading, quaffing, zapping and throwing are ALL impossible…
+> Character will starve without ability to eat."
+
+Nobody asked it to. It went into that rollout's per-rollout directory and was
+discarded, which is precisely the waste E10 exists to stop. Two consequences:
+
+- the self-directed arm (`CONTINUAL_HARNESS_WRITABLE=1`) is not hypothetical —
+  the write behaviour is already there, only the destination is wrong;
+- the orchestrator independently reached the same conclusion from the traces
+  ("5/5 rollouts confirmed"), so this is corroborated from two directions and is
+  worth checking as a possible **harness defect**, separately from E10. A `eat`
+  skill *is* registered (`skills.py:470`), so either the `np_core` surface does
+  not publish it or the multi-step prompt handling cancels it. If the agents are
+  right, every E7–E9 character has been unable to eat.
 
 ## 2. Architecture
 
@@ -327,11 +396,10 @@ auditable entry-by-entry against the round and the evidence that introduced it.
    --print` per round against a private agent dir whose `harness` links to the
    shared store, with the render budget and the skill-reference contract in its
    prompt.
-5. **Not started, blocked on E9.** Smoke: one `--print` orchestrator run against
-   an existing E8/E9 output dir, then a 1-seed cell, checking the store is
-   non-empty and its entries appear in the player's prompt.
-6. Stage 0 pilot (§4.3), then commit as
-   `Jonathan Liu <jl0796@princeton.edu>`.
+5. **Done.** Smoke test, all five links — see §1.6.
+6. **Next.** Stage 0 pilot (§4.3): round-0 baselines on both seed halves, then
+   one full round. Nothing about the mechanism is unverified; what is unknown is
+   whether the entries change the *outcome*.
 
 ## 8. Open decisions
 
