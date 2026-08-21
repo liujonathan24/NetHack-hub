@@ -25,7 +25,7 @@ run_cell() {
   local out="$1"
   echo "[cell ] $(date -u +%H:%M:%S) -> $out"
   reset_daemon
-  ENV_ARGS='{"skill_set":"np_core,request_map,search"}' VARIANT=BBOX_MIN \
+  ENV_ARGS='{"skill_set":"np_core,request_map,search","auto_dismiss":"false","tune":{"reveal_map":1.0}}' VARIANT=BBOX_MIN \
     "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 5 \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"

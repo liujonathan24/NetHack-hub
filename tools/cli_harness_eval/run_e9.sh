@@ -11,8 +11,8 @@ REPO=/root/nld/hub-eval
 export ENG=/root/NetHack-engine
 export EVAL_BIN=/root/NetHack-hub/.venv-cli-eval/bin/eval
 LAUNCH="$REPO/tools/cli_harness_eval/launch_cell.sh"
-CORE='{"skill_set":"np_core,request_map,search"}'
-ENFORCE='{"skill_set":"np_core,request_map,search","descent_gate":"enforce"}'
+CORE='{"skill_set":"np_core,request_map,search","auto_dismiss":"false","tune":{"reveal_map":1.0}}'
+ENFORCE='{"skill_set":"np_core,request_map,search","descent_gate":"enforce","auto_dismiss":"false","tune":{"reveal_map":1.0}}'
 cd "$REPO"
 
 reset_daemon() {

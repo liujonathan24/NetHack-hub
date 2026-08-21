@@ -25,7 +25,7 @@ reset_daemon() {
 OUT=outputs/e9_reflect/REFLECT__prime_agent
 echo "[cell ] $(date -u +%H:%M:%S) -> $OUT"
 reset_daemon
-MAX_CONCURRENT=3 ENV_ARGS='{"skill_set":"np_core,request_map,search","reflect":"on"}'' VARIANT=BBOX_MIN \
+MAX_CONCURRENT=3 ENV_ARGS='{"skill_set":"np_core,request_map,search","reflect":"on","auto_dismiss":"false","tune":{"reveal_map":1.0}}' VARIANT=BBOX_MIN \
   "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$OUT" 200 5 \
   && echo "[done ] $(date -u +%H:%M:%S) OK  $OUT" \
   || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $OUT"
