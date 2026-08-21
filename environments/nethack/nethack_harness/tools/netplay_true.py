@@ -477,14 +477,93 @@ def _refuse_attack(core_env, kwargs):
     return None
 
 
+def _interrupt_worthy(agent, ev) -> bool:
+    """Severity filter for mid-skill interruptions (E10/E11 audit, 2026-08-21).
+
+    The vendored `_execute_skill` interrupts on ANY `NewGlyphEvent` -- every
+    newly seen monster, OBJECT, or feature glyph. Measured across 25 games:
+    that turned 67% of the call budget into consecutive same-tool re-issues
+    ("Interrupting skill to rethink because 'A gold piece appeared at
+    (2,13)'"), with `np_move_to` alone losing 468 calls to en-route trivia.
+
+    Keep: level change / teleport / low HP (always), a MONSTER newly appearing
+    within Chebyshev radius 3 of the player (close enough to matter this
+    turn), and newly seen stairs/ladders (the objective; matters under fog).
+    Drop: items, corpses, distant monsters, decorative features. The harness's
+    own HP-drop and spoiling-food interrupts (below, in the drive loop) are
+    unaffected and backstop anything dangerous this filter skips.
+    """
+    from netplay.nethack_agent import tracking as _tr
+    if isinstance(ev, (_tr.DungeonLevelChangeEvent, _tr.TeleportEvent,
+                       _tr.LowHealthEvent)):
+        return True
+    if isinstance(ev, _tr.NewGlyphEvent):
+        try:
+            from nle.nethack import glyph_is_monster
+            if glyph_is_monster(ev.glyph):
+                px, py = ev.position
+                return max(abs(int(px) - int(agent.blstats.x)),
+                           abs(int(py) - int(agent.blstats.y))) <= 3
+        except Exception:
+            return True   # fail OPEN: better a spurious interrupt than a hidden monster
+        try:
+            d = ev.describe().lower()
+        except Exception:
+            return False
+        return ("stair" in d) or ("ladder" in d)
+    return False
+
+
+def _execute_skill_filtered(agent, skill, skill_kwargs):
+    """`NetHackAgent._execute_skill` (vendored agent.py:112-135) with the
+    severity filter above in place of the blanket `NewGlyphEvent` interrupt,
+    plus a hunger-state interrupt (the vendored tracker has no hunger event).
+    The vendored file stays byte-for-byte; this replicates its loop verbatim
+    except for the two marked lines.
+    """
+    from netplay.core.agent_base import Step
+    kwargs_str = [str(x) for x in skill_kwargs.values()]
+    skill_description = " ".join([skill.name, *kwargs_str])
+    yield Step.think(f"Executing skill '{skill_description}'.")
+
+    start_ingame_time = agent.blstats.time
+    prev_hunger = getattr(agent.blstats, "hunger_state", None)
+    for step in skill(agent, **skill_kwargs):
+        if step.is_done():
+            thoughts = f"Skill '{skill_description}' {step.status}"
+            thoughts += f": {step.thoughts}" if step.has_thoughts() else ""
+            yield Step(step.status, thoughts, step.thought_type, step.step_data)
+            return
+        yield step
+
+        if (agent.blstats.time - start_ingame_time) >= agent.max_skill_gamesteps:
+            yield Step.think(f"Skill has been running for {(agent.blstats.time - start_ingame_time)} timesteps without interruption. Rethinking.")
+            return
+
+        if step.executed_action():
+            # -- changed line 1: hunger interrupt (no vendored event exists) --
+            hz = getattr(agent.blstats, "hunger_state", None)
+            if prev_hunger is not None and hz is not None and hz > prev_hunger:
+                yield Step.think("Interrupting skill to rethink because 'Your hunger worsened.'.")
+                return
+            prev_hunger = hz if hz is not None else prev_hunger
+            # -- changed line 2: severity filter instead of blanket isinstance --
+            interrupt_events = [ev for ev in step.step_data.events
+                                if _interrupt_worthy(agent, ev)]
+            if len(interrupt_events) != 0:
+                yield Step.think(f"Interrupting skill to rethink because '{interrupt_events[0].describe()}'.")
+                return
+
+
 def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillResult:
     """Drive one NetPlay skill to completion against the live engine.
 
     Mirrors upstream's own execution pipeline (`agent.py::_solve_task`, lines
     165-168): `_execute_skill` -> `_skip_more_messages` -> `_update_objects`.
-    All three are vendored verbatim, so the bounding behaviour (100 in-game
-    turns per skill, interrupt on level change / teleport / new glyph / low HP)
-    is NetPlay's, not ours.
+    The first stage is `_execute_skill_filtered` (above): upstream's loop with
+    a severity filter on interruptions -- see the E10/E11 audit. The bounding
+    behaviour (100 in-game turns per skill, interrupt on level change /
+    teleport / low HP) is still NetPlay's.
     """
     agent = get_agent(core_env)
     wrapped: NetPlayEngineEnv = agent.env
@@ -530,7 +609,7 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
 
     hp_start, _mx = _hp_now()
     try:
-        strategy = agent._execute_skill(skill, kwargs)
+        strategy = _execute_skill_filtered(agent, skill, kwargs)
         strategy = agent._skip_more_messages(strategy)
         strategy = agent._update_objects(strategy)
         for step in strategy:
@@ -631,6 +710,24 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
         _swallowed("run_netplay_skill.kill_log", exc)
 
     feedback = " ".join(t for t in thoughts if t).strip() or "No effect."
+
+    # move_to progress telemetry (E10/E11 audit): 468 of 1068 move_to calls
+    # stopped en route and reported only the interrupt reason -- not how far
+    # they got or how far remains, so the model re-issued blind. Append both.
+    # Prose-only: rides the result payload, tool schema untouched.
+    if getattr(skill, "name", "") == "move_to":
+        try:
+            tx, ty = int(kwargs.get("x")), int(kwargs.get("y"))
+            bx, by = int(agent.blstats.x), int(agent.blstats.y)
+            if (bx, by) == (tx, ty):
+                where = "target reached"
+            else:
+                rem = agent.distance_to(tx, ty)
+                where = (f"~{int(rem)} steps remaining" if rem not in (None, float("inf"))
+                         else "no current path from here")
+            feedback += f" [walked {wrapped.steps} steps, now at ({bx},{by}); {where}]"
+        except Exception as exc:
+            _swallowed("run_netplay_skill.move_to_telemetry", exc)
 
     # Report what the GAME said, not just that the skill returned.
     # `create_position_command` / `create_inventory_command` yield

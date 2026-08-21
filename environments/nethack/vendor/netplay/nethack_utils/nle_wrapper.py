@@ -122,6 +122,19 @@ class RawKeyPress(enum.IntEnum):
     KEYPRESS_DOUBLE_QUOTATION_MARK = ord("\"")
     KEYPRESS_BACKTICK = ord("`")
     KEYPRESS_PERCENT = ord("%")
+    # Added 2026-08-21 (E10/E11 audit): keys NetHack's own prompts require that
+    # the enum lacked. `-` is the critical one -- "select nothing / bare hands"
+    # in wield/wear prompts and "your fingers" in the engrave prompt, i.e. the
+    # only path to dust-engraving Elbereth; its absence made the model's `E`
+    # then `-` attempt error out ("Unable to press the given key -"). The rest
+    # complete text-entry prompts (naming, wishes).
+    KEYPRESS_MINUS = ord("-")
+    KEYPRESS_APOSTROPHE = ord("'")
+    KEYPRESS_CLOSE_SQUARE_BRACKET = ord("]")
+    KEYPRESS_OPEN_CURLY_BRACKET = ord("{")
+    KEYPRESS_CLOSE_CURLY_BRACKET = ord("}")
+    KEYPRESS_PIPE = ord("|")
+    KEYPRESS_TILDE = ord("~")
 
     # Special Keys
     KEYPRESS_ENTER = 13
