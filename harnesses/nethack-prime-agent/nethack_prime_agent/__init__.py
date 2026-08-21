@@ -479,7 +479,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                 "no per-tool deny flag. Removing it would leave the agent unable to "
                 "call the game at all."
             )
-        system_prompt, prompt = self.resolve_prompt(trace.task.data)
+        _system_prompt, prompt = self.resolve_prompt(trace.task.data)  # prompt only; AGENTS.md carries the system prompt
         if prompt is None:
             raise ValueError("Prime Agent requires a task prompt (it has no user simulator)")
 
@@ -603,8 +603,11 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         ]
         if self.config.thinking:
             argv += ["--thinking", self.config.thinking]
-        if system_prompt:
-            argv += ["--append-system-prompt", system_prompt]
+        # De-dup (2026-08-21): the workspace AGENTS.md already carries the full
+        # resolved system prompt and Prime Agent embeds it as Project Context,
+        # so ALSO passing --append-system-prompt delivered the identical
+        # gameplay block twice in node 0 (measured in the v3 seed-2 post-mortem
+        # at chars 14616 and 21992). AGENTS.md is the single source now.
         # `--` ends option parsing, so a prompt starting with `-` or containing
         # `@word` is never re-read as a flag or a file attachment.
         argv += ["--", prompt]

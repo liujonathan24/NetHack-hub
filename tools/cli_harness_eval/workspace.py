@@ -55,23 +55,20 @@ def build_workspace(dest: Path, *, objective: str, system_prompt: str | None = N
     dest = Path(dest)
     if dest.exists():
         _force_rmtree(dest)           # memory/ is wiped per rollout
-    (dest / "wiki").mkdir(parents=True)
-    (dest / "memory").mkdir()
+    (dest / "memory").mkdir(parents=True)
 
+    # No wiki (2026-08-21): the snapshot pages were harness-authored in an older
+    # tool-naming generation ("call descend", "autoexplore") that contradicts
+    # the served np_* surface, and reading them cost discovery turns while
+    # actively misleading the model (v3 seed-2 post-mortem). Reinstate only
+    # after the pages are rewritten against the real tool names.
     primer = SYSTEM_PROMPT + (
         "\n\n=== WORKSPACE ===\n"
-        "`wiki/` holds NetHack reference pages (read-only) — grep it.\n"
         "`memory/` is yours: keep notes there across turns. `memory/objective.md`"
         " is your goal.\n"
     )
     for name in _PROMPT_FILES:
         (dest / name).write_text(primer)
-
-    pages = json.loads(_SNAPSHOT.read_text())
-    for page in pages:
-        path = dest / "wiki" / f"{_slug(page['title'])}.md"
-        path.write_text(f"# {page['title']}\n\n{page['body']}\n")
-        path.chmod(0o444)
 
     (dest / "memory" / "objective.md").write_text(f"# Objective\n\n{objective}\n")
     return dest
