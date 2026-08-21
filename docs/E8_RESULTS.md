@@ -75,14 +75,15 @@ policy; scaffold-enforced policy might.
 
 ---
 
-## POST-HOC VALIDITY CAVEAT (2026-08-21, E10 fog audit)
+## POST-HOC VALIDITY CAVEAT — RETRACTED (2026-08-21, same day)
 
-Every E8 cell ran **without** `tune.reveal_map=1.0` and **without**
-`auto_dismiss="false"` (see each cell's `CONFIG_CAVEAT.md`), while the
-NPCORE_v3 control carried both. E10 subsequently measured full vision +
-honest docs to roughly double BALROG progress (mean 2.44 -> 5.17, ceiling
-dl7 -> dl11) on identical seeds. Absolute E8-vs-control comparisons are
-therefore confounded by observability; within-E8 directional findings
-(e.g. route-failure counts falling across the density sweep) are less
-affected. Rerun E8-style interventions on the honest harness (post-fd8aa13)
-before citing effect sizes.
+An earlier addendum here claimed every E8 cell ran without `tune.reveal_map`
+and `auto_dismiss=false`. That was a false alarm: the check grepped config.toml
+files that do not exist in the E8 output dirs (that launcher era wrote none).
+The authoritative resolved configs in each cell's eval.log carry BOTH knobs,
+and the first request_map observation in the transcripts shows the full level.
+**E8 ran with full vision, matching its control; its comparative findings
+stand.** The remaining (true) caveat: E8 predates the harness-honesty pass
+(fd8aa13), so its ABSOLUTE numbers sit on the old-docs harness -- consistent
+with the E7 control it was measured against, but ~2x below the honest-harness
+E10 baseline. Compare E8 cells to E7 controls only, never to E10+ cells.
