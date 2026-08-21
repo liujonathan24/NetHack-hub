@@ -31,8 +31,8 @@ await nethack.np_explore_level()            # Auto-explore: walks the level reve
                                             # itself when something notable happens.
 
 await nethack.np_move_to(x=54, y=5)         # Pathfind to tile (x, y) in one call.
-                                            # Fails with [why: ...] if no route is
-                                            # known — explore more first.
+                                            # If no route is known it says so —
+                                            # explore more first.
 
 await nethack.np_melee_attack(x=30, y=7)    # Pursue the monster at (x, y) and attack
                                             # in melee until it dies (or you must stop).
@@ -84,7 +84,8 @@ open: if the observation looks unchanged, check for an open prompt first.
 - There is a hard budget of skill calls for the episode; when it is spent the
   episode ends. Spend calls on progress, not probing — this file already
   contains the whole API.
-- A skill that fails returns `[why: ...]` — read it, don't repeat the call
-  unchanged.
+- A skill that fails says why in its returned message (e.g. "Tile (14, 12) is
+  blocked... It's solid stone.") — read it and change plan; don't repeat the
+  call unchanged.
 - `memory/objective.md` in your workspace restates the goal; `memory/` is yours
   for notes.
