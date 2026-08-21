@@ -1,0 +1,48 @@
+{
+  "ts": "2026-08-01T17:32:11+00:00",
+  "event": "kill",
+  "watchdog_pid": 88648,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns",
+  "pid": 88964,
+  "idle_s": 302.6,
+  "timeout_s": 300.0,
+  "seeds": [
+    0
+  ],
+  "likely_hung_seed": 0,
+  "per_seed": {
+    "0": {
+      "idle_s": 302.6,
+      "newest_file": "0_88964_1785603373.ndjson",
+      "last_turn": {
+        "file": "0_88964_1785603373.ndjson",
+        "n_lines": 45,
+        "turn": 45,
+        "dlvl": 2,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "SPARSE_ONDEMAND",
+        "max_dlvl_reached": 2,
+        "t_wall": 1785605227.430608,
+        "reward": 0.0,
+        "last_tool_call": "reveal",
+        "last_message_head": "[reveal (x0-78, y0-20):"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      88964
+    ],
+    "sigterm": [
+      88964
+    ],
+    "sigkill": [],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T173211Z_pid88964",
+  "quarantined_files": [
+    "0_88964_1785603373.ndjson"
+  ],
+  "dry_run": false
+}

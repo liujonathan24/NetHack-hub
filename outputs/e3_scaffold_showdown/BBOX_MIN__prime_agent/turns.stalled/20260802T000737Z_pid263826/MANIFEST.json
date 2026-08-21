@@ -1,0 +1,48 @@
+{
+  "ts": "2026-08-02T00:07:37+00:00",
+  "event": "kill",
+  "watchdog_pid": 263629,
+  "turns_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent/turns",
+  "pid": 263826,
+  "idle_s": 309.3,
+  "timeout_s": 300.0,
+  "seeds": [
+    3
+  ],
+  "likely_hung_seed": 3,
+  "per_seed": {
+    "3": {
+      "idle_s": 309.3,
+      "newest_file": "3_263826_1785628653.ndjson",
+      "last_turn": {
+        "file": "3_263826_1785628653.ndjson",
+        "n_lines": 13,
+        "turn": 13,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785628946.6154745,
+        "reward": 107.0,
+        "last_tool_call": "np_press_key",
+        "last_message_head": "[Executing skill 'press_key ESC'. Pressing key 'ESC'. Skill 'press_key ESC' completed GAME: Unknown command ' '.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      263826
+    ],
+    "sigterm": [
+      263826
+    ],
+    "sigkill": [],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__prime_agent/turns.stalled/20260802T000737Z_pid263826",
+  "quarantined_files": [
+    "3_263826_1785628653.ndjson"
+  ],
+  "dry_run": false
+}

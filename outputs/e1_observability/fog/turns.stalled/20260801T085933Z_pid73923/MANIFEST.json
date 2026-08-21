@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T08:59:33+00:00",
+  "event": "kill",
+  "watchdog_pid": 73789,
+  "turns_dir": "/root/NetHack-hub/outputs/e1_observability/fog/turns",
+  "pid": 73923,
+  "idle_s": 300.3,
+  "timeout_s": 300.0,
+  "seeds": [
+    1
+  ],
+  "likely_hung_seed": 1,
+  "per_seed": {
+    "1": {
+      "idle_s": 300.3,
+      "newest_file": "1_73923_1785574057.ndjson",
+      "last_turn": {
+        "file": "1_73923_1785574057.ndjson",
+        "n_lines": 39,
+        "turn": 39,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "B0",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785574462.9468846,
+        "reward": 1364.0,
+        "last_tool_call": "np_explore_level",
+        "last_message_head": "[Executing skill 'explore_level'. Interrupting skill to rethink because 'A gold piece appeared at (24,7).'. GAME: The kitten drops a gold piece.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      73923
+    ],
+    "sigterm": [
+      73923
+    ],
+    "sigkill": [
+      73923
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e1_observability/fog/turns.stalled/20260801T085933Z_pid73923",
+  "quarantined_files": [
+    "1_73923_1785574057.ndjson"
+  ],
+  "dry_run": false
+}

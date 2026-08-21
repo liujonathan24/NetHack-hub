@@ -1,0 +1,182 @@
+16:59:56 WARNING Harness 'claude_code' is running in the subprocess runtime on the local system. Local files and settings may affect the evaluation; use subprocess only for debugging. Use --harness.runtime.type docker or prime for an isolated run.
+16:59:56    INFO eval config:
+{
+  "taskset": {
+    "id": "nethack_v1",
+    "task": {
+      "judges": []
+    },
+    "task_spec": "full_nle",
+    "variant": "BBOX_JSON",
+    "map_detail": "full",
+    "interface": "skill",
+    "character": "Val-hum-neu-fem",
+    "max_turns": 200,
+    "trace_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__BBOX_JSON__visoff/turns",
+    "self_dispatch": true,
+    "obs_mode": "push",
+    "max_skill_calls": 1500,
+    "max_parallel_skill_calls": 0,
+    "parallel_batch_window_s": 0.5,
+    "env_args": {
+      "skill_set": "netplay_true,reveal,rollback"
+    },
+    "colocated": false,
+    "seed_workspace": true,
+    "n_examples": 16,
+    "seed": 0,
+    "explicit_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harness_id": "nethack_v1"
+  },
+  "harness": {
+    "id": "claude_code",
+    "runtime": {
+      "type": "subprocess"
+    },
+    "env": {},
+    "forward_env": [],
+    "disabled_tools": [
+      "Bash"
+    ],
+    "version": "2.1.214"
+  },
+  "timeout": {
+    "setup": 1800.0,
+    "rollout": 21600.0,
+    "finalize": null,
+    "scoring": null
+  },
+  "retries": {
+    "rollout": {
+      "max_retries": 2,
+      "include": [],
+      "exclude": []
+    }
+  },
+  "max_turns": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "max_total_tokens": null,
+  "interception": {
+    "type": "elastic",
+    "multiplex": 32
+  },
+  "id": null,
+  "args": {},
+  "extra_env_kwargs": {},
+  "pool": {
+    "type": "elastic",
+    "max_workers": null,
+    "multiplex": 128
+  },
+  "model": "z-ai/glm-5.2",
+  "client": {
+    "base_url": "https://api.pinference.ai/api/v1",
+    "api_key_var": "PRIME_API_KEY",
+    "headers": {
+      "X-Prime-Team-ID": "cmotasmp5005ppyp07dcoh50u"
+    },
+    "type": "eval"
+  },
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "reasoning_effort": null,
+    "max_tokens": null
+  },
+  "num_tasks": 5,
+  "num_rollouts": 1,
+  "shuffle": false,
+  "max_concurrent": 16,
+  "verbose": false,
+  "dry_run": false,
+  "rich": false,
+  "server": false,
+  "push": false,
+  "output_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__BBOX_JSON__visoff"
+}
+16:59:56    INFO running 5x1 rollouts on z-ai/glm-5.2
+16:59:56    INFO results: /root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__BBOX_JSON__visoff
+16:59:56    INFO rollout start: id=ed8da5f3fe354b9c8f7c5f71b787c802 task=0 harness=claude_code runtime=subprocess
+16:59:56    INFO rollout start: id=0b9821ed013844d788e655a92ed27697 task=1 harness=claude_code runtime=subprocess
+16:59:56    INFO rollout start: id=1286ded2249b44938bddfeebe466f104 task=2 harness=claude_code runtime=subprocess
+16:59:56    INFO rollout start: id=1f69444c2b4840029450fd714a8577da task=3 harness=claude_code runtime=subprocess
+16:59:56    INFO rollout start: id=b6f2f26730564274a7dfa1481c78e3d8 task=4 harness=claude_code runtime=subprocess
+16:59:56    INFO interception up: url=http://127.0.0.1:46381
+16:59:57    INFO interception pool: 1 server(s), multiplex=32
+17:00:01    INFO tool server 'nethack': http://127.0.0.1:46463/mcp
+17:00:01    INFO tool server 'nethack': http://127.0.0.1:35671/mcp
+17:00:04    INFO tool server 'nethack': http://127.0.0.1:40457/mcp
+17:00:20    INFO tool server 'nethack': http://127.0.0.1:44687/mcp
+17:00:31    INFO tool server 'nethack': http://127.0.0.1:35813/mcp
+17:48:34    INFO rollout done: id=0b9821ed013844d788e655a92ed27697 task=1 reward=51.515 turns=137 stop=game_over
+19:20:37 WARNING model call failed: id=ed8da5f3fe354b9c8f7c5f71b787c802 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a247338188789a02-HEL","inference_id":"req_af7521b314c2411f80ad5aafcce1bc9c"}
+19:20:37 WARNING model call failed: id=1f69444c2b4840029450fd714a8577da ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a247338269b7c100-HEL","inference_id":"req_f0faaf3ee7304b51aa73cb1ba7440c25"}
+19:20:38    INFO rollout done: id=ed8da5f3fe354b9c8f7c5f71b787c802 task=0 reward=0.000 turns=325 stop=ProviderError
+19:20:38 WARNING retrying rollout ed8da5f3fe354b9c8f7c5f71b787c802 (retry 1/2) after error: ProviderError
+19:20:38    INFO rollout start: id=e56cf1ca83aa461ca1c36865ccdfd074 task=0 harness=claude_code runtime=subprocess
+19:20:38    INFO rollout done: id=1f69444c2b4840029450fd714a8577da task=3 reward=0.000 turns=259 stop=ProviderError
+19:20:38 WARNING retrying rollout 1f69444c2b4840029450fd714a8577da (retry 1/2) after error: ProviderError
+19:20:38    INFO rollout start: id=1859adf0ff5045b190cb703a3d1170b5 task=3 harness=claude_code runtime=subprocess
+19:20:42    INFO tool server 'nethack': http://127.0.0.1:34065/mcp
+19:20:43    INFO tool server 'nethack': http://127.0.0.1:41703/mcp
+19:20:44 WARNING model call failed: id=1859adf0ff5045b190cb703a3d1170b5 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24733ac7c79b236-HEL","inference_id":"req_617a7bdb5d854456be5ef53b9839fed2"}
+19:20:44 WARNING model call failed: id=1859adf0ff5045b190cb703a3d1170b5 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24733ac69960c03-HEL","inference_id":"req_34167429233a46eb9e90bb14f82f82ff"}
+19:20:44    INFO rollout done: id=1859adf0ff5045b190cb703a3d1170b5 task=3 reward=0.000 turns=0 stop=ProviderError
+19:20:44 WARNING retrying rollout 1859adf0ff5045b190cb703a3d1170b5 (retry 2/2) after error: ProviderError
+19:20:44    INFO rollout start: id=8b6d96d4d4584f5aa4fde285aefbab4a task=3 harness=claude_code runtime=subprocess
+19:20:47    INFO tool server 'nethack': http://127.0.0.1:35927/mcp
+19:20:48 WARNING model call failed: id=8b6d96d4d4584f5aa4fde285aefbab4a ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24733c8ac5d0c03-HEL","inference_id":"req_08b24efa80864b4aa7f52402aaba3f24"}
+19:20:56 WARNING model call failed: id=8b6d96d4d4584f5aa4fde285aefbab4a ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24733f94da4fb76-HEL","inference_id":"req_72c447433896454d97e13533306aedb7"}
+19:20:57    INFO rollout done: id=8b6d96d4d4584f5aa4fde285aefbab4a task=3 reward=0.000 turns=0 stop=ProviderError
+19:20:58 WARNING model call failed: id=1286ded2249b44938bddfeebe466f104 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24734015c01fb76-HEL","inference_id":"req_f814cbe69f604ae8b67af810c50cc84d"}
+19:20:58    INFO rollout done: id=1286ded2249b44938bddfeebe466f104 task=2 reward=0.000 turns=178 stop=ProviderError
+19:20:58 WARNING retrying rollout 1286ded2249b44938bddfeebe466f104 (retry 1/2) after error: ProviderError
+19:20:58    INFO rollout start: id=90911413c23f4bb883be84ebf7f45bc1 task=2 harness=claude_code runtime=subprocess
+19:21:01    INFO tool server 'nethack': http://127.0.0.1:35541/mcp
+19:21:02 WARNING model call failed: id=90911413c23f4bb883be84ebf7f45bc1 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a247341e1b3cfb76-HEL","inference_id":"req_6c04f494f23d462fbc9d047586987f2e"}
+19:21:03    INFO rollout done: id=90911413c23f4bb883be84ebf7f45bc1 task=2 reward=0.000 turns=0 stop=ProviderError
+19:21:03 WARNING retrying rollout 90911413c23f4bb883be84ebf7f45bc1 (retry 2/2) after error: ProviderError
+19:21:03    INFO rollout start: id=7af5bbbf9ae8459aa06778d7a5777839 task=2 harness=claude_code runtime=subprocess
+19:21:10 WARNING model call failed: id=e56cf1ca83aa461ca1c36865ccdfd074 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a247344f09d327cc-HEL","inference_id":"req_caa2cc2b692b426ab4be22db2cf8d21e"}
+19:21:22    INFO tool server 'nethack': http://127.0.0.1:45209/mcp
+19:21:26 WARNING model call failed: id=7af5bbbf9ae8459aa06778d7a5777839 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24734b16e328d7a-HEL","inference_id":"req_a0deb2b7dcc44ca3adb9151bc59d2183"}
+19:21:26    INFO rollout done: id=7af5bbbf9ae8459aa06778d7a5777839 task=2 reward=0.000 turns=0 stop=ProviderError
+19:21:35 WARNING model call failed: id=e56cf1ca83aa461ca1c36865ccdfd074 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24734ea7ea08d69-HEL","inference_id":"req_66fd360a1aae46109e85d5050b7f3f25"}
+19:21:35    INFO rollout done: id=e56cf1ca83aa461ca1c36865ccdfd074 task=0 reward=0.000 turns=0 stop=ProviderError
+19:21:35 WARNING retrying rollout e56cf1ca83aa461ca1c36865ccdfd074 (retry 2/2) after error: ProviderError
+19:21:35    INFO rollout start: id=27abe01b1716425d874e30968f65db3a task=0 harness=claude_code runtime=subprocess
+19:21:37 WARNING model call failed: id=b6f2f26730564274a7dfa1481c78e3d8 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24734f9ad088d69-HEL","inference_id":"req_f4e18950e9234ddeb3d0a1b005ad250c"}
+19:21:38    INFO rollout done: id=b6f2f26730564274a7dfa1481c78e3d8 task=4 reward=0.000 turns=236 stop=ProviderError
+19:21:38 WARNING retrying rollout b6f2f26730564274a7dfa1481c78e3d8 (retry 1/2) after error: ProviderError
+19:21:38    INFO rollout start: id=57c69ad3c9fc4fb6be8153c6536fbc94 task=4 harness=claude_code runtime=subprocess
+19:21:38    INFO tool server 'nethack': http://127.0.0.1:41333/mcp
+19:21:39 WARNING model call failed: id=27abe01b1716425d874e30968f65db3a ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a247350698f48d69-HEL","inference_id":"req_7f1d08f1d29c4c3380826f134aec8c14"}
+19:21:40    INFO rollout done: id=27abe01b1716425d874e30968f65db3a task=0 reward=0.000 turns=0 stop=ProviderError
+19:21:41    INFO tool server 'nethack': http://127.0.0.1:35099/mcp
+19:21:42 WARNING model call failed: id=57c69ad3c9fc4fb6be8153c6536fbc94 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a2473514de598d69-HEL","inference_id":"req_75ee0ee733e94c7fa80b39ec7926b351"}
+19:21:44 WARNING model call failed: id=57c69ad3c9fc4fb6be8153c6536fbc94 ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a24735253e088d69-HEL","inference_id":"req_ebf831e2bbf6425fa9fefa715012a91c"}
+19:21:45    INFO rollout done: id=57c69ad3c9fc4fb6be8153c6536fbc94 task=4 reward=0.000 turns=0 stop=ProviderError
+19:21:45 WARNING retrying rollout 57c69ad3c9fc4fb6be8153c6536fbc94 (retry 2/2) after error: ProviderError
+19:21:45    INFO rollout start: id=85a604dba220436b84970667d29eb87e task=4 harness=claude_code runtime=subprocess
+19:21:53    INFO tool server 'nethack': http://127.0.0.1:38133/mcp
+19:21:58 WARNING model call failed: id=85a604dba220436b84970667d29eb87e ProviderError: upstream 402: {"type":"error","error":{"type":"permission_error","message":"Insufficient balance (including overdraft). Please add funds to continue. Requests are authenticated by PRIME_API_KEY and billed to the personal balance unless the request includes X-Prime-Team-ID. Add funds to the selected balance. If you intended to use team billing, send X-Prime-Team-ID with the team ID and make sure that team has funds. See https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds.","code":"insufficient_funds","metadata":{"help_url":"https://docs.primeintellect.ai/inference/troubleshooting#insufficient-funds"}},"request_id":"a247357e79ee8d73-HEL","inference_id":"req_ad8dc1a6a2384aeaa039ddbe33ef462c"}
+19:21:59    INFO rollout done: id=85a604dba220436b84970667d29eb87e task=4 reward=0.000 turns=0 stop=ProviderError
+19:21:59    INFO interception down: url=http://127.0.0.1:46381

@@ -1,0 +1,12 @@
+{
+ "producer": "cli_harness_eval",
+ "written_at": 1785570772.3091142,
+ "run_dir": "/root/NetHack-hub/outputs/pilot_reveal",
+ "primary_md": "table.cli_harness_eval.md",
+ "primary_json": "table.cli_harness_eval.json",
+ "previous_producer": "encoding_eval",
+ "argv": [
+  "/root/NetHack-hub/tools/cli_harness_eval/aggregate.py",
+  "outputs/pilot_reveal"
+ ]
+}

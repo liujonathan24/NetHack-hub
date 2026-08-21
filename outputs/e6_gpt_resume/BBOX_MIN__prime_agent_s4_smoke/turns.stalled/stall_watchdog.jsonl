@@ -1,0 +1,2 @@
+{"ts": "2026-08-02T08:10:54+00:00", "event": "armed", "watchdog_pid": 601022, "turns_dir": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s4_smoke/turns", "timeout_s": 300.0, "poll_s": 15.0, "parent_pid": 600969, "dry_run": false, "quarantine_root": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s4_smoke/turns.stalled"}
+{"ts": "2026-08-02T08:12:35+00:00", "event": "exit", "watchdog_pid": 601022, "turns_dir": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s4_smoke/turns", "reason": "parent_exited", "kills": 0}

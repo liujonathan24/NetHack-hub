@@ -1,0 +1,5 @@
+{"id": "d7dd3e3e78a2442795586e5234c1689c", "rebuilt_from_eval_log": true, "task": {"data": {"idx": 4}}, "rewards": {"reward": 34.224}, "metrics": {}, "calls": [], "stop_condition": "game_over"}
+{"id": "d519351467914e2dbed9c480361f3a81", "rebuilt_from_eval_log": true, "task": {"data": {"idx": 1}}, "rewards": {"reward": 23.104}, "metrics": {}, "calls": [], "stop_condition": "game_over"}
+{"id": "1814ed3bc7d7415cbf0de17ad1d6c5ab", "rebuilt_from_eval_log": true, "task": {"data": {"idx": 0}}, "rewards": {"reward": 23.187}, "metrics": {}, "calls": [], "stop_condition": "game_over"}
+{"id": "996d3da6953f4d7b9d33bdb324210fec", "rebuilt_from_eval_log": true, "task": {"data": {"idx": 3}}, "rewards": {"reward": 65.703}, "metrics": {}, "calls": [], "stop_condition": "game_over"}
+{"id": "9afcc6f8a1b64f27873363029fd7a000", "rebuilt_from_eval_log": true, "task": {"data": {"idx": 2}}, "rewards": {"reward": 99.855}, "metrics": {}, "calls": [], "stop_condition": "game_over"}

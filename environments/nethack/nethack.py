@@ -442,6 +442,37 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # block and the HINT ladder for the CLI arms while leaving the control
         # arm's rendering byte-identical to pre-Task-18 behavior.
         self_dispatch: bool = False,
+        # e7 raw-prompt surfaces: when False, the post-call auto-dismiss loop
+        # stops answering menus / item prompts / [yn] questions and only
+        # acknowledges --More-- (the exact contract the BALROG-80 surface
+        # already runs under, see _balrog_raw_prompts below). The agent answers
+        # its own prompts -- np_press_key reaches every key incl. esc/space/
+        # enter -- and the UI-freeze observation block names the legal answers
+        # as np_press_key calls when that tool is published.
+        auto_dismiss: bool = True,
+        # Store the tty screen at EVERY engine step (not just the final frame
+        # per LM turn), so a game is replayable move-by-move. Off by default:
+        # existing arms stay byte-identical and pay no size cost. Enable per
+        # cell via load_environment(record_step_frames=True) / env_args.
+        record_step_frames: bool = False,
+        # Append a plain-language "Args:" clause to each published tool's
+        # description so the model doesn't PROBE for arguments at session start
+        # (the MCP inputSchema does not survive transport to Prime Agent's
+        # client). Default off = pinned arms byte-identical; launcher turns it
+        # on for new runs. See helpers._args_clause.
+        describe_args: bool = False,
+        # E8a planning injection: soft-gate np_down. "off" (default) | "norm"
+        # (human-anchored) | "directive" (imperative). First np_down per dungeon
+        # level returns the gate line at zero engine cost; the second proceeds
+        # unconditionally. docs/EXPERIMENT_E8.md.
+        descent_gate: str = "off",
+        # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
+        # "descend_pacing"). Prompt-only; published tool schemas untouched.
+        mechanic_hints: str = "",
+        # E9b awareness probe: comma list of per-turn blocks ("ask", "verify",
+        # "map"). "off"/"" leaves every arm byte-identical. Prompt-only.
+        # docs/EXPERIMENT_E9.md, prompt/reflection.py.
+        reflect: str = "off",
         # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
         # setup_state the turn file for this rollout's seed is replayed
         # byte-for-byte through the freshly seeded engine, so the agent starts
@@ -471,6 +502,26 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
+        # env_args flow through the eval CLI as dotted-scalar STRINGS, so
+        # auto_dismiss can arrive as "false" -- and bool("false") is True.
+        # (Caught in the e7 smoke: the dumped config showed the string form.)
+        if isinstance(auto_dismiss, str):
+            auto_dismiss = auto_dismiss.strip().lower() not in (
+                "false", "0", "no", "off", "")
+        self.auto_dismiss = bool(auto_dismiss)
+        if isinstance(record_step_frames, str):
+            record_step_frames = record_step_frames.strip().lower() not in (
+                "false", "0", "no", "off", "")
+        self.record_step_frames = bool(record_step_frames)
+        if isinstance(describe_args, str):
+            describe_args = describe_args.strip().lower() not in ("false","0","no","off","")
+        self.describe_args = bool(describe_args)
+        self.descent_gate = str(descent_gate or "off").strip().lower()
+        self.mechanic_hints = str(mechanic_hints or "").strip().lower()
+        # E9b: append the reflection prompt to every turn. Off (default) leaves
+        # every arm byte-identical. Any truthy value enables it.
+        self.reflect = str(reflect or "").strip().lower() not in (
+            "", "off", "false", "0", "no")
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -742,6 +793,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Task 18 Step 2: gates the JOURNAL block + HINT ladder off for the
         # CLI-agent arms (see the constructor's self_dispatch docstring).
         state["_self_dispatch"] = self.self_dispatch
+        state["_auto_dismiss"] = self.auto_dismiss
         state["last_reward"] = 0.0
         state["terminated"] = False
         state["journal"] = Journal()
@@ -957,8 +1009,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             compact=self.compact_obs,
             journal_max_chars=self.journal_render_max_chars,
         )
-        warning = detect_blocking_ui(state.get("raw_obs"))
-        return f"{warning}\n{obs_text}" if warning else obs_text
+        warning = detect_blocking_ui(
+            state.get("raw_obs"), published_tools=state.get("_published_tools"))
+        text = f"{warning}\n{obs_text}" if warning else obs_text
+        # E9b awareness probe: append the reflection questions to every turn.
+        if self.reflect:
+            from nethack_harness.prompt.reflection import REFLECT_BLOCK
+            text = f"{text}\n\n{REFLECT_BLOCK}"
+        return text
 
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
         """Instrument one LM turn, run it, and write exactly one trace record.
@@ -1008,7 +1066,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
         }
         clock_before = _game_clock(state)
-        rec = TurnRecorder(state.get("env"))
+        rec = TurnRecorder(state.get("env"), capture_frames=self.record_step_frames)
         with rec:
             content = await self._apply_tool_call_inner(state, skill_name, skill_args)
         clock_after = _game_clock(state)
@@ -1058,7 +1116,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             tt.get("action_indices") or [], tt.get("reward") or 0.0,
             obs_text, obs_content=content,
             actions=rec.action_record(), tool_results=[result],
-            all_messages=rec.messages,
+            all_messages=rec.messages, step_frames=rec.frames,
             # `applied` = "this LM turn was dispatched by the harness". It is
             # False only for the end-of-rollout flush, whose tool call the
             # rollout loop never handed to us at all. A dispatched call that
@@ -1249,6 +1307,72 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # open (dtime 96) and on the call that found the stairs. So capture the
         # signature and the pre-action clock now, and judge after the engine has
         # actually stepped (see the post-step block below).
+        # E8a descent gate: the FIRST np_down on a given dungeon level returns
+        # the norm line at zero engine cost; the second proceeds. Soft gate --
+        # agency preserved, the game is never blocked. docs/EXPERIMENT_E8.md.
+        # Gate the descent ACTION, not one tool name: np_core has no np_down —
+        # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
+        # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
+        _is_descent = (
+            skill_name == "np_down"
+            or (skill_name == "np_press_key"
+                and str((skill_args or {}).get("key", "")).strip() == ">")
+        )
+        # E9a hard enforcement: descent is REFUSED while underleveled, with no
+        # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
+        # E8a's advice (read and ignored) into a constraint, to test whether
+        # underleveling is CAUSAL for death or merely correlated: if forcing the
+        # model to level before descending improves survival, the reasoning->
+        # policy gap is the bottleneck; if it dies anyway (attrition at shallow
+        # depth), the gap is deeper. Ascent is never gated. docs/EXPERIMENT_E9.md.
+        if self.descent_gate == "enforce" and _is_descent:
+            try:
+                st_now = (state["structured_obs"].status or {})
+                dlvl = int(st_now.get("depth") or 1)
+                xl = int(st_now.get("experience_level") or 1)
+            except Exception:
+                dlvl, xl = 1, 1
+            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+            norm = norm_xl_for_leaving(dlvl)
+            if xl < norm:
+                gate = (f"[descent BLOCKED: you are XL {xl} on Dlvl {dlvl}. The "
+                        f"stairs down stay locked until you reach XL {norm}. "
+                        f"Gain experience on this level first, then descend.]")
+                tt = state["_turn_trace"]
+                tt["status"] = "blocked"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+            # XL >= norm: leveled enough -- allow the descent to proceed.
+
+        if self.descent_gate in ("norm", "directive") and _is_descent:
+            try:
+                st_now = (state["structured_obs"].status or {})
+                dlvl = int(st_now.get("depth") or 1)
+                xl = int(st_now.get("experience_level") or 1)
+            except Exception:
+                dlvl, xl = 1, 1
+            ack = state.setdefault("_descent_gate_ack", set())
+            if dlvl not in ack:
+                ack.add(dlvl)
+                from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+                norm = norm_xl_for_leaving(dlvl)
+                if self.descent_gate == "norm":
+                    gate = (f"[descent check: you are XL {xl} on Dlvl {dlvl}. "
+                            f"Typical successful human runs reach XL {norm} "
+                            f"before leaving this depth. Repeat the call to "
+                            f"descend anyway.]")
+                else:
+                    gate = (f"[descent check: level to XL {norm} before moving "
+                            f"on. Repeat the call to descend anyway.]")
+                tt = state["_turn_trace"]
+                tt["status"] = "interrupted"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+
         state["_sig_now"] = (skill_name, repr(sorted(skill_args.items())))
         try:
             state["_gt_before"] = (state["structured_obs"].status or {}).get("time")
@@ -1417,7 +1541,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # prompts / y-n questions is the AGENT's job (see
             # `_balrog_raw_prompts` in __init__). Only --More-- is still
             # acknowledged for it, matching BALROG's own `skip_more: True`.
-            if self._balrog_raw_prompts and not has_more:
+            if (self._balrog_raw_prompts or not self.auto_dismiss) and not has_more:
                 break
             if yn is not None:
                 ans = yn["answer"]
@@ -1642,7 +1766,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 and ("No valid path" in result.feedback or "No path found" in result.feedback)):
             try:
                 from nethack_harness.navigation.path_explain import explain_path_failure
-                extra = explain_path_failure(state.get("raw_obs"), skill_args)
+                extra = explain_path_failure(
+                    state.get("raw_obs"), skill_args,
+                    published_tools=state.get("_published_tools"))
                 if extra:
                     from nethack_harness.tools.skills import SkillResult as _SR
                     result = _SR(actions=result.actions,
@@ -2438,9 +2564,13 @@ def load_environment(
     _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
     rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
+    _describe_args = kwargs.get("describe_args", False)
+    if isinstance(_describe_args, str):
+        _describe_args = _describe_args.strip().lower() not in ("false","0","no","off","")
     if interface == "skill":
         tool_callables = _build_skill_adapter_callables(
-            skill_set=spec.tools.skill_set or kwargs.pop("skill_set", "full")
+            skill_set=spec.tools.skill_set or kwargs.pop("skill_set", "full"),
+            describe_args=bool(_describe_args),
         )
         # Spec-declared extra tools (e.g. CH's run_macro adapter).
         for make_tool in spec.tools.extra_tools:
@@ -2480,6 +2610,17 @@ def load_environment(
                 spec,
                 system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
             )
+    # E8b mechanic guidance: append system-prompt blocks only (published tool
+    # schemas untouched). Default "" leaves every existing arm byte-identical.
+    _hints = str(kwargs.get("mechanic_hints") or "").strip().lower()
+    if _hints:
+        from nethack_harness.prompt.human_norms import MECHANIC_HINT_BLOCKS
+        _blocks = [MECHANIC_HINT_BLOCKS[h.strip()] for h in _hints.split(",")
+                   if h.strip() in MECHANIC_HINT_BLOCKS]
+        if _blocks:
+            spec = _dc.replace(
+                spec, system_prompt=spec.system_prompt + "\n\n" + "\n\n".join(_blocks))
+
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,

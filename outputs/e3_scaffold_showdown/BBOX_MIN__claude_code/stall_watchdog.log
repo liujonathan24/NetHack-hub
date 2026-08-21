@@ -1,0 +1,5 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code/turns'] timeout=300s poll=15s parent_pid=263321
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code/turns pid=263511 idle=304s (timeout=300s) seeds=[4] likely_hung_seed=4
+[stall_watchdog] wrote 1 partial trace record(s) for the killed attempt(s)
+[stall_watchdog] killed pid=263511 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code/turns.stalled/20260802T003040Z_pid263511
+[stall_watchdog] exit (parent_exited); 1 kill(s)

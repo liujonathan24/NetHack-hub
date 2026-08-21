@@ -1,0 +1,48 @@
+{
+  "ts": "2026-08-01T18:01:17+00:00",
+  "event": "kill",
+  "watchdog_pid": 87381,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__BBOX__visoff/turns",
+  "pid": 87697,
+  "idle_s": 315.0,
+  "timeout_s": 300.0,
+  "seeds": [
+    4
+  ],
+  "likely_hung_seed": 4,
+  "per_seed": {
+    "4": {
+      "idle_s": 315.0,
+      "newest_file": "4_87697_1785603348.ndjson",
+      "last_turn": {
+        "file": "4_87697_1785603348.ndjson",
+        "n_lines": 86,
+        "turn": 86,
+        "dlvl": 2,
+        "hp": 5,
+        "max_hp": 16,
+        "variant": "BBOX",
+        "max_dlvl_reached": 2,
+        "t_wall": 1785606961.6469104,
+        "reward": 253.0,
+        "last_tool_call": "np_look",
+        "last_message_head": "[autohalt: [STUCK: this exact call has run 3 times and the game clock has not advanced once. Do something DIFFERENT.]]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      87697
+    ],
+    "sigterm": [
+      87697
+    ],
+    "sigkill": [],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__BBOX__visoff/turns.stalled/20260801T180117Z_pid87697",
+  "quarantined_files": [
+    "4_87697_1785603348.ndjson"
+  ],
+  "dry_run": false
+}

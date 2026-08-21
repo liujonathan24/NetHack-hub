@@ -1,0 +1,2 @@
+{"ts": "2026-08-19T06:01:49+00:00", "event": "armed", "watchdog_pid": 2591918, "turns_dir": "/root/nld/hub-eval/outputs/e7_seed/NPCORE_v3__prime_agent/turns", "timeout_s": 300.0, "poll_s": 15.0, "parent_pid": 2591859, "dry_run": false, "quarantine_root": "/root/nld/hub-eval/outputs/e7_seed/NPCORE_v3__prime_agent/turns.stalled"}
+{"ts": "2026-08-19T06:30:44+00:00", "event": "exit", "watchdog_pid": 2591918, "turns_dir": "/root/nld/hub-eval/outputs/e7_seed/NPCORE_v3__prime_agent/turns", "reason": "parent_exited", "kills": 0}

@@ -1,0 +1,2 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e2_encoding_sweep/claude_code__B0__visoff/turns'] timeout=300s poll=15s parent_pid=92132
+[stall_watchdog] exit (parent_exited); 0 kill(s)

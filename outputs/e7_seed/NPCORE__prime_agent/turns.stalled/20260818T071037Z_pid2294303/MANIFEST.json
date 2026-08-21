@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-18T07:10:37+00:00",
+  "event": "kill",
+  "watchdog_pid": 2294166,
+  "turns_dir": "/root/nld/hub-eval/outputs/e7_seed/NPCORE__prime_agent/turns",
+  "pid": 2294303,
+  "idle_s": 306.6,
+  "timeout_s": 300.0,
+  "seeds": [
+    2
+  ],
+  "likely_hung_seed": 2,
+  "per_seed": {
+    "2": {
+      "idle_s": 306.6,
+      "newest_file": "2_2294303_1787035611.ndjson",
+      "last_turn": {
+        "file": "2_2294303_1787035611.ndjson",
+        "n_lines": 90,
+        "turn": 90,
+        "dlvl": 7,
+        "hp": 10,
+        "max_hp": 16,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 7,
+        "t_wall": 1787036720.852623,
+        "reward": 800.0,
+        "last_tool_call": "np_press_key",
+        "last_message_head": "[Executing skill 'press_key #'. Pressing key '#'. Skill 'press_key #' completed]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      2294303
+    ],
+    "sigterm": [
+      2294303
+    ],
+    "sigkill": [
+      2294303
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/nld/hub-eval/outputs/e7_seed/NPCORE__prime_agent/turns.stalled/20260818T071037Z_pid2294303",
+  "quarantined_files": [
+    "2_2294303_1787035611.ndjson"
+  ],
+  "dry_run": false
+}

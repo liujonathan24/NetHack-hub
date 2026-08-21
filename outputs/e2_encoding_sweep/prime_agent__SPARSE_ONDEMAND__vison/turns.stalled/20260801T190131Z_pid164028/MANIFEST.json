@@ -1,0 +1,48 @@
+{
+  "ts": "2026-08-01T19:01:31+00:00",
+  "event": "kill",
+  "watchdog_pid": 88648,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns",
+  "pid": 164028,
+  "idle_s": 305.6,
+  "timeout_s": 300.0,
+  "seeds": [
+    4
+  ],
+  "likely_hung_seed": 4,
+  "per_seed": {
+    "4": {
+      "idle_s": 305.6,
+      "newest_file": "4_164028_1785610584.ndjson",
+      "last_turn": {
+        "file": "4_164028_1785610584.ndjson",
+        "n_lines": 1,
+        "turn": 1,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "SPARSE_ONDEMAND",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785610584.5922189,
+        "reward": 100.0,
+        "last_tool_call": "np_look",
+        "last_message_head": "[Executing skill 'look'. Skill 'look' completed GAME: There is a staircase up here.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      164028
+    ],
+    "sigterm": [
+      164028
+    ],
+    "sigkill": [],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__vison/turns.stalled/20260801T190131Z_pid164028",
+  "quarantined_files": [
+    "4_164028_1785610584.ndjson"
+  ],
+  "dry_run": false
+}

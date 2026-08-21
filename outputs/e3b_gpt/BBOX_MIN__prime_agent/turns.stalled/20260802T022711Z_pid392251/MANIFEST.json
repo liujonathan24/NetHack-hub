@@ -1,0 +1,48 @@
+{
+  "ts": "2026-08-02T02:27:11+00:00",
+  "event": "kill",
+  "watchdog_pid": 392037,
+  "turns_dir": "/root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns",
+  "pid": 392251,
+  "idle_s": 305.4,
+  "timeout_s": 300.0,
+  "seeds": [
+    0
+  ],
+  "likely_hung_seed": 0,
+  "per_seed": {
+    "0": {
+      "idle_s": 305.4,
+      "newest_file": "0_392251_1785636629.ndjson",
+      "last_turn": {
+        "file": "0_392251_1785636629.ndjson",
+        "n_lines": 14,
+        "turn": 14,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785637324.852207,
+        "reward": 100.0,
+        "last_tool_call": "np_press_key",
+        "last_message_head": "[Executing skill 'press_key ESC'. Pressing key 'ESC'. Skill 'press_key ESC' completed GAME: The door opens.]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      392251
+    ],
+    "sigterm": [
+      392251
+    ],
+    "sigkill": [],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns.stalled/20260802T022711Z_pid392251",
+  "quarantined_files": [
+    "0_392251_1785636629.ndjson"
+  ],
+  "dry_run": false
+}

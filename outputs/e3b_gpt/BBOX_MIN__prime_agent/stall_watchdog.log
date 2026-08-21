@@ -1,0 +1,8 @@
+[stall_watchdog] armed on ['/root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns'] timeout=300s poll=15s parent_pid=391749
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns pid=392251 idle=305s (timeout=300s) seeds=[0] likely_hung_seed=0
+[stall_watchdog] wrote 1 partial trace record(s) for the killed attempt(s)
+[stall_watchdog] killed pid=392251 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns.stalled/20260802T022711Z_pid392251
+[stall_watchdog] STALL turns_dir=/root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns pid=392247 idle=301s (timeout=300s) seeds=[3] likely_hung_seed=3
+[stall_watchdog] wrote 1 partial trace record(s) for the killed attempt(s)
+[stall_watchdog] killed pid=392247 (survivors=[]); quarantined 1 file(s) -> /root/NetHack-hub/outputs/e3b_gpt/BBOX_MIN__prime_agent/turns.stalled/20260802T024127Z_pid392247
+[stall_watchdog] exit (signal); 2 kill(s)

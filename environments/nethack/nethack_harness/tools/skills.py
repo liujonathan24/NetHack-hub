@@ -2281,9 +2281,9 @@ def reveal(env: NetHackCoreEnv, obs: StructuredObservation,
 
 @registry.register("request_map", schema={
     "description": (
-        "Force the FULL map back into this turn's observation. Under the "
-        "delayed-map observation mode the map is re-sent only when it "
-        "materially changed; call this to refresh it on demand. Consumes NO "
+        "Force the FULL map (plus surroundings) back into this turn's "
+        "observation. Under map-withholding observation modes the map is "
+        "otherwise not pushed; call this to see it on demand. Consumes NO "
         "game turn."
     ),
     "parameters": {},

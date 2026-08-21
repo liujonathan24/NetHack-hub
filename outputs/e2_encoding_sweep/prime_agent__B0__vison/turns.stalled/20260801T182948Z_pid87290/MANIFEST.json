@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T18:29:48+00:00",
+  "event": "kill",
+  "watchdog_pid": 86927,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns",
+  "pid": 87290,
+  "idle_s": 308.7,
+  "timeout_s": 300.0,
+  "seeds": [
+    3
+  ],
+  "likely_hung_seed": 3,
+  "per_seed": {
+    "3": {
+      "idle_s": 308.7,
+      "newest_file": "3_87290_1785603344.ndjson",
+      "last_turn": {
+        "file": "3_87290_1785603344.ndjson",
+        "n_lines": 139,
+        "turn": 139,
+        "dlvl": 5,
+        "hp": 19,
+        "max_hp": 23,
+        "variant": "B0",
+        "max_dlvl_reached": 5,
+        "t_wall": 1785608669.4209404,
+        "reward": 1446.0,
+        "last_tool_call": "np_melee_attack",
+        "last_message_head": "[Executing skill 'melee_attack 23 7'. Skill 'melee_attack 23 7' completed: Killed the target. GAME: You kill the werejackal!]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      87290
+    ],
+    "sigterm": [
+      87290
+    ],
+    "sigkill": [
+      87290
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__B0__vison/turns.stalled/20260801T182948Z_pid87290",
+  "quarantined_files": [
+    "3_87290_1785603344.ndjson"
+  ],
+  "dry_run": false
+}

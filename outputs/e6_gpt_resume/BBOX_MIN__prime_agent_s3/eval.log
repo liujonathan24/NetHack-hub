@@ -1,0 +1,137 @@
+08:13:50 WARNING Harness 'nethack-prime-agent' is running in the subprocess runtime on the local system. Local files and settings may affect the evaluation; use subprocess only for debugging. Use --harness.runtime.type docker or prime for an isolated run.
+08:13:50    INFO eval config:
+{
+  "taskset": {
+    "id": "nethack_v1",
+    "task": {
+      "judges": []
+    },
+    "task_spec": "full_nle",
+    "variant": "BBOX_MIN",
+    "map_detail": "full",
+    "interface": "skill",
+    "character": "Val-hum-neu-fem",
+    "max_turns": 200,
+    "trace_dir": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3/turns",
+    "self_dispatch": true,
+    "obs_mode": "push",
+    "max_skill_calls": 177,
+    "max_parallel_skill_calls": 0,
+    "parallel_batch_window_s": 0.5,
+    "env_args": {
+      "skill_set": "netplay_true,reveal,search",
+      "tune": {
+        "reveal_map": "1.0"
+      },
+      "resume_from": "/root/NetHack-hub/outputs/e6_gpt_resume/source",
+      "explicit_seeds": "[3]"
+    },
+    "colocated": false,
+    "seed_workspace": true,
+    "n_examples": 16,
+    "seed": 0,
+    "explicit_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harness_id": "nethack_v1"
+  },
+  "harness": {
+    "id": "nethack-prime-agent",
+    "runtime": {
+      "type": "subprocess"
+    },
+    "env": {},
+    "forward_env": [],
+    "disabled_tools": null,
+    "binary": "prime-agent",
+    "version": "0.3.3",
+    "install_dir": "/tmp/vf-prime-agent",
+    "path_prepend": "/usr/bin:/root/.local/bin",
+    "thinking": "",
+    "websearch": false,
+    "reasoning": null,
+    "context_window": 1048576,
+    "capture_output": true,
+    "sandbox": true,
+    "sandbox_bwrap": "bwrap",
+    "allow_batching": true,
+    "max_relaunches": 0
+  },
+  "timeout": {
+    "setup": 1800.0,
+    "rollout": 7200.0,
+    "finalize": null,
+    "scoring": null
+  },
+  "retries": {
+    "rollout": {
+      "max_retries": 2,
+      "include": [],
+      "exclude": []
+    }
+  },
+  "max_turns": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "max_total_tokens": null,
+  "interception": {
+    "type": "elastic",
+    "multiplex": 32
+  },
+  "id": null,
+  "args": {},
+  "extra_env_kwargs": {},
+  "pool": {
+    "type": "elastic",
+    "max_workers": null,
+    "multiplex": 128
+  },
+  "model": "openai/gpt-5.6-sol",
+  "client": {
+    "base_url": "https://api.pinference.ai/api/v1",
+    "api_key_var": "PRIME_API_KEY",
+    "headers": {
+      "X-Prime-Team-ID": "cmotasmp5005ppyp07dcoh50u"
+    },
+    "type": "eval"
+  },
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "reasoning_effort": null,
+    "max_tokens": null
+  },
+  "num_tasks": 1,
+  "num_rollouts": 1,
+  "shuffle": false,
+  "max_concurrent": 128,
+  "verbose": false,
+  "dry_run": false,
+  "rich": false,
+  "server": false,
+  "push": false,
+  "output_dir": "/root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3"
+}
+08:13:50    INFO running 1x1 rollouts on openai/gpt-5.6-sol
+08:13:50    INFO results: /root/NetHack-hub/outputs/e6_gpt_resume/BBOX_MIN__prime_agent_s3
+08:13:50    INFO rollout start: id=6e4b7a6ccdb143f9a6a0748e242bdd82 task=0 harness=nethack-prime-agent runtime=subprocess
+08:13:50    INFO interception up: url=http://127.0.0.1:46297
+08:13:51    INFO interception pool: 1 server(s), multiplex=32
+08:13:54    INFO tool server 'nethack': http://127.0.0.1:43899/mcp
+09:15:30    INFO rollout done: id=6e4b7a6ccdb143f9a6a0748e242bdd82 task=0 reward=22.362 turns=62 stop=agent_completed
+09:15:30    INFO interception down: url=http://127.0.0.1:46297

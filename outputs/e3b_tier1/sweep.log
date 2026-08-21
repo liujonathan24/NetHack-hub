@@ -1,0 +1,19 @@
+sweep start 2026-08-02T01:57:49Z
+  model=z-ai/glm-5.2 cells=BBOX_MIN x cc/pa vision=on seeds=5 calls=200 timeout=7200s
+  git_head cd929466b80a905001b72f70a2c761ebd04b9d1a dirty=yes
+  est cost ~$228 (range 154-300) for 2 cells x 5 seeds
+sweep start 2026-08-02T01:58:00Z
+  model=z-ai/glm-5.2 cells=BBOX_MIN x cc/pa vision=on seeds=5 calls=200 timeout=7200s
+  git_head cd929466b80a905001b72f70a2c761ebd04b9d1a dirty=yes
+  est cost ~$228 (range 154-300) for 2 cells x 5 seeds
+== batch 1: 2 cells @ 01:58:01 ==
+  launch BBOX_MIN__claude_code (arm=claude_code variant=BBOX_MIN no-extra)
+  launch BBOX_MIN__prime_agent (arm=prime_agent variant=BBOX_MIN ALLOW_BATCHING=1)
+  done   BBOX_MIN__claude_code rc=0
+  done   BBOX_MIN__prime_agent rc=143
+== batch 1 complete @ 03:07:03 ==
+  launch BBOX_MIN__claude_code (arm=claude_code variant=BBOX_MIN no-extra)
+  launch BBOX_MIN__prime_agent (arm=prime_agent variant=BBOX_MIN ALLOW_BATCHING=1)
+  done   BBOX_MIN__prime_agent rc=137
+  done   BBOX_MIN__claude_code rc=137
+== batch 2 complete @ 03:08:11 ==

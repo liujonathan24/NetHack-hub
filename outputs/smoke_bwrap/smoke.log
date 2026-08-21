@@ -1,0 +1,244 @@
+[engine] head=edbcad3 submodule=ac80760 pinned=ac80760 so=/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so built=2026-08-01T03:52:48 newest_src=src/win/rl/winrl.cc@2026-08-01T03:49:30 flags=ok
+[launch_cell] env_args overrides: --taskset.env_args.skill_set netplay_true,reveal,rollback,search
+[launch_cell:watchdog] armed: pid=222182 timeout=300s log=/root/NetHack-hub/outputs/smoke_bwrap/stall_watchdog.log quarantine=/root/NetHack-hub/outputs/smoke_bwrap/turns.stalled
+[launch_cell] arm=prime_agent config=tools/cli_harness_eval/configs/prime_agent.toml model=z-ai/glm-5.2 variant=B0 max_calls=5 n=1 timeout=<from config> out=/root/NetHack-hub/outputs/smoke_bwrap trace_dir=/root/NetHack-hub/outputs/smoke_bwrap/turns
+21:45:45 WARNING Harness 'nethack-prime-agent' is running in the subprocess runtime on the local system. Local files and settings may affect the evaluation; use subprocess only for debugging. Use --harness.runtime.type docker or prime for an isolated run.
+21:45:45    INFO eval config:
+{
+  "taskset": {
+    "id": "nethack_v1",
+    "task": {
+      "judges": []
+    },
+    "task_spec": "full_nle",
+    "variant": "B0",
+    "map_detail": "full",
+    "interface": "skill",
+    "character": "Val-hum-neu-fem",
+    "max_turns": 200,
+    "trace_dir": "/root/NetHack-hub/outputs/smoke_bwrap/turns",
+    "self_dispatch": true,
+    "obs_mode": "push",
+    "max_skill_calls": 5,
+    "max_parallel_skill_calls": 0,
+    "parallel_batch_window_s": 0.5,
+    "env_args": {
+      "skill_set": "netplay_true,reveal,rollback,search"
+    },
+    "colocated": false,
+    "seed_workspace": true,
+    "n_examples": 16,
+    "seed": 0,
+    "explicit_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "harness_id": "nethack_v1"
+  },
+  "harness": {
+    "id": "nethack-prime-agent",
+    "runtime": {
+      "type": "subprocess"
+    },
+    "env": {},
+    "forward_env": [],
+    "disabled_tools": null,
+    "binary": "prime-agent",
+    "version": "0.3.3",
+    "install_dir": "/tmp/vf-prime-agent",
+    "path_prepend": "/usr/bin:/root/.local/bin",
+    "thinking": "",
+    "websearch": false,
+    "reasoning": null,
+    "context_window": 1048576,
+    "capture_output": true,
+    "sandbox": true,
+    "sandbox_bwrap": "bwrap",
+    "allow_batching": false,
+    "max_relaunches": 0
+  },
+  "timeout": {
+    "setup": 1800.0,
+    "rollout": 7200.0,
+    "finalize": null,
+    "scoring": null
+  },
+  "retries": {
+    "rollout": {
+      "max_retries": 2,
+      "include": [],
+      "exclude": []
+    }
+  },
+  "max_turns": null,
+  "max_input_tokens": null,
+  "max_output_tokens": null,
+  "max_total_tokens": null,
+  "interception": {
+    "type": "elastic",
+    "multiplex": 32
+  },
+  "id": null,
+  "args": {},
+  "extra_env_kwargs": {},
+  "pool": {
+    "type": "elastic",
+    "max_workers": null,
+    "multiplex": 128
+  },
+  "model": "z-ai/glm-5.2",
+  "client": {
+    "base_url": "https://api.pinference.ai/api/v1",
+    "api_key_var": "PRIME_API_KEY",
+    "headers": {
+      "X-Prime-Team-ID": "cmotasmp5005ppyp07dcoh50u"
+    },
+    "type": "eval"
+  },
+  "sampling": {
+    "temperature": null,
+    "top_p": null,
+    "reasoning_effort": null,
+    "max_tokens": null
+  },
+  "num_tasks": 1,
+  "num_rollouts": 1,
+  "shuffle": false,
+  "max_concurrent": 128,
+  "verbose": false,
+  "dry_run": false,
+  "rich": false,
+  "server": false,
+  "push": false,
+  "output_dir": "/root/NetHack-hub/outputs/smoke_bwrap"
+}
+21:45:45    INFO running 1x1 rollouts on z-ai/glm-5.2
+21:45:45    INFO results: /root/NetHack-hub/outputs/smoke_bwrap
+21:45:45    INFO rollout start: id=1a18a32400254b048d542b8be93028a2 task=0 harness=nethack-prime-agent runtime=subprocess
+21:45:45    INFO interception up: url=http://127.0.0.1:35339
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+21:45:47    INFO interception pool: 1 server(s), multiplex=32
+21:45:50    INFO tool server 'nethack': http://127.0.0.1:46375/mcp
+21:46:10    INFO rollout done: id=1a18a32400254b048d542b8be93028a2 task=0 reward=0.000 turns=0 stop=HarnessError
+21:46:10 WARNING retrying rollout 1a18a32400254b048d542b8be93028a2 (retry 1/2) after error: HarnessError
+21:46:10    INFO rollout start: id=e9c53c48478e48af9534afe9f3740d83 task=0 harness=nethack-prime-agent runtime=subprocess
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+21:46:44    INFO tool server 'nethack': http://127.0.0.1:36827/mcp
+21:47:04    INFO rollout done: id=e9c53c48478e48af9534afe9f3740d83 task=0 reward=0.000 turns=0 stop=HarnessError
+21:47:04 WARNING retrying rollout e9c53c48478e48af9534afe9f3740d83 (retry 2/2) after error: HarnessError
+21:47:04    INFO rollout start: id=81551f2a09fa4b9bbe11aa37b9894a07 task=0 harness=nethack-prime-agent runtime=subprocess
+could not read `prime-agent --version` (got '/usr/bin/prime-agent'); the pin '0.3.3' is unverified
+21:47:11    INFO tool server 'nethack': http://127.0.0.1:44535/mcp
+21:47:31    INFO rollout done: id=81551f2a09fa4b9bbe11aa37b9894a07 task=0 reward=0.000 turns=0 stop=HarnessError
+21:47:32    INFO interception down: url=http://127.0.0.1:35339
+{
+  "id": "81551f2a09fa4b9bbe11aa37b9894a07",
+  "task": {
+    "type": "NetHackTask",
+    "data": {
+      "idx": 0,
+      "name": "full_nle:0",
+      "description": "Descend as deep into the dungeon as you can and survive; ultimately win the game (retrieve the Amulet of Yendor and escape).",
+      "prompt": "Task: Descend as deep into the dungeon as you can and survive; ultimately win the game (retrieve the Amulet of Yendor and escape).\nSuccess: ascended\n\nBegin.",
+      "system_prompt": "You are playing NetHack, a procedurally-generated dungeon-crawling roguelike.\n\nEach turn shows: map (ASCII), stats, inventory, messages, any menu. Act by\ncalling one tool.\n\n=== COORDINATES ===\nOne frame, everywhere. `=== MAP ===` row 0 is the TOP row of the dungeon;\n`Pos: (x,y)` indexes it directly (your `@` is on map row y, column x); every\ncoordinate in VISIBLE FEATURES and every (x, y) argument a tool takes is in\nthat same frame. Copy coordinates straight across — no offsets.\n\n=== GLYPH KEY ===\nTerrain: `>` stairs DOWN, `<` stairs UP (NOT down), `_` altar, `{` fountain,\n`}` pool, `#` corridor, `.` floor, `|`/`-` walls, `+` closed door (or a\nspellbook lying on the floor), `\\` throne, `$` gold, `%` food/corpse,\n`[`/`)`/`(`/`*`/`?` items. Creatures are LETTERS (a-z, A-Z): `d` canine,\n`f` feline, `F` lichen/fungus, `r` rat, `x` grid bug, `B` bat, `k` kobold,\n`o` orc, `@` humans (and YOU). No \"fireplace\" glyph — adjacent `f` is a\ncreature. `@` hides the tile under you — read UNDER PLAYER.\n\nDOORWAYS & WALL GAPS: a single non-wall tile inside a wall row is a\ndoorway you can walk through. Examples:\n  `--.---` (horizontal wall with `.`) → walk through the `.`.\n  `|.....|` with `-` in the middle → that `-` is broken wall; walk it.\n  `-----|-----` (`|` inside a horizontal wall row) → OPEN DOOR; just walk.\n\nWhen stuck in a room, scan every wall row for a tile that doesn't match\n`-` or `|`. That's your exit. VISIBLE FEATURES already lists them for you as\n`door (open/gap)` and `door (closed)`.\n\n=== SKILLS CHEAT SHEET ===\n- **UNDO — this game supports it**: `rollback(n)` rewinds the last n turns, putting the game back exactly as it was. NetHack is normally irreversible; here it is not. Use it as soon as a move turns out badly: you walked into a fight you are losing, stepped on a trap, ate something that made you ill, or wasted turns in a dead end. If you are about to die, roll back and choose differently. Costs one turn and no game time.\n- Search for hidden doors: `search(times=10)`\n\nExplore the environment to find the stairs down to the next level.\nYour goal is to get as far as possible in the game. Keep acting every turn —\nthe episode ends only when your character dies or you run out of calls, never\nbecause you stopped, summarized, or declared the run finished.",
+      "timeout": {},
+      "resources": {},
+      "seed": 0,
+      "tier": "full_nle"
+    }
+  },
+  "runtime": {
+    "id": "/tmp/81551f2a09fa4b9bbe11aa37b9894a07",
+    "type": "subprocess"
+  },
+  "version": 2,
+  "verifiers": {
+    "version": "0.2.1"
+  },
+  "run": {
+    "type": "eval",
+    "id": "05ffa132-5184-4309-a6c5-ad76f50e64cc"
+  },
+  "agent": {
+    "model": "z-ai/glm-5.2",
+    "sampling": {},
+    "harness": {
+      "id": "nethack-prime-agent",
+      "runtime": {
+        "type": "subprocess"
+      },
+      "env": {},
+      "forward_env": []
+    }
+  },
+  "nodes": [],
+  "calls": [],
+  "rewards": {},
+  "metrics": {
+    "prime_agent_relaunches": 0.0
+  },
+  "info": {},
+  "extra_usage": [],
+  "is_completed": true,
+  "stop_condition": "error",
+  "errors": [
+    {
+      "type": "HarnessError",
+      "message": "harness 'nethack-prime-agent' exited 1: Connection error.",
+      "traceback": "Traceback (most recent call last):\n  File \"/root/NetHack-hub/.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/rollout.py\", line 198, in run\n    await asyncio.wait_for(\n  File \"/root/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py\", line 520, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/root/NetHack-hub/.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/harness.py\", line 115, in run\n    raise HarnessError(\nverifiers.v1.errors.HarnessError: harness 'nethack-prime-agent' exited 1: Connection error.\n"
+    },
+    {
+      "type": "HarnessError",
+      "message": "harness 'nethack-prime-agent' exited 1: Connection error.",
+      "traceback": "Traceback (most recent call last):\n  File \"/root/NetHack-hub/.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/rollout.py\", line 198, in run\n    await asyncio.wait_for(\n  File \"/root/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py\", line 520, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/root/NetHack-hub/.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/harness.py\", line 115, in run\n    raise HarnessError(\nverifiers.v1.errors.HarnessError: harness 'nethack-prime-agent' exited 1: Connection error.\n"
+    },
+    {
+      "type": "HarnessError",
+      "message": "harness 'nethack-prime-agent' exited 1: Connection error.",
+      "traceback": "Traceback (most recent call last):\n  File \"/root/NetHack-hub/.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/rollout.py\", line 198, in run\n    await asyncio.wait_for(\n  File \"/root/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/lib/python3.12/asyncio/tasks.py\", line 520, in wait_for\n    return await fut\n           ^^^^^^^^^\n  File \"/root/NetHack-hub/.venv-cli-eval/lib/python3.12/site-packages/verifiers/v1/harness.py\", line 115, in run\n    raise HarnessError(\nverifiers.v1.errors.HarnessError: harness 'nethack-prime-agent' exited 1: Connection error.\n"
+    }
+  ],
+  "timing": {
+    "start": 1785620824.339114,
+    "boot": {
+      "start": 1785620824.3391793,
+      "end": 1785620824.3393426
+    },
+    "setup": {
+      "start": 1785620824.3393426,
+      "end": 1785620831.5394704
+    },
+    "generation": {
+      "start": 1785620831.5394704,
+      "end": 1785620851.8030245,
+      "model": {
+        "duration": 0.0
+      },
+      "harness": {
+        "duration": 20.263554096221924
+      }
+    },
+    "finalize": {
+      "start": 0.0,
+      "end": 0.0
+    },
+    "scoring": {
+      "start": 0.0,
+      "end": 0.0
+    }
+  }
+}

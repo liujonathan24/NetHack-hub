@@ -1,0 +1,24 @@
+sweep start 2026-08-02T06:32:33Z
+  model=z-ai/glm-5.2 cells=BBOX_MIN x cc/pa vision=FOG seeds=5 calls=200 timeout=7200s
+  git_head 6a7c1925edb1e35b77d46c7f616ee7f31f42bd97 dirty=yes
+  est cost ~$228 (range 154-300) for 2 cells x 5 seeds
+== batch 1: 2 cells @ 06:32:35 ==
+  launch BBOX_MIN__claude_code (arm=claude_code variant=BBOX_MIN no-extra)
+  launch BBOX_MIN__prime_agent (arm=prime_agent variant=BBOX_MIN ALLOW_BATCHING=1)
+  done   BBOX_MIN__prime_agent rc=0
+  done   BBOX_MIN__claude_code rc=0
+== batch 1 complete @ 07:08:43 ==
+sweep end 2026-08-02T07:08:43Z
+[backfill] 0 record(s) across outputs/e6_fog
+| Cell | n | n_err | Depth (mean ± SE) | BALROG % max (mean ± SE) | BALROG % min (mean ± SE) | xp-carried | Died % | Actions used (measured, mean ± SE) | Cost/rollout ($) | dlvl / game-turn | dlvl / LLM call | BALROG% / game-turn | BALROG% / LLM call | sec/call 1st half → 2nd half | Post-death drain |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| BBOX_MIN__claude_code | 5 | 0 | 2.60 ± 0.93 | 2.23 ± 0.33 | 1.24 ± 0.56 | 2/5 | 20% | metrics.skill_calls=197.20 ± 2.80 | $15.9659 ± 1.7733 · cell spend $79.83 | 0.00137 ± 0.00079 | 0.0084 ± 0.0050 | 0.00193 | 0.0114 | 11.6s → 7.8s | 0.0 |
+| BBOX_MIN__prime_agent | 5 | 0 | 3.60 ± 0.93 | 2.03 ± 0.60 | 0.91 ± 0.56 | 2/5 | 80% | metrics.skill_calls=132.00 ± 29.27 | $10.0542 ± 3.6064 · cell spend $50.27 | 0.00389 ± 0.00130 | 0.0198 ± 0.0072 | 0.00316 | 0.0173 | 12.0s → 8.6s | 3.6 |
+
+Notes: BALROG is reported as BOTH its published `max` over the (Dlvl, Xp) achievement axes AND the `min` over the same table; 'xp-carried' counts rollouts with max > 0 and min == 0, i.e. whose entire headline score came from levelling rather than descent. 'Actions used' is the MEASURED count, never the nominal 150-call budget -- the control arm's `max_turns` caps LM turns (a no-tool-call turn burns the turn; extra parallel tool calls past the first are dropped), so it gets *at most* the nominal budget in executed skills, while the CLI arms' toolset-side referee grants exactly that many. The arms are therefore NOT budget-matched; do not read a lower control action count as the model choosing to stop early. Pace columns are slopes: 'game-turn' is in-game `status.time` (one LLM call runs a whole pathfinding macro, so the two denominators differ by ~10x); depth gained is `max_dlvl - 1`. Cost uses the price table for the model the cell actually ran and is 'unavailable' when that model is unpriced -- never another model's table.
+
+`n_err` counts rollouts this cell wrote that ended for an INFRASTRUCTURE reason (`stop_condition` = `error`/`*Error`/`harness_timeout`, or every recorded call carrying an error and none carrying usage). They are excluded from every score in the row -- a 402 stub is not a shallow rollout -- but their tokens are still counted in 'cell spend', because the money left the wallet either way. A cell with a large `n_err` did not measure what its `n` suggests. An `n` written `4 (1m)` includes rollouts whose depth was read from `trace.metrics.max_dlvl_reached` because their turn file was quarantined or never written; those contribute depth and BALROG but no latency, drain or game-turn slope.
+
+wrote outputs/e6_fog/table.cli_harness_eval.md and outputs/e6_fog/table.cli_harness_eval.json
+(also copied to outputs/e6_fog/table.md / outputs/e6_fog/table.json -- see outputs/e6_fog/table.provenance.json)
+[cap-check] WARNING: 5/10 rollouts hit the call cap (50%). The BUDGET, not the game, ended them -- depth here is censored. Re-run at a higher MAX_CALLS before quoting these depths against anything.

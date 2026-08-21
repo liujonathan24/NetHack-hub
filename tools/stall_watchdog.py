@@ -212,6 +212,131 @@ def kill_tree(pid: int, grace: float, dry_run: bool = False) -> dict:
     return record
 
 
+# ---------------------------------------------------------------------------
+# Agent-first kill (e7 lesson). The turn-file writer PID is the TOOL SERVER on
+# the MCP route, not the agent: killing only its tree leaves the CLI agent
+# alive, retrying dead MCP calls until the rollout's full wall-clock timeout
+# (measured: two 7,200s zombies, ~400 wasted model calls each). The agent must
+# die FIRST, then the tool server. Mapping a writer PID to ITS agent (and not
+# a healthy sibling seed's) uses the per-rollout wiring: the tool server
+# LISTENs on a port; the agent's per-rollout config references that port
+# (`mcpServers.<name>.url` in Prime Agent's settings.json, `.mcp.json` in a
+# Claude Code workspace). Every step is best-effort: no exception may escape
+# (a dead watchdog is worse than a missed agent kill), and no match means the
+# old behavior, logged as such.
+# ---------------------------------------------------------------------------
+
+def listen_ports(pid: int) -> set[int]:
+    """TCP ports `pid` is LISTENing on, via /proc socket-inode join."""
+    inodes = set()
+    try:
+        for fd in os.listdir(f"/proc/{pid}/fd"):
+            try:
+                tgt = os.readlink(f"/proc/{pid}/fd/{fd}")
+            except OSError:
+                continue
+            if tgt.startswith("socket:["):
+                inodes.add(tgt[8:-1])
+    except OSError:
+        return set()
+    ports: set[int] = set()
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, encoding="utf-8") as fh:
+                next(fh, None)
+                for line in fh:
+                    f = line.split()
+                    if len(f) > 9 and f[3] == "0A" and f[9] in inodes:  # 0A = LISTEN
+                        ports.add(int(f[1].rsplit(":", 1)[1], 16))
+        except OSError:
+            continue
+    return ports
+
+
+_PORT_URL_RE = re.compile(r"://[^\s\"']+?:(\d{2,5})(?:/|\"|$)")
+
+
+def config_ports(text: str) -> set[int]:
+    """Ports referenced by URLs inside a config blob (settings.json/.mcp.json)."""
+    return {int(m) for m in _PORT_URL_RE.findall(text or "")}
+
+
+def _read_environ(pid: int) -> dict:
+    try:
+        raw = open(f"/proc/{pid}/environ", "rb").read()
+    except OSError:
+        return {}
+    out = {}
+    for item in raw.split(b"\0"):
+        if b"=" in item:
+            k, _, v = item.partition(b"=")
+            out[k.decode(errors="replace")] = v.decode(errors="replace")
+    return out
+
+
+def agent_pids_for_ports(ports: set[int], exclude: set[int]) -> list[int]:
+    """PIDs of agent processes whose per-rollout config references `ports`.
+
+    Candidates are any live process (cheap /proc scan) whose environ names a
+    per-rollout agent dir (Prime Agent) or whose cwd holds a `.mcp.json`
+    (Claude Code); a candidate matches when its config's URLs point at one of
+    the stalled tool server's listen ports. Root-most matching pids only --
+    kill_tree handles descendants.
+    """
+    if not ports:
+        return []
+    matches: set[int] = set()
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        cand = int(entry)
+        if cand in exclude:
+            continue
+        try:
+            env = _read_environ(cand)
+            blobs = []
+            adir = env.get("PRIME_AGENT_CODING_AGENT_DIR")
+            if adir:
+                for name in ("settings.json",):
+                    try:
+                        blobs.append(open(os.path.join(adir, name), encoding="utf-8").read())
+                    except OSError:
+                        pass
+            try:
+                cwd = os.readlink(f"/proc/{cand}/cwd")
+                for name in (".mcp.json", ".claude/settings.json"):
+                    try:
+                        blobs.append(open(os.path.join(cwd, name), encoding="utf-8").read())
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+            if any(config_ports(b) & ports for b in blobs):
+                matches.add(cand)
+        except Exception:
+            continue
+    # Reduce to root-most: drop any match whose ancestor is also a match.
+    roots = []
+    for m in sorted(matches):
+        anc, hops = m, 0
+        is_child = False
+        while hops < 64:
+            try:
+                raw = open(f"/proc/{anc}/stat", encoding="utf-8").read()
+                anc = int(raw[raw.rindex(")") + 2:].split()[1])
+            except (OSError, ValueError):
+                break
+            if anc <= 1:
+                break
+            if anc in matches:
+                is_child = True
+                break
+            hops += 1
+        if not is_child:
+            roots.append(m)
+    return roots
+
+
 # --------------------------------------------------------------------------
 # turn-file inspection
 # --------------------------------------------------------------------------
@@ -562,7 +687,25 @@ class Watchdog:
                  f"likely_hung_seed={stalled_seeds[0]}"
                  + (" [DRY RUN]" if self.dry_run else ""))
 
+        # Agent FIRST, tool server second (see the agent-first block above).
+        agent_kills = []
+        try:
+            ports = listen_ports(pid)
+            excl = {pid, os.getpid()} | set(descendants(pid))
+            for apid in agent_pids_for_ports(ports, excl):
+                self.say(f"killing AGENT pid={apid} for stalled tool-server "
+                         f"pid={pid} (ports={sorted(ports)})")
+                agent_kills.append(
+                    {"pid": apid, **kill_tree(apid, self.kill_grace,
+                                              dry_run=self.dry_run)})
+            if not agent_kills:
+                self.say(f"no agent process matched tool-server pid={pid} "
+                         f"(ports={sorted(ports)}); killing writer tree only")
+        except Exception as exc:  # never let mapping kill the watchdog
+            self.say(f"agent-first mapping failed ({exc!r}); "
+                     f"falling back to writer tree only")
         kill = kill_tree(pid, self.kill_grace, dry_run=self.dry_run)
+        kill["agents"] = agent_kills
         moved, qdir = self.quarantine_files(turns_dir, pid, slot["files"])
 
         rec = self.log(

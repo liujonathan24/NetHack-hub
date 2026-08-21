@@ -250,7 +250,16 @@ def search_room(agent: NetHackAgent, room_id: int, max_search_count=3):
 
 @skill(
     name="press_key",
-    description="Presses the given letter. For special keys only ESC, SPACE, and ENTER are supported.",
+    # Truthful key surface (was: "only ESC, SPACE, and ENTER are supported" --
+    # a lie that told the model the descend key `>` would not work; RawKeyPress
+    # accepts letters, digits and most punctuation including `>` and `<`).
+    description=(
+        "Presses a single key, exactly as if typed at the NetHack prompt: "
+        "letters (both cases), digits, and punctuation such as > < , . # $ are "
+        "all supported, plus the named specials ESC, SPACE and ENTER. Use this "
+        "to answer the game's own prompts and menus, and to descend (press '>' "
+        "while standing on a > staircase) or ascend ('<')."
+    ),
     parameters=[
         SkillParameter.string("key")
     ]

@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-01T18:32:17+00:00",
+  "event": "kill",
+  "watchdog_pid": 88213,
+  "turns_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns",
+  "pid": 138988,
+  "idle_s": 304.1,
+  "timeout_s": 300.0,
+  "seeds": [
+    0
+  ],
+  "likely_hung_seed": 0,
+  "per_seed": {
+    "0": {
+      "idle_s": 304.1,
+      "newest_file": "0_138988_1785608395.ndjson",
+      "last_turn": {
+        "file": "0_138988_1785608395.ndjson",
+        "n_lines": 21,
+        "turn": 21,
+        "dlvl": 1,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "SPARSE_ONDEMAND",
+        "max_dlvl_reached": 1,
+        "t_wall": 1785608823.213079,
+        "reward": 0.0,
+        "last_tool_call": "reveal",
+        "last_message_head": "[autohalt: [STUCK: this exact call has run 4 times and the game clock has not advanced once. Do something DIFFERENT.]]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      138988
+    ],
+    "sigterm": [
+      138988
+    ],
+    "sigkill": [
+      138988
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e2_encoding_sweep/prime_agent__SPARSE_ONDEMAND__visoff/turns.stalled/20260801T183217Z_pid138988",
+  "quarantined_files": [
+    "0_138988_1785608395.ndjson"
+  ],
+  "dry_run": false
+}

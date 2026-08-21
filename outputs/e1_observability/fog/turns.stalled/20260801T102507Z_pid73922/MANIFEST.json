@@ -1,0 +1,48 @@
+{
+  "ts": "2026-08-01T10:25:07+00:00",
+  "event": "kill",
+  "watchdog_pid": 73789,
+  "turns_dir": "/root/NetHack-hub/outputs/e1_observability/fog/turns",
+  "pid": 73922,
+  "idle_s": 300.0,
+  "timeout_s": 300.0,
+  "seeds": [
+    4
+  ],
+  "likely_hung_seed": 4,
+  "per_seed": {
+    "4": {
+      "idle_s": 300.0,
+      "newest_file": "4_73922_1785574063.ndjson",
+      "last_turn": {
+        "file": "4_73922_1785574063.ndjson",
+        "n_lines": 155,
+        "turn": 155,
+        "dlvl": 3,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "B0",
+        "max_dlvl_reached": 3,
+        "t_wall": 1785579605.9738388,
+        "reward": 331.0,
+        "last_tool_call": "np_look",
+        "last_message_head": "[autohalt: [STUCK: this exact call has run 4 times and the game clock has not advanced once. Do something DIFFERENT.]]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      73922
+    ],
+    "sigterm": [
+      73922
+    ],
+    "sigkill": [],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e1_observability/fog/turns.stalled/20260801T102507Z_pid73922",
+  "quarantined_files": [
+    "4_73922_1785574063.ndjson"
+  ],
+  "dry_run": false
+}

@@ -1,0 +1,50 @@
+{
+  "ts": "2026-08-02T00:30:40+00:00",
+  "event": "kill",
+  "watchdog_pid": 263374,
+  "turns_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code/turns",
+  "pid": 263511,
+  "idle_s": 304.3,
+  "timeout_s": 300.0,
+  "seeds": [
+    4
+  ],
+  "likely_hung_seed": 4,
+  "per_seed": {
+    "4": {
+      "idle_s": 304.3,
+      "newest_file": "4_263511_1785628651.ndjson",
+      "last_turn": {
+        "file": "4_263511_1785628651.ndjson",
+        "n_lines": 85,
+        "turn": 85,
+        "dlvl": 4,
+        "hp": 16,
+        "max_hp": 16,
+        "variant": "BBOX_MIN",
+        "max_dlvl_reached": 5,
+        "t_wall": 1785630326.276535,
+        "reward": 0.0,
+        "last_tool_call": "np_set_avoid_monster_flag",
+        "last_message_head": "[Executing skill 'set_avoid_monster_flag True'. Skill 'set_avoid_monster_flag True' completed: Set avoid_monsters flag to True GAME: You kill the gecko!]"
+      }
+    }
+  },
+  "kill": {
+    "targets": [
+      263511
+    ],
+    "sigterm": [
+      263511
+    ],
+    "sigkill": [
+      263511
+    ],
+    "survivors": []
+  },
+  "quarantine_dir": "/root/NetHack-hub/outputs/e3_scaffold_showdown/BBOX_MIN__claude_code/turns.stalled/20260802T003040Z_pid263511",
+  "quarantined_files": [
+    "4_263511_1785628651.ndjson"
+  ],
+  "dry_run": false
+}
