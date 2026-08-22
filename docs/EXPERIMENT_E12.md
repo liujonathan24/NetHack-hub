@@ -1,17 +1,35 @@
-# E10 — Does past play make future play cheaper?
+# E12 — Does past play make future play cheaper?
 
-**Status:** mechanism built and smoke-tested end to end (2026-08-20). E9 has
-finished. The experiment itself has not been run.
+**Status:** mechanism built and smoke-tested end to end (2026-08-20); rescoped
+and renumbered 2026-08-22. Not yet run.
+
+**Numbering.** This was drafted as "E10" before `exp/e8-planning-guidance`
+shipped its own E10 (the honest-harness re-baseline) and E11 (the descent-gate
+reruns). Renumbered to **E12** to end the collision. Every reference to E10/E11
+below means *those* experiments — see `docs/E10_E11_RESULTS.md`.
 
 **Question.** After the agent has played NetHack *X* times, is playing time
 *X+1* cheaper? Concretely: can an orchestrator read prior traces, edit what the
 player is told (add the right guidance, delete the wrong guidance), and move the
-cost-per-unit-progress curve — on seeds it has never played.
+cost-per-unit-progress curve — on seeds it has never read a trace from.
 
-Everything below is the NPCORE_v3 control config (GLM-5.2, `prime_agent`,
-`full_nle`, `BBOX_MIN`, Val-hum-neu-fem, `np_core,request_map,search`, 200
-turns / 200 skill calls, `record_step_frames=true`), varied by one knob. See
-RUNBOOK / docs/EXPERIMENT_E9.md.
+**Everything right.** E12 runs the *corrected* control: the honest harness (the
+`fd8aa13` / `9b8d5a4` docs-and-schema pass) plus the restored launcher contract
+`tune.reveal_map=1.0` and `auto_dismiss="false"`, which the E9/E10-era scripts
+had silently dropped. That correction roughly doubled measured performance on
+identical seeds, so a cell run on the old string is not the control and its
+numbers are not comparable. Otherwise this is the NPCORE_v3 config: GLM-5.2,
+`prime_agent`, `full_nle`, `BBOX_MIN`, Val-hum-neu-fem,
+`np_core,request_map,search`, 200 turns / 200 skill calls,
+`record_step_frames=true` — varied by exactly one knob, the shared continual-
+harness store.
+
+**Relationship to E10 and E11.** E10 established what the honest harness scores
+on seeds 0–4 (3 reps). E11 asked whether a *handcrafted* intervention — descent
+gates — moves that. E12 asks whether an *automated* one does: the agent reads
+its own past games and edits its own guidance. Evaluating on seeds 0–4 puts all
+three side by side. See §4.1 for why E12 nevertheless runs its own control
+rather than diffing against E10's published table.
 
 ---
 
@@ -281,46 +299,73 @@ agent decides to. Run this after the primary carrier, as a retrieval arm.
 
 ## 4. Protocol
 
-### 4.1 Seeds: train and held-out must be disjoint
+### 4.1 Seeds: reflect on 5–9, evaluate on 0–4
 
-The game seed is fixed, so re-running a seed re-plays the same dungeon;
-improvement there is memorisation, which is a legitimate but *different* result.
-Report both, never merge them.
+The game seed is fixed, so replaying a seed replays the same dungeon; improving
+there is memorisation. Reflection and evaluation therefore use disjoint halves —
+but the assignment is the opposite of the obvious one, on purpose:
 
-- **Train pool:** seeds 0–4 (the existing control seeds).
-- **Held-out pool:** seeds 5–9. Never analysed by the orchestrator. Its traces
-  are not shown to it — enforce by path, the orchestrator is only given
-  `round<r>/train`.
+- **Corpus (reflected on): seeds 5–9.** Never evaluated. The orchestrator only
+  ever reads these traces.
+- **Evaluation: seeds 0–4.** The orchestrator never sees a trace from them.
 
-Held-out seeds have no baseline yet: **round 0 must run a no-harness control on
-seeds 5–9** (≥3 reps, for the null band) before any entry is written.
+Evaluating on 0–4 is what makes E12 legible: those are the seeds E10 ran 3 reps
+of, and the seeds E11a/E11b ran the handcrafted descent gates on. The headline
+becomes *automated self-editing vs. handcrafted intervention on identical
+ground*, not a number floating on its own.
+
+Seeds 5–9 have never been played by anything, so the corpus cell is real work
+that has to happen before any reflection.
+
+**Why E12 still runs its own control.** The harness moved after E10 and E11.
+Their cells finished at 14:39 and 18:11 on 2026-08-21; `c1a0bec` (NetPlay
+telemetry and affordance fixes), `aee5c43` (SKILL.md coordinate frame — a silent
+off-by-one) and `ea8cc15` (melee hints) landed at 22:06, 22:59 and 23:03 that
+same day. The previous harness pass doubled measured performance, so diffing a
+cell run today against E10's published table would confound "reflection helped"
+with "three more fixes landed". E10/E11 are historical context; the claim rests
+on **control vs. eval inside one batch, on one harness commit**.
 
 ### 4.2 Rounds and arms
 
-| Cell | Playbook | Seeds | Purpose |
+| Cell | Store | Seeds | Purpose |
 |---|---|---|---|
-| `R0_train_ctl` | none | 0–4 | trace corpus for v1 (reuse E9 control reps where byte-identical) |
-| `R0_eval_ctl` | none | 5–9, 3 reps | **held-out baseline + null band** |
-| `R<r>_train` | store after round r | 0–4 | next corpus, and the memorisation curve |
-| `R<r>_eval` | store after round r | 5–9 | **the headline curve** |
-| `LEN_ctl` | 6 length-matched non-actionable entries | 5–9 | controls for "any extra prompt text helps" |
-| `FROZEN_v1` | store after round 1, frozen | 5–9 | does *iteration* buy anything past round 1? |
+| `round0/corpus` | off | 5–9 | the games to reflect on |
+| `round0/control_r<n>` | off | 0–4 | **the concurrent baseline** |
+| `round<r>/eval_r<n>` | on | 0–4 | **the headline number** |
+| `round<r>/corpus` | on | 5–9 | next round's corpus; the loop compounds |
+| `LEN_ctl` *(stage 1)* | filler | 0–4 | controls for "any extra prompt text helps" |
+| `FROZEN_v1` *(stage 1)* | round-1 store, frozen | 0–4 | does iteration buy anything past round 1? |
 
 `LEN_ctl` filler = the same entry count and content length of on-topic but
-non-actionable text (e.g. wiki prose), so the render budget is identically full. This is the control that most cheap "the agent learned!" results
-fail.
+non-actionable text, so the render budget is identically full. This is the
+control most cheap "the agent learned!" results fail.
 
-Optional `ANTI` arm (deliberately inverted lessons) if `LEN_ctl` comes out
-ambiguous.
+### 4.3 Cost
 
-### 4.3 Staging
+`CELL_N=5`, so one cell is 5 games at 200 skill calls.
 
-- **Stage 0 (pilot, ~3 cells):** R0_eval_ctl (3 reps) + one round of
-  train→v1→eval. Purpose: does the plumbing work, is the orchestrator's edit
-  non-degenerate, is the effect anywhere near the null band.
-- **Stage 1 (full):** rounds 1–4 with LEN_ctl and FROZEN_v1.
+| | Cells | Games |
+|---|---|---|
+| Round 0 (corpus + 1 control) | 2 | 10 |
+| Each round (eval + next corpus) | 2 | 10 |
+| **Pilot, `ROUNDS=1`** | 4 | **20** |
+| With `CONTROL_REPS=3 EVAL_REPS=3` | 8 | **40** |
 
-Do not commit Stage 1 budget before Stage 0's null band is measured.
+`ROUNDS` defaults to **1**. Reps are off by default (`CONTROL_REPS=1`,
+`EVAL_REPS=1`) — enough to see whether the effect is anywhere near E10's spread,
+not enough to claim a null band of E12's own. Raise both to 3 before any
+published claim.
+
+### 4.4 Staging
+
+- **Stage 0 (pilot, 20 games):** round 0 + one round. Does the orchestrator's
+  edit survive contact with unseen seeds at all, and is the effect anywhere near
+  the E10 spread (median 3.54, mean 5.34, ceiling dl11)?
+- **Stage 1:** more rounds for the curve, plus `LEN_ctl` and `FROZEN_v1`, with
+  reps at 3.
+
+Do not commit Stage 1 budget before Stage 0 lands.
 
 ---
 
@@ -345,7 +390,8 @@ fixed, model sampling varies) — the existing E8/E9 rule. A round-over-round mo
 inside that band is not a result.
 
 **Ratchet (this is what "remove the wrong skills" means operationally):** keep
-`v<r+1>` only if held-out performance does not regress beyond the null band;
+`v<r+1>` only if evaluation performance (seeds 0-4) does not regress beyond the
+null band;
 otherwise restore the previous round's snapshot and require the orchestrator to
 propose a different edit. Every edit is already recorded twice — in the store's
 per-entry version and in `orchestrator_rationale.json` — so the final store is
@@ -391,7 +437,7 @@ auditable entry-by-entry against the round and the evidence that introduced it.
    `launch_cell.sh`, arm-guarded to `prime_agent`.
 3. **Done.** `tools/cli_harness_eval/run_e10.sh` — round loop, daemon reset per
    cell, before/after store snapshots with hashes and a warning when a supposedly
-   read-only store changed, held-out seeds pinned through `ENV_ARGS`.
+   read-only store changed, corpus seeds 5-9 pinned through `ENV_ARGS`.
 4. **Done.** `tools/cli_harness_eval/e10_orchestrate.sh` — one `prime-agent
    --print` per round against a private agent dir whose `harness` links to the
    shared store, with the render budget and the skill-reference contract in its

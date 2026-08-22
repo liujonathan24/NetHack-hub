@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E10 launch: does a shared continual harness make later games cheaper?
+# E12 launch: does a shared continual harness make later games cheaper?
 #
 # Every cell is the NPCORE_v3 control (np_core reduced NetPlay surface, BBOX_MIN,
 # GLM-5.2, Valkyrie, 200 turns / 200 skill calls, 5 seeds) and varies ONE thing:
@@ -7,16 +7,28 @@
 # (`CONTINUAL_HARNESS`) instead of being the per-rollout, always-empty directory
 # it is by default.
 #
-# Round structure, per docs/EXPERIMENT_E10.md:
+# Round structure:
 #
-#   round r:  orchestrate (reads round r-1's TRAIN traces, edits the store)
-#             -> train cell  (seeds 0-4, the corpus for round r+1)
-#             -> eval  cell  (seeds 5-9, HELD OUT, never shown to the orchestrator)
+#   round 0:  corpus cell  (seeds 5-9, store OFF) -- the games to reflect on
+#             control cell (seeds 0-4, store OFF) -- the concurrent baseline
+#   round r:  orchestrate (reads the seeds 5-9 corpus, edits the store)
+#             -> eval   cell (seeds 0-4, store ON)  <- the headline comparison
+#             -> corpus cell (seeds 5-9, store ON)  <- next round's corpus
 #
-# Cells run SEQUENTIALLY with a full prime-agent daemon reset before each (the
-# wedge recipe that held across E8/E9); seeds within a cell run concurrently.
-# The orchestrator runs BETWEEN cells and never while one is live -- the reset
-# is `pkill -9 -f prime-agent`, which would take a resident orchestrator with it.
+# Reflection and evaluation use DISJOINT seeds: the orchestrator only ever sees
+# seeds 5-9, and the headline number is on seeds 0-4, which it has never read a
+# trace from. Evaluating on 0-4 also puts E12 alongside E10's honest re-baseline
+# and E11's handcrafted descent gates, which ran those same seeds.
+#
+# WHY A CONCURRENT CONTROL, when E10 already published a 3-rep baseline on seeds
+# 0-4: the harness moved after E10/E11 ran. E10's cells finished 14:39 and
+# E11's 18:11 on 2026-08-21; c1a0bec (NetPlay telemetry/affordances), aee5c43
+# (SKILL.md coordinate frame -- a silent off-by-one) and ea8cc15 (melee hints)
+# landed at 22:06, 22:59 and 23:03 the same day. The previous harness pass
+# doubled measured performance, so comparing a cell run today against E10's
+# published numbers would confound "reflection helped" with "three more fixes
+# landed". E10/E11 stay as historical context; the comparison that carries the
+# claim is control-vs-eval INSIDE one batch, on one harness commit.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,24 +44,35 @@ export PYTHONPATH="${REPO}/harnesses/nethack-prime-agent${PYTHONPATH:+:${PYTHONP
 export ENG="${ENG:-/root/NetHack-engine}"
 export EVAL_BIN="${EVAL_BIN:-/root/NetHack-hub/.venv-cli-eval/bin/eval}"
 LAUNCH="$REPO/tools/cli_harness_eval/launch_cell.sh"
-ORCH="$REPO/tools/cli_harness_eval/e10_orchestrate.sh"
-OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e10}"
-ROUNDS="${ROUNDS:-3}"
+ORCH="$REPO/tools/cli_harness_eval/e12_orchestrate.sh"
+OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e12}"
+# Default 1, not 3: one round is the pilot (20 games). Raise it to extend the
+# learning curve -- each extra round is another 10 games.
+ROUNDS="${ROUNDS:-1}"
 
 # The shared store. MUST be under the harness's install_dir: the bwrap sandbox
 # binds that path and little else, so a store outside it is invisible to the
 # agent and the harness refuses to launch (see PrimeAgentHarnessConfig.
 # continual_harness_dir).
-CH="${CH:-/tmp/vf-prime-agent/continual-harness/e10}"
+CH="${CH:-/tmp/vf-prime-agent/continual-harness/e12}"
 
 # The held-out half is selected by pinning seeds through ENV_ARGS, which wins
 # over the TOML's `explicit_seeds` for ROW SELECTION (nethack_v1.py:817-847) --
 # `--num_tasks N` alone only ever takes the FIRST N of the pinned list, so it
 # cannot express "seeds 5-9" and an eval cell would silently re-run the training
 # seeds instead.
-CORE='{"skill_set":"np_core,request_map,search"}'
-HELD='{"skill_set":"np_core,request_map,search","explicit_seeds":[5,6,7,8,9]}'
+# EVERYTHING RIGHT. This is the corrected NPCORE_v3 control -- the "honest
+# harness" contract of docs/E10_E11_RESULTS.md, not the E7/E9-era string. The
+# E9/E10-era launchers had silently DROPPED `tune.reveal_map=1.0` and
+# `auto_dismiss="false"`, so cells that claimed to replicate the control ran
+# fog'd and auto-dismissed; restoring them (plus the harness honesty pass)
+# roughly DOUBLED measured performance on identical seeds. E12 must run the
+# corrected contract or its control is not the control, and its baseline
+# (E10's, reused below) would not be comparable to its own cells.
+CORE='{"skill_set":"np_core,request_map,search","auto_dismiss":"false","tune":{"reveal_map":1.0}}'
+HELD='{"skill_set":"np_core,request_map,search","auto_dismiss":"false","tune":{"reveal_map":1.0},"explicit_seeds":[5,6,7,8,9]}'
 CELL_N=5
+
 cd "$REPO"
 
 reset_daemon() {
@@ -60,8 +83,8 @@ reset_daemon() {
   pkill -9 -f 'provider intercept' 2>/dev/null || true
   rm -rf /tmp/prime-agent-0 2>/dev/null || true
   local s; s=$(date +%s)
-  [ -d /root/.prime/agent/daemon-workers ] && mv /root/.prime/agent/daemon-workers "/root/.prime/agent/daemon-workers.bak-e10-$s" 2>/dev/null || true
-  [ -d /root/.prime/agent/session-leases ] && mv /root/.prime/agent/session-leases "/root/.prime/agent/session-leases.bak-e10-$s" 2>/dev/null || true
+  [ -d /root/.prime/agent/daemon-workers ] && mv /root/.prime/agent/daemon-workers "/root/.prime/agent/daemon-workers.bak-e12-$s" 2>/dev/null || true
+  [ -d /root/.prime/agent/session-leases ] && mv /root/.prime/agent/session-leases "/root/.prime/agent/session-leases.bak-e12-$s" 2>/dev/null || true
   sleep 3
 }
 
@@ -107,12 +130,15 @@ run_cell() {  # <outdir> <env_args> <shared: 0|1>
 
 mkdir -p "$CH"
 
-# --- round 0: the baselines, with the store deliberately NOT shared ----------
-# Both halves need a no-harness baseline before anything is written: the eval
-# seeds have never been measured, and the train cell is the corpus round 1 reads.
+# --- round 0: the corpus to reflect on, and the concurrent control -----------
+# Seeds 5-9 have never been played by anything, so the corpus must be run. The
+# 0-4 control is what the eval cells are actually compared against (see the
+# harness-drift note above).
 if [ "${SKIP_ROUND0:-}" != "1" ]; then
-  run_cell "$OUT_ROOT/round0/train__prime_agent" "$CORE" 0
-  run_cell "$OUT_ROOT/round0/eval__prime_agent"  "$HELD" 0
+  run_cell "$OUT_ROOT/round0/corpus__prime_agent"  "$HELD" 0
+  for rep in $(seq 1 "${CONTROL_REPS:-1}"); do
+    run_cell "$OUT_ROOT/round0/control_r${rep}__prime_agent" "$CORE" 0
+  done
 fi
 
 # --- rounds 1..N -------------------------------------------------------------
@@ -120,10 +146,17 @@ for r in $(seq 1 "$ROUNDS"); do
   prev=$((r - 1))
   echo "[round] $(date -u +%H:%M:%S) === round $r ==="
   reset_daemon   # the orchestrator is a prime-agent process too; start it clean
-  "$ORCH" "$OUT_ROOT/round$prev/train__prime_agent" "$CH" "$OUT_ROOT/round$r" \
+  # The corpus is ALWAYS a seeds 5-9 cell. Nothing from seeds 0-4 is ever passed
+  # to the orchestrator -- that is the whole basis of the headline number.
+  CORPUS="$OUT_ROOT/round$prev/corpus__prime_agent"
+  echo "[round] corpus: $CORPUS"
+  "$ORCH" "$CORPUS" "$CH" "$OUT_ROOT/round$r" \
     || { echo "[FAIL ] orchestrator round $r rc=$?" >&2; }
-  run_cell "$OUT_ROOT/round$r/train__prime_agent" "$CORE" 1
-  run_cell "$OUT_ROOT/round$r/eval__prime_agent"  "$HELD" 1
+  for rep in $(seq 1 "${EVAL_REPS:-1}"); do
+    run_cell "$OUT_ROOT/round$r/eval_r${rep}__prime_agent" "$CORE" 1
+  done
+  # Next round's corpus, played WITH the store so the loop compounds.
+  run_cell "$OUT_ROOT/round$r/corpus__prime_agent" "$HELD" 1
 done
 
-echo "[all  ] $(date -u +%H:%M:%S) E10 batch finished; store at $CH"
+echo "[all  ] $(date -u +%H:%M:%S) E12 batch finished; store at $CH"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# E10 orchestrator: one Prime Agent process, run BETWEEN cells, that reads the
+# E12 orchestrator: one Prime Agent process, run BETWEEN cells, that reads the
 # previous round's TRAINING traces and edits the shared continual-harness store
 # the next round's players will boot with.
 #
-#   e10_orchestrate.sh <train_dir> <ch_dir> <round_out>
+#   e12_orchestrate.sh <train_dir> <ch_dir> <round_out>
 #
 # Why a fresh `--print` process per round rather than a resident session:
 #   * every cell is preceded by `pkill -9 -f prime-agent` (the daemon wedge
@@ -16,7 +16,7 @@
 # thing it may write.
 set -uo pipefail
 
-TRAIN_DIR="${1:?usage: e10_orchestrate.sh <train_dir> <ch_dir> <round_out>}"
+TRAIN_DIR="${1:?usage: e12_orchestrate.sh <train_dir> <ch_dir> <round_out>}"
 CH="${2:?}"
 ROUND_OUT="${3:?}"
 MODEL="${ORCH_MODEL:-z-ai/glm-5.2}"
@@ -27,7 +27,7 @@ MODEL="${ORCH_MODEL:-z-ai/glm-5.2}"
 # outside the agent dir, so the private ORCH_DIR does not lose them.
 PROVIDER="${ORCH_PROVIDER:-prime-inference}"
 
-[ -d "$TRAIN_DIR" ] || { echo "e10_orchestrate: no such train dir: $TRAIN_DIR" >&2; exit 2; }
+[ -d "$TRAIN_DIR" ] || { echo "e12_orchestrate: no such train dir: $TRAIN_DIR" >&2; exit 2; }
 mkdir -p "$ROUND_OUT" "$CH"
 
 # A private config directory, so the orchestrator never edits the operator's
@@ -47,7 +47,7 @@ ln -sfn "$CH" "$ORCH_DIR/harness"
 # `refine.run(...)` as a command the first time this ran. Keep the prompt free
 # of backticks and of $ followed by anything that is not one of those two vars.
 read -r -d '' PROMPT <<PROMPT_EOF
-You are the E10 orchestrator for a NetHack agent experiment. You are not playing
+You are the E12 orchestrator for a NetHack agent experiment. You are not playing
 the game. Your job is to read how previous games went and to leave better notes
 for the next ones.
 
@@ -117,7 +117,7 @@ esac
 case "$prompt_ok" in
   1) : ;;
   *)
-    echo "e10_orchestrate: PROMPT did not assemble (${#PROMPT} chars) -- refusing" >&2
+    echo "e12_orchestrate: PROMPT did not assemble (${#PROMPT} chars) -- refusing" >&2
     echo "  to run a round on a truncated prompt." >&2
     exit 3
     ;;
