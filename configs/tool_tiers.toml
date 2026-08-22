@@ -1,0 +1,171 @@
+# tool_tiers.toml -- what the agent is allowed to reach for, as versioned config.
+#
+# Three tiers, never pooled. A cell declares a TIER STACK ("base", "base+human",
+# "base+human+continual") and every run pins this file's sha256 and the code
+# commit into its own resolved config.toml, so a result can be replayed from the
+# pin alone.
+#
+# The rule that makes this publishable: a tool or fix is only "in" a tier when it
+# is named HERE. Adding to [human] requires a commit AND a measured cell -- a fix
+# that has not been measured against [base] is not a tier member, it is a patch.
+#
+# ---------------------------------------------------------------------------
+# WHY EACH TIER IS SEPARATE
+#   base       what the model gets with no human help beyond the honest harness
+#   human      what WE figured out and hand-engineered for it
+#   continual  what the agent figured out for itself, and rewrites over time
+# The whole question is whether `continual` rediscovers `human`, beats it, or
+# adds nothing. Pooling the tiers destroys that comparison, so the runner
+# refuses to.
+# ---------------------------------------------------------------------------
+
+schema = 1
+# Bump on every change to a tier's membership. The runner records both this and
+# the file hash; the hash catches edits that forget to bump.
+version = "1.0.0"
+
+# ===========================================================================
+[base]
+# ===========================================================================
+# FROZEN. This is Experiment 10 and nothing more: the np_core surface on the
+# honest harness. It is the denominator of every claim in this series, so it
+# does not change -- if it must, that is a new baseline experiment with its own
+# re-measured reference numbers, not an edit here.
+description = "E10 baseline: np_core (8 np_* skills + request_map + search) on the honest harness"
+frozen = true
+
+# The exact surface. 10 tools.
+skill_set = "np_core,request_map,search"
+
+# The launcher contract the E9/E10-era scripts had silently DROPPED, which made
+# cells claiming to be the control run fog'd and auto-dismissed. Restoring it
+# (0458275) plus the honesty pass roughly doubled measured performance, so these
+# two keys are part of the baseline's identity, not incidental settings.
+[base.env_args]
+auto_dismiss = "false"
+
+[base.env_args.tune]
+reveal_map = 1.0
+
+[base.cell]
+variant = "BBOX_MIN"
+model = "z-ai/glm-5.2"
+max_calls = 200
+seeds = [0, 1, 2, 3, 4]
+character = "Val-hum-neu-fem"
+task_spec = "full_nle"
+
+[base.code_pin]
+# The harness state this baseline was measured on. A cell claiming [base] on a
+# tree that does not contain these is not running the baseline.
+branch = "exp/e8-planning-guidance"
+honesty_pass = ["fd8aa13", "9b8d5a4"]
+launcher_restore = "0458275"
+
+[base.reference]
+# outputs/e10_baseline/ -- 3 reps x 5 seeds. Quoted here so a drifted rerun is
+# obvious without opening the results doc.
+runs = "outputs/e10_baseline/NPCORE_v3H_r{1,2,3}__prime_agent"
+median_balrog = 3.54
+mean_balrog = 5.34
+died = "14/15"
+ceiling_dlvl = 11
+
+# ===========================================================================
+[human]
+# ===========================================================================
+# Hand-engineered fixes layered on [base]. Every member is something a PERSON
+# diagnosed and wrote. This tier is the bar [continual] has to clear.
+description = "Human-engineered fixes: descent gates (E11) + NetPlay telemetry/affordances (E12, PR #29)"
+frozen = false
+
+[[human.members]]
+id = "descent_gate"
+experiment = "E11"
+kind = "flag"                      # already config-gated, off by default
+env_args = { descent_gate = "norm" }
+values = ["off", "norm", "directive", "enforce"]
+measured = true
+cell = "outputs/e11_gates/E11A_NORM__prime_agent, outputs/e11_gates/E11B_ENFORCE__prime_agent"
+note = """E11a median 3.54 / mean 9.78 (project-record dl15); E11b median 2.65 /
+mean 6.13. Neither moved the median outcome; enforce changed the LEVELING
+policy (XL/Dlvl 0.47 -> 0.74). Default off, so [base] is byte-identical with
+this code present."""
+
+[[human.members]]
+id = "netplay_telemetry"
+experiment = "E12"
+kind = "code"                      # NOT yet flag-gated -- see gap below
+commits = ["c1a0bec", "aee5c43", "ea8cc15"]
+pr = 29
+measured = false
+note = """np_move_to progress accounting + [why: ...] clause, np_explore_level
+no longer interrupting on item/pet trivia, np_rest delivering its full count,
+np_melee_attack reporting where the target went, RawKeyPress gaining '-' (so
+engraving Elbereth is possible at all), SKILL.md coordinate frame. Tool schemas
+untouched; prose feedback only."""
+
+[human.gap]
+# STATED, NOT HIDDEN. `netplay_telemetry` is unconditional code: it applies
+# whenever the tree contains it, so today "[base]" on this tree is really
+# base+netplay_telemetry. Until it is behind a flag, the only honest way to run
+# a true [base] cell is to check out the code_pin above.
+#
+# Closing it means gating c1a0bec/aee5c43/ea8cc15 behind one env knob
+# (`netplay_telemetry`, default off) across:
+#   environments/nethack/nethack_harness/tools/netplay_true.py
+#   environments/nethack/vendor/netplay/nethack_agent/skills.py
+#   environments/nethack/vendor/netplay/nethack_utils/nle_wrapper.py
+# and re-measuring one [base] cell to confirm it lands on the reference numbers.
+unflagged = ["netplay_telemetry"]
+blocks_tier_stack = ["base"]
+
+# ===========================================================================
+[continual]
+# ===========================================================================
+# Whatever the continual harness generates for itself. Its own section because
+# it MUTATES: the store is rewritten between rounds, so unlike the other two
+# tiers its membership is not knowable in advance -- only its mechanism and its
+# bounds are. Every run snapshots the store, so any given cell is still exactly
+# reproducible.
+description = "Agent-generated: Prime Agent continual-harness entries, rewritten between rounds"
+frozen = false
+mutable = true
+
+[continual.mechanism]
+# Shared global continual-harness store, symlinked into each rollout's agent dir.
+# See docs/EXPERIMENT_E13.md.
+harness_continual_harness_dir = "/tmp/vf-prime-agent/continual-harness/e13"
+harness_continual_harness_writable = false   # single-writer: orchestrator only
+
+[continual.bounds]
+# Not our policy -- Prime Agent's renderer. Entries past these are invisible to
+# the player, so they bound how much can ever be learned through this channel.
+max_entries_per_kind = 6
+max_content_chars = 180
+kinds = ["memory", "skill", "prompt_note", "subagent"]
+
+[continual.scaffold]
+# Session-state persistence is a SCAFFOLD change, so it belongs to this arm's
+# definition rather than to [base] or [human]: relaxing --no-session (and
+# persisting memory/) gives the agent a place to keep things between turns, and
+# switching it on changes what "the same baseline" means. Off unless a cell
+# declares it.
+no_session = true          # true = keep --no-session (current baseline behaviour)
+persist_memory_dir = false
+
+[continual.provenance]
+# Written into every [continual] cell's output alongside the config pin.
+snapshot_store_before = true
+snapshot_store_after = true
+orchestrator_rationale = "orchestrator_rationale.json"
+
+# ===========================================================================
+[stacks]
+# ===========================================================================
+# The only tier combinations a cell may declare. `continual` is always compared
+# against BOTH of the others: against base for "gain over the raw harness", and
+# against base+human for "does it rediscover or beat hand engineering".
+allowed = ["base", "base+human", "base+human+continual"]
+never_pool = true
+required_comparisons = { "base+human+continual" = ["base", "base+human"] }

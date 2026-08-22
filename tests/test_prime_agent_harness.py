@@ -593,11 +593,11 @@ def test_strip_fails_loudly_if_the_rule_text_drifts():
         _strip_no_batch_rule(b"# SKILL\nsome other content\n")
 
 
-# -- E12: the shared continual-harness store ---------------------------------
+# -- E13: the shared continual-harness store ---------------------------------
 #
 # Prime Agent's continual harness (prompt notes, memories, reusable skill
 # descriptions, sub-agent specs) is rendered into the system prompt of every new
-# session, which makes it the cross-episode learning channel E12 is built on.
+# session, which makes it the cross-episode learning channel E13 is built on.
 # Under this arm it is inert by default: `--no-session` kills the local store,
 # and the global one is `<agent_dir>/harness` with `agent_dir` per-rollout. The
 # tests below pin the one link that changes that, and the two ways it could
@@ -641,7 +641,7 @@ def _launch_sandboxed(**config_overrides):
 
 def test_no_continual_harness_dir_means_no_symlink_and_no_extra_command():
     """The default must leave every existing arm byte-identical: E7-E9 cells and
-    the E12 control differ by nothing at all, not by a stray `mkdir`."""
+    the E13 control differ by nothing at all, not by a stray `mkdir`."""
     runtime = _launch()
     assert not any("harness" in " ".join(argv) for argv, _ in runtime.commands), (
         "an unset continual_harness_dir must not touch the filesystem"

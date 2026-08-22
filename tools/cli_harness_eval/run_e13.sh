@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E12 launch: does a shared continual harness make later games cheaper?
+# E13 launch: does a shared continual harness make later games cheaper?
 #
 # Every cell is the NPCORE_v3 control (np_core reduced NetPlay surface, BBOX_MIN,
 # GLM-5.2, Valkyrie, 200 turns / 200 skill calls, 5 seeds) and varies ONE thing:
@@ -17,7 +17,7 @@
 #
 # Reflection and evaluation use DISJOINT seeds: the orchestrator only ever sees
 # seeds 5-9, and the headline number is on seeds 0-4, which it has never read a
-# trace from. Evaluating on 0-4 also puts E12 alongside E10's honest re-baseline
+# trace from. Evaluating on 0-4 also puts E13 alongside E10's honest re-baseline
 # and E11's handcrafted descent gates, which ran those same seeds.
 #
 # WHY A CONCURRENT CONTROL, when E10 already published a 3-rep baseline on seeds
@@ -44,8 +44,8 @@ export PYTHONPATH="${REPO}/harnesses/nethack-prime-agent${PYTHONPATH:+:${PYTHONP
 export ENG="${ENG:-/root/NetHack-engine}"
 export EVAL_BIN="${EVAL_BIN:-/root/NetHack-hub/.venv-cli-eval/bin/eval}"
 LAUNCH="$REPO/tools/cli_harness_eval/launch_cell.sh"
-ORCH="$REPO/tools/cli_harness_eval/e12_orchestrate.sh"
-OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e12}"
+ORCH="$REPO/tools/cli_harness_eval/e13_orchestrate.sh"
+OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e13}"
 # Default 1, not 3: one round is the pilot (20 games). Raise it to extend the
 # learning curve -- each extra round is another 10 games.
 ROUNDS="${ROUNDS:-1}"
@@ -54,23 +54,54 @@ ROUNDS="${ROUNDS:-1}"
 # binds that path and little else, so a store outside it is invisible to the
 # agent and the harness refuses to launch (see PrimeAgentHarnessConfig.
 # continual_harness_dir).
-CH="${CH:-/tmp/vf-prime-agent/continual-harness/e12}"
+CH="${CH:-/tmp/vf-prime-agent/continual-harness/e13}"
 
 # The held-out half is selected by pinning seeds through ENV_ARGS, which wins
 # over the TOML's `explicit_seeds` for ROW SELECTION (nethack_v1.py:817-847) --
 # `--num_tasks N` alone only ever takes the FIRST N of the pinned list, so it
 # cannot express "seeds 5-9" and an eval cell would silently re-run the training
 # seeds instead.
-# EVERYTHING RIGHT. This is the corrected NPCORE_v3 control -- the "honest
-# harness" contract of docs/E10_E11_RESULTS.md, not the E7/E9-era string. The
-# E9/E10-era launchers had silently DROPPED `tune.reveal_map=1.0` and
-# `auto_dismiss="false"`, so cells that claimed to replicate the control ran
-# fog'd and auto-dismissed; restoring them (plus the harness honesty pass)
-# roughly DOUBLED measured performance on identical seeds. E12 must run the
-# corrected contract or its control is not the control, and its baseline
-# (E10's, reused below) would not be comparable to its own cells.
-CORE='{"skill_set":"np_core,request_map,search","auto_dismiss":"false","tune":{"reveal_map":1.0}}'
-HELD='{"skill_set":"np_core,request_map,search","auto_dismiss":"false","tune":{"reveal_map":1.0},"explicit_seeds":[5,6,7,8,9]}'
+# TIERS, NOT STRINGS. What the agent may reach for is declared in
+# configs/tool_tiers.toml and resolved by tiers.py, which also folds the
+# provenance pin (tier-file hash + version + code commit) into env_args -- so it
+# lands in each cell's own resolved config.toml and the run replays from that
+# file alone. Hand-editing an ENV_ARGS string here is exactly the drift the tier
+# file exists to stop.
+#
+# Arms are never pooled: the eval cells run one stack, the control cells run
+# another, and each is its own output directory.
+PY_BIN="$(dirname "${EVAL_BIN}")/python"
+TIERS="$PY_BIN $REPO/tools/cli_harness_eval/tiers.py"
+
+EVAL_STACK="${EVAL_STACK:-base+human+continual}"   # the continual arm
+CTL_STACK="${CTL_STACK:-base+human}"               # what it must beat
+CORPUS_STACK="${CORPUS_STACK:-base+human}"         # games to reflect on
+
+# Refuse a stack this tree cannot honestly produce (see [human.gap]: the PR #29
+# fixes are still unconditional code, so a true `base` cell needs the pinned
+# checkout, not a config flag). TIERS_ALLOW_BLOCKED=1 overrides, loudly.
+for st in "$EVAL_STACK" "$CTL_STACK" "$CORPUS_STACK"; do
+  if ! $TIERS check "$st" 2>/tmp/tiercheck.$$; then
+    cat /tmp/tiercheck.$$ >&2
+    if [ "${TIERS_ALLOW_BLOCKED:-}" != "1" ]; then
+      echo "run_e13: refusing to launch a stack the tier file says this tree" >&2
+      echo "  cannot produce. Set TIERS_ALLOW_BLOCKED=1 to override anyway." >&2
+      rm -f /tmp/tiercheck.$$; exit 5
+    fi
+    echo "run_e13: TIERS_ALLOW_BLOCKED=1 -- launching a stack with known gaps." >&2
+  fi
+  rm -f /tmp/tiercheck.$$
+done
+
+# The held-out corpus half is selected by pinning seeds through ENV_ARGS, which
+# wins over the TOML's `explicit_seeds` for ROW SELECTION (nethack_v1.py:817-847).
+TIER_HASH="$($PY_BIN -c 'import sys;sys.path.insert(0,"'"$REPO"'/tools/cli_harness_eval");import tiers;print(tiers.tier_hash())')"
+CORE="$($TIERS env-args "$CTL_STACK")"
+EVAL_ARGS="$($TIERS env-args "$EVAL_STACK")"
+HELD="$($PY_BIN -c '
+import json,sys
+d=json.loads(sys.argv[1]); d["explicit_seeds"]=[5,6,7,8,9]; print(json.dumps(d))
+' "$($TIERS env-args "$CORPUS_STACK")")"
 CELL_N=5
 
 cd "$REPO"
@@ -83,8 +114,8 @@ reset_daemon() {
   pkill -9 -f 'provider intercept' 2>/dev/null || true
   rm -rf /tmp/prime-agent-0 2>/dev/null || true
   local s; s=$(date +%s)
-  [ -d /root/.prime/agent/daemon-workers ] && mv /root/.prime/agent/daemon-workers "/root/.prime/agent/daemon-workers.bak-e12-$s" 2>/dev/null || true
-  [ -d /root/.prime/agent/session-leases ] && mv /root/.prime/agent/session-leases "/root/.prime/agent/session-leases.bak-e12-$s" 2>/dev/null || true
+  [ -d /root/.prime/agent/daemon-workers ] && mv /root/.prime/agent/daemon-workers "/root/.prime/agent/daemon-workers.bak-e13-$s" 2>/dev/null || true
+  [ -d /root/.prime/agent/session-leases ] && mv /root/.prime/agent/session-leases "/root/.prime/agent/session-leases.bak-e13-$s" 2>/dev/null || true
   sleep 3
 }
 
@@ -105,28 +136,43 @@ snapshot() {  # <label> <destdir>
     > "$dest/harness_store.$label.sha256" 2>/dev/null || true
 }
 
-run_cell() {  # <outdir> <env_args> <shared: 0|1>
-  local out="$1" env_args="$2" shared="$3"
+run_cell() {  # <outdir> <env_args> <stack>
+  # The stack decides whether the shared store is mounted -- `tiers.py flags`
+  # emits CONTINUAL_HARNESS only for a stack that includes [continual]. Passing
+  # a 0/1 by hand is how an arm silently becomes a different arm.
+  local out="$1" env_args="$2" stack="$3"
   local n="$CELL_N"
-  echo "[cell ] $(date -u +%H:%M:%S) -> $out (shared_harness=$shared n=$n)"
+  echo "[cell ] $(date -u +%H:%M:%S) -> $out (stack=$stack n=$n)"
   reset_daemon
   mkdir -p "$out"
   snapshot before "$out"
-  if [ "$shared" = "1" ]; then
-    CONTINUAL_HARNESS="$CH" ENV_ARGS="$env_args" VARIANT=BBOX_MIN "$LAUNCH" prime_agent "$out" 200 "$n" \
-      && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
-      || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
-  else
-    ENV_ARGS="$env_args" VARIANT=BBOX_MIN "$LAUNCH" prime_agent "$out" 200 "$n" \
-      && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
-      || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
-  fi
+  # shellcheck disable=SC2046
+  env $($TIERS flags "$stack") ENV_ARGS="$env_args" VARIANT=BBOX_MIN \
+    "$LAUNCH" prime_agent "$out" 200 "$n" \
+    && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
+    || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
   snapshot after "$out"
+  # Read back what the cell ACTUALLY resolved to. A cell whose config does not
+  # match the stack it declared is not evidence, whatever it scored.
+  "$PY_BIN" "$REPO/tools/cli_harness_eval/preflight_cell.py" "$out" \
+    --stack "$stack" --tier-hash "$TIER_HASH" \
+    || echo "[WARN ] $(date -u +%H:%M:%S) $out did not read back clean -- see above" >&2
   if ! cmp -s "$out/harness_store.before.sha256" "$out/harness_store.after.sha256"; then
     echo "[WARN ] $(date -u +%H:%M:%S) the shared store CHANGED during $out --" \
          "expected only when CONTINUAL_HARNESS_WRITABLE=1. Diff the snapshots." >&2
   fi
 }
+
+# MANDATORY PROTOCOL. No paid cell launches until a mock play on the same stack
+# has read back clean. SKIP_PREFLIGHT=1 exists for a rerun in the same session
+# on an unchanged tree -- it is not for "I'm fairly sure it's fine".
+if [ "${SKIP_PREFLIGHT:-}" != "1" ]; then
+  for st in $(printf '%s\n' "$CTL_STACK" "$EVAL_STACK" "$CORPUS_STACK" | sort -u); do
+    echo "[pre  ] $(date -u +%H:%M:%S) preflight $st"
+    "$REPO/tools/cli_harness_eval/preflight_cell.sh" "$st" \
+      || { echo "run_e13: preflight failed for $st -- batch not launched." >&2; exit 7; }
+  done
+fi
 
 mkdir -p "$CH"
 
@@ -135,9 +181,9 @@ mkdir -p "$CH"
 # 0-4 control is what the eval cells are actually compared against (see the
 # harness-drift note above).
 if [ "${SKIP_ROUND0:-}" != "1" ]; then
-  run_cell "$OUT_ROOT/round0/corpus__prime_agent"  "$HELD" 0
+  run_cell "$OUT_ROOT/round0/corpus__prime_agent"  "$HELD" "$CORPUS_STACK"
   for rep in $(seq 1 "${CONTROL_REPS:-1}"); do
-    run_cell "$OUT_ROOT/round0/control_r${rep}__prime_agent" "$CORE" 0
+    run_cell "$OUT_ROOT/round0/control_r${rep}__prime_agent" "$CORE" "$CTL_STACK"
   done
 fi
 
@@ -153,10 +199,10 @@ for r in $(seq 1 "$ROUNDS"); do
   "$ORCH" "$CORPUS" "$CH" "$OUT_ROOT/round$r" \
     || { echo "[FAIL ] orchestrator round $r rc=$?" >&2; }
   for rep in $(seq 1 "${EVAL_REPS:-1}"); do
-    run_cell "$OUT_ROOT/round$r/eval_r${rep}__prime_agent" "$CORE" 1
+    run_cell "$OUT_ROOT/round$r/eval_r${rep}__prime_agent" "$EVAL_ARGS" "$EVAL_STACK"
   done
   # Next round's corpus, played WITH the store so the loop compounds.
-  run_cell "$OUT_ROOT/round$r/corpus__prime_agent" "$HELD" 1
+  run_cell "$OUT_ROOT/round$r/corpus__prime_agent" "$HELD" "$EVAL_STACK"
 done
 
-echo "[all  ] $(date -u +%H:%M:%S) E12 batch finished; store at $CH"
+echo "[all  ] $(date -u +%H:%M:%S) E13 batch finished; store at $CH"

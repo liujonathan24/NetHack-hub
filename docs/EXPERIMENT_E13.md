@@ -1,19 +1,20 @@
-# E12 — Does past play make future play cheaper?
+# E13 — Does past play make future play cheaper?
 
 **Status:** mechanism built and smoke-tested end to end (2026-08-20); rescoped
 and renumbered 2026-08-22. Not yet run.
 
-**Numbering.** This was drafted as "E10" before `exp/e8-planning-guidance`
-shipped its own E10 (the honest-harness re-baseline) and E11 (the descent-gate
-reruns). Renumbered to **E12** to end the collision. Every reference to E10/E11
-below means *those* experiments — see `docs/E10_E11_RESULTS.md`.
+**Numbering.** Drafted as "E10", renamed once to E12, and now **E13** — the
+series numbers were assigned to work that landed while this was in review:
+**E10** = the honest-harness re-baseline, **E11** = descent gates, **E12** = the
+NetPlay telemetry/tool fixes (PR #29). E13 is the continual-harness arm. Every
+reference to E10/E11/E12 below means *those*.
 
 **Question.** After the agent has played NetHack *X* times, is playing time
 *X+1* cheaper? Concretely: can an orchestrator read prior traces, edit what the
 player is told (add the right guidance, delete the wrong guidance), and move the
 cost-per-unit-progress curve — on seeds it has never read a trace from.
 
-**Everything right.** E12 runs the *corrected* control: the honest harness (the
+**Everything right.** E13 runs the *corrected* control: the honest harness (the
 `fd8aa13` / `9b8d5a4` docs-and-schema pass) plus the restored launcher contract
 `tune.reveal_map=1.0` and `auto_dismiss="false"`, which the E9/E10-era scripts
 had silently dropped. That correction roughly doubled measured performance on
@@ -26,10 +27,69 @@ harness store.
 
 **Relationship to E10 and E11.** E10 established what the honest harness scores
 on seeds 0–4 (3 reps). E11 asked whether a *handcrafted* intervention — descent
-gates — moves that. E12 asks whether an *automated* one does: the agent reads
+gates — moves that. E13 asks whether an *automated* one does: the agent reads
 its own past games and edits its own guidance. Evaluating on seeds 0–4 puts all
-three side by side. See §4.1 for why E12 nevertheless runs its own control
+three side by side. See §4.1 for why E13 nevertheless runs its own control
 rather than diffing against E10's published table.
+
+## 0. Tiers, and the protocol before any paid cell
+
+Tool inclusion is **config, not a branch checkout**:
+`configs/tool_tiers.toml`, resolved by `tools/cli_harness_eval/tiers.py`.
+
+| Tier | What it is | How it applies |
+|---|---|---|
+| `[base]` | **frozen** E10: np_core (8 `np_*` + `request_map` + `search`) on the honest harness, `auto_dismiss=false`, `tune.reveal_map=1.0`, BBOX_MIN, GLM-5.2, 200 calls, seeds 0–4 | env_args |
+| `[human]` | hand-engineered: descent gates (E11) + NetPlay telemetry/affordances (E12, PR #29) | flags where gated; code otherwise |
+| `[continual]` | what the agent generates for itself, rewritten every round | shared store + arm scaffold |
+
+Only three stacks are legal — `base`, `base+human`, `base+human+continual` —
+and the resolver refuses anything else rather than composing it. The continual
+arm is **always** reported against both of the others: against `base` for gain
+over the raw harness, against `base+human` for whether it rediscovers or beats
+hand engineering. Arms are never pooled; each is its own output directory.
+
+`[base]` is frozen. Changing it is a new baseline experiment with re-measured
+reference numbers, not an edit. Adding to `[human]` needs a commit **and** a
+measured cell — `tiers.py check` fails a stack containing a member marked
+`measured = false`, because an unmeasured fix is a patch, not a tier member.
+
+Session-state persistence (relaxing `--no-session`, persisting `memory/`) is a
+scaffold change, so it lives in `[continual.scaffold]` — inside the arm that
+opts into it, never in `base` or `human`.
+
+**Provenance.** Every run pins `tier_stack`, `tier_version`, `tier_hash` and
+`tier_commit` through `env_args`, which `load_environment` absorbs via
+`**kwargs` and the eval CLI writes back out — so they land literally in that
+cell's own `config.toml` and it replays from that file alone. A dirty tree is
+recorded as `<sha>-dirty` and fails read-back, because it is not a pin.
+
+**Mandatory protocol.** `preflight_cell.sh <stack>` resolves the config,
+mock-plays one seed on a short budget, then reads back the resolved
+`config.toml` and the first turn record — asserting the contract keys, the exact
+10-tool surface, full vision, and the pin. `run_e13.sh` runs it for every stack
+in the batch and **refuses to launch** on failure (`SKIP_PREFLIGHT=1` overrides,
+for a rerun on an unchanged tree). Every expensive mistake in this series has
+been a config that claimed one thing and ran another; none were visible in the
+launch command, all were visible in these two artifacts.
+
+### 0.1 One gap, stated
+
+`[human]`'s `netplay_telemetry` member (PR #29 — `c1a0bec`, `aee5c43`,
+`ea8cc15`) is **unconditional code**: it applies whenever the tree contains it.
+So on today's tree a cell declaring `base` is really running
+`base+netplay_telemetry`, and `tiers.py check base` says so and blocks. Until it
+is gated, a true `base` cell needs the pinned checkout
+(`exp/e8-planning-guidance` at `fd8aa13`/`9b8d5a4`, launcher `0458275`).
+
+Closing it means one env knob (`netplay_telemetry`, default off) across
+`nethack_harness/tools/netplay_true.py`,
+`vendor/netplay/nethack_agent/skills.py` and
+`vendor/netplay/nethack_utils/nle_wrapper.py`, plus one re-measured `base` cell
+landing on median 3.54 / mean 5.34. That is the prerequisite for a publishable
+three-tier comparison, and it is not done.
+
+---
 
 ---
 
@@ -309,7 +369,7 @@ but the assignment is the opposite of the obvious one, on purpose:
   ever reads these traces.
 - **Evaluation: seeds 0–4.** The orchestrator never sees a trace from them.
 
-Evaluating on 0–4 is what makes E12 legible: those are the seeds E10 ran 3 reps
+Evaluating on 0–4 is what makes E13 legible: those are the seeds E10 ran 3 reps
 of, and the seeds E11a/E11b ran the handcrafted descent gates on. The headline
 becomes *automated self-editing vs. handcrafted intervention on identical
 ground*, not a number floating on its own.
@@ -317,7 +377,7 @@ ground*, not a number floating on its own.
 Seeds 5–9 have never been played by anything, so the corpus cell is real work
 that has to happen before any reflection.
 
-**Why E12 still runs its own control.** The harness moved after E10 and E11.
+**Why E13 still runs its own control.** The harness moved after E10 and E11.
 Their cells finished at 14:39 and 18:11 on 2026-08-21; `c1a0bec` (NetPlay
 telemetry and affordance fixes), `aee5c43` (SKILL.md coordinate frame — a silent
 off-by-one) and `ea8cc15` (melee hints) landed at 22:06, 22:59 and 23:03 that
@@ -354,7 +414,7 @@ control most cheap "the agent learned!" results fail.
 
 `ROUNDS` defaults to **1**. Reps are off by default (`CONTROL_REPS=1`,
 `EVAL_REPS=1`) — enough to see whether the effect is anywhere near E10's spread,
-not enough to claim a null band of E12's own. Raise both to 3 before any
+not enough to claim a null band of E13's own. Raise both to 3 before any
 published claim.
 
 ### 4.4 Staging

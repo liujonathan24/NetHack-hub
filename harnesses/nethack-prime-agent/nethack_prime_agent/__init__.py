@@ -152,13 +152,13 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     tool would not be capability-matched."""
 
     continual_harness_dir: str = ""
-    """Share Prime Agent's GLOBAL continual-harness store across rollouts (E12).
+    """Share Prime Agent's GLOBAL continual-harness store across rollouts (E13).
 
     Prime Agent persists prompt notes, memories, reusable skill descriptions and
     sub-agent specs in a "continual harness" state file, and renders them into
     the system prompt of every new session (`formatHarnessStateForPrompt`, called
     from the base-prompt builder with `harnessState: _loadMergedHarnessState()`).
-    That is exactly the cross-episode learning channel E12 needs -- but it is
+    That is exactly the cross-episode learning channel E13 needs -- but it is
     inert under this harness, for two independent reasons:
 
       * LOCAL state lives in session artifacts, and this arm runs `--no-session`.
@@ -513,7 +513,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "--bind",
             self.config.install_dir,
             self.config.install_dir,
-            # E12: the shared continual-harness store, re-bound READ-ONLY on top
+            # E13: the shared continual-harness store, re-bound READ-ONLY on top
             # of the read-write `install_dir` bind above (bwrap applies binds in
             # order, so the later, narrower one wins for that subtree). This is
             # what keeps the learning channel single-writer -- see
@@ -639,7 +639,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # reading (or migrating into) the operator's real credential store.
         await runtime.write(f"{agent_dir}/auth.json", b"{}\n")
 
-        # E12: point this rollout's GLOBAL continual-harness directory at the
+        # E13: point this rollout's GLOBAL continual-harness directory at the
         # shared store, so lessons written by an earlier game are in this game's
         # system prompt. `getGlobalHarnessStateDir()` is `join(agentDir,
         # "harness")` with no env override of its own, and the kernel is handed
