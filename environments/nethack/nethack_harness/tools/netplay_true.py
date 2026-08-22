@@ -48,6 +48,7 @@ import netplay.nethack_agent.skills as netplay_skills  # noqa: E402
 from netplay.nethack_agent.agent import NetHackAgent  # noqa: E402
 
 from nethack_harness.tools.skills import SkillResult, registry  # noqa: E402
+from nethack_harness import tool_flags as _flags
 from nethack_harness.helpers import (  # noqa: E402
     CARRIAGE_RETURN,
     _cr_would_be_unknown_command,
@@ -609,7 +610,13 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
 
     hp_start, _mx = _hp_now()
     try:
-        strategy = _execute_skill_filtered(agent, skill, kwargs)
+        # netplay_telemetry gates the severity filter (c1a0bec). Off = the
+        # vendored blanket NewGlyphEvent interrupt the baseline was measured
+        # with; see nethack_harness.tool_flags.
+        if _flags.enabled("netplay_telemetry"):
+            strategy = _execute_skill_filtered(agent, skill, kwargs)
+        else:
+            strategy = agent._execute_skill(skill, kwargs)
         strategy = agent._skip_more_messages(strategy)
         strategy = agent._update_objects(strategy)
         for step in strategy:
@@ -715,7 +722,7 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     # stopped en route and reported only the interrupt reason -- not how far
     # they got or how far remains, so the model re-issued blind. Append both.
     # Prose-only: rides the result payload, tool schema untouched.
-    if getattr(skill, "name", "") == "move_to":
+    if getattr(skill, "name", "") == "move_to" and _flags.enabled("netplay_telemetry"):
         try:
             tx, ty = int(kwargs.get("x")), int(kwargs.get("y"))
             bx, by = int(agent.blstats.x), int(agent.blstats.y)
