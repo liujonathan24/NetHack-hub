@@ -243,6 +243,7 @@ from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
     TurnRecorder,
+    append_call_marker,
     build_tool_result,
     _drop_before_last_belief,
     _refinement_directive,
@@ -484,10 +485,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # note with the old session's tail. Replay integrity is verified
         # against the recorded end state and fails loudly on divergence.
         resume_from: Optional[str] = None,
+        # Tool-call correlation id echo (see helpers.CALL_ID_MARKER_FORMAT).
+        # The id is ALWAYS assigned server-side and stamped on the turn record;
+        # this knob only controls whether the `[call#N]` marker is appended to
+        # the result payload the model sees. Default on -- the marker is what
+        # makes the two log streams joinable. Turn off to run a cell whose
+        # result payloads are byte-identical to pre-barrier cells (the marker
+        # costs a few result tokens per call). The published tool schemas are
+        # never touched either way.
+        call_id_in_results: bool = True,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
+        self.call_id_in_results = bool(call_id_in_results)
         self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
@@ -1037,6 +1048,19 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # without a flag the caller could forget to pass.
         parsed_calls = state.get("_last_tool_calls")
         route = "harness" if parsed_calls is not None else "mcp"
+        # Tool-call correlation id -- the barrier that aligns the two log
+        # streams (see helpers.CALL_ID_MARKER_FORMAT for the design). Assigned
+        # HERE, at the single execution path every route shares, so the
+        # numbering is identical whether the call arrived from the in-process
+        # loop, over MCP, or from inside an ipython block. One id per
+        # dispatched call == one id per turn record; the end-of-rollout flush
+        # (a call that was never dispatched) explicitly carries None instead.
+        call_id = state["_trace_call_seq"] = int(state.get("_trace_call_seq", 0)) + 1
+        # The transport's own id, when this process can see one (OpenAI-style
+        # `tool_calls[].id` on the harness route). Corroboration only -- the
+        # MCP and code-mode transports never surface one to the server, which
+        # is exactly why the counter above is the primary key.
+        native_call_id = _native_tool_call_id(parsed_calls)
         state["_trace_lm_turn"] = int(state.get("_trace_lm_turn", 0)) + 1
         tt = state["_turn_trace"] = {
             "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
@@ -1046,6 +1070,16 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         with rec:
             content = await self._apply_tool_call_inner(state, skill_name, skill_args)
         clock_after = _game_clock(state)
+        # Echo the correlation id into the RESULT payload -- the one channel
+        # that reaches the model transcript verbatim in every scaffold (an MCP
+        # tool message, or printed output inside an ipython block). Appended
+        # BEFORE the trace write below so `rendered_user_message` records
+        # exactly what the model saw. The published tool schemas are never
+        # touched; this is payload-side only, and `call_id_in_results=False`
+        # restores byte-identical result payloads for token-matched cells
+        # (the game-side stamp on the record stays either way).
+        if self.call_id_in_results:
+            content = append_call_marker(content, call_id)
         obs_text = content_to_text(content)
         # Stash what the model was last SHOWN, so the end-of-rollout flush (the
         # final, never-applied tool call) can record the observation that call
@@ -1059,6 +1093,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             clock_before=clock_before, clock_after=clock_after,
             engine_steps=len(rec.actions), reward=tt.get("reward") or 0.0,
             game_message=rec.messages[-1] if rec.messages else "",
+            call_id=call_id, native_call_id=native_call_id,
+            call_id_echoed=self.call_id_in_results,
         )
         # On the MCP route there is no parsed assistant message to read the call
         # out of, but the call itself was handed to us -- so synthesize the same
@@ -2053,6 +2089,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 status="not_applied" if calls else "no_tool_call",
                 clock_before=_game_clock(state), clock_after=_game_clock(state),
                 engine_steps=0, reward=0.0, game_message="",
+                # This record was produced by NO dispatched call: nothing was
+                # served, nothing was echoed, so there is no correlation id --
+                # explicitly None, never a fabricated number. The transport's
+                # own id is still recorded from the parsed call when present.
+                call_id=None, native_call_id=_native_tool_call_id(calls),
+                call_id_echoed=False,
             )
             _write_trace_entry(
                 self, state, assistant, calls, [], 0.0,
@@ -2110,6 +2152,21 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
 
 # ---------- frontier blacklist (kept here: tests monkeypatch these on the nethack module) ----------
+
+def _native_tool_call_id(calls):
+    """The transport's own id for the first parsed tool call, if visible.
+
+    Handles both shapes the harness sees (OpenAI-style dicts and verifiers'
+    flat ``ToolCall`` objects). Returns ``None`` when there is no parsed call
+    or the transport carries no id -- which is every MCP/code-mode dispatch,
+    and exactly why the server-assigned counter is the primary key.
+    """
+    if not calls:
+        return None
+    tc = calls[0]
+    tid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+    return str(tid) if tid else None
+
 
 def _game_clock(state) -> Optional[int]:
     """The in-game turn counter (`status["time"]`), or None if unreadable.
@@ -2410,6 +2467,10 @@ def load_environment(
     refiner_model: Optional[str] = None,
     bootstrap_dir: Optional[str] = None,
     refine: bool = False,
+    # Echo the per-call correlation id (`[call#N]`) into each tool result so
+    # the model transcript and the turn trace can be joined exactly. The id is
+    # always stamped on the trace either way; see NetHackVerifiersEnv.__init__.
+    call_id_in_results: bool = True,
     **kwargs: Any,
 ) -> vf.Environment:
     """
@@ -2607,6 +2668,7 @@ def load_environment(
         no_progress_timeout=int(kwargs.pop('no_progress_timeout', 10_000)),
         pin_objective_on_setup=pin_objective_on_setup,
         self_dispatch=self_dispatch,
+        call_id_in_results=call_id_in_results,
         **kwargs,
     )
 

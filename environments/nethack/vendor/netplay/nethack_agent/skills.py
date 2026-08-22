@@ -250,7 +250,16 @@ def search_room(agent: NetHackAgent, room_id: int, max_search_count=3):
 
 @skill(
     name="press_key",
-    description="Presses the given letter. For special keys only ESC, SPACE, and ENTER are supported.",
+    # Truthful key surface (was: "only ESC, SPACE, and ENTER are supported" --
+    # a lie that told the model the descend key `>` would not work; RawKeyPress
+    # accepts letters, digits and most punctuation including `>` and `<`).
+    description=(
+        "Presses a single key, exactly as if typed at the NetHack prompt: "
+        "letters (both cases), digits, and punctuation such as > < , . # $ are "
+        "all supported, plus the named specials ESC, SPACE and ENTER. Use this "
+        "to answer the game's own prompts and menus, and to descend (press '>' "
+        "while standing on a > staircase) or ascend ('<')."
+    ),
     parameters=[
         SkillParameter.string("key")
     ]
@@ -356,6 +365,25 @@ def compute_visit_mask(agent: NetHackAgent, door_open_count=4):
                     to_visit |= translate(doors, dy, dx)
     return to_visit
 
+def _melee_target_report(agent, target_glyph, tx, ty):
+    # Added 2026-08-21 (E10/E11 audit): 24% of melee calls failed "Unable to
+    # reach the target" with only the STALE coordinate -- the monster had moved
+    # and the model paid an extra observe+attack round to relocate it. The
+    # tracker can find the same glyph's current position level-wide; report it.
+    # Glyph-value matching cannot distinguish two monsters of the same species,
+    # so the wording is "a matching monster", never a claimed identity.
+    try:
+        now = [(p.x, p.y) for g, p in agent.current_level.get_monsters()
+               if g == target_glyph]
+    except Exception:
+        now = []
+    if not now:
+        return f"Unable to reach the target at ({tx}, {ty}); it is no longer visible."
+    nx, ny = min(now, key=lambda p: abs(p[0] - tx) + abs(p[1] - ty))
+    return (f"Unable to reach the target at ({tx}, {ty}); "
+            f"a matching monster is now at ({nx}, {ny}).")
+
+
 @skill(
     name="melee_attack",
     description="Pursues and attacks a given target using melee attacks until it is dead.",
@@ -376,13 +404,17 @@ def melee_attack(agent: NetHackAgent, x, y):
         target_neighbors = agent.current_level.get_neighbors(tx, ty)
         target_neighbors = [(x,y) for (x,y) in target_neighbors if agent.get_path_to(x,y, bump_into_unwalkables=False, avoid_monsters=True) is not None]
         if len(target_neighbors) == 0:
-            yield Step.failed(f"Unable to reach the target at ({tx}, {ty}).")
+            yield Step.failed(_melee_target_report(agent, target_glyph, tx, ty))
+            # Missing `return` (audit finding): only safe before because the
+            # driver stops pulling the generator on a done step.
+            return
 
         nx, ny = min(target_neighbors, key=lambda pos: agent.distance_to(pos[0], pos[1], bump_into_unwalkables=False, avoid_monsters=True))
         move_action = get_move_towards_action(agent, nx, ny, bump=False, avoid_monsters=True)
         # Should not happen because we checked the neighbors already, but safe is safe
         if move_action is None:
-            yield Step.failed(f"Unable to reach the target at ({tx}, {ty}).")
+            yield Step.failed(_melee_target_report(agent, target_glyph, tx, ty))
+            return
 
         if move_action == actions.MiscDirection.WAIT:
             # We reached the target
@@ -407,7 +439,9 @@ def melee_attack(agent: NetHackAgent, x, y):
                 break
 
         if not found:
-            yield Step.failed(f"Lost track of the target")
+            yield Step.failed(
+                "Lost track of the target. " +
+                _melee_target_report(agent, target_glyph, tx, ty))
             return
 
 @skill(
@@ -613,12 +647,21 @@ def zap(agent: NetHackAgent, item_letter, direction):
 )
 @fail_on_popup
 def rest(agent: NetHackAgent, count: int = 5):
-    if count > 1:
-        for step in type_text(agent, str(count)):
-            if step.is_done():
-                break 
-            yield step
-    yield agent.step(actions.MiscDirection.WAIT)
+    # Rewritten 2026-08-21 (E10/E11 audit). The old body typed the count digits
+    # as raw keys and issued ONE WAIT -- a NetHack count-prefixed occupation
+    # that the game aborts on the first delivered message, so ambient dosounds
+    # noise ("You hear a door open") cut every rest to ~3 engine steps
+    # regardless of `count`, with no report of turns actually rested. Measured:
+    # 74 rest calls across 25 games, all truncated, each provoking a blind
+    # re-issue. Now: one WAIT per game turn (the skill-interrupt filter governs
+    # early exit), and the completion says how much rest was delivered.
+    start = agent.blstats.time
+    for _ in range(max(1, count)):
+        if (agent.blstats.time - start) >= count:
+            break
+        yield agent.step(actions.MiscDirection.WAIT)
+    rested = agent.blstats.time - start
+    yield Step.completed(f"Rested {rested} of {count} requested turns.")
 
 @skill(
     name="pray",

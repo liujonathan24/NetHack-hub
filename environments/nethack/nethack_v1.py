@@ -218,6 +218,15 @@ class NetHackToolsetConfig(vf.ToolsetConfig):
     # decision.
     max_parallel_skill_calls: int = 0
     parallel_batch_window_s: float = 0.5
+    # Echo the per-call correlation id (`[call#N]`) into each tool result so
+    # the model transcript (`traces.jsonl`) and the turn NDJSON can be joined
+    # exactly (see `nethack_harness.helpers.CALL_ID_MARKER_FORMAT`). The id is
+    # always assigned server-side and stamped on the trace record; this knob
+    # only controls the result-payload echo, which costs a few tokens per call
+    # -- turn off for a cell that must be token-matched against pre-barrier
+    # runs. The published tool schemas are identical either way: the marker
+    # rides the payload, never the function definitions the model sees.
+    call_id_in_results: bool = True
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob/skill_set, etc.). Kept opaque so
     # the v1 layer never has to track the full v0 kwarg surface.
@@ -260,6 +269,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     max_skill_calls: int = 150
     max_parallel_skill_calls: int = 0
     parallel_batch_window_s: float = 0.5
+    call_id_in_results: bool = True
     env_args: dict = {}
     # Where the tool server runs (colocated = share the harness's runtime).
     colocated: bool = False
@@ -289,6 +299,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
             max_skill_calls=self.max_skill_calls,
             max_parallel_skill_calls=self.max_parallel_skill_calls,
             parallel_batch_window_s=self.parallel_batch_window_s,
+            call_id_in_results=self.call_id_in_results,
             env_args=dict(self.env_args or {}),
         )
 
@@ -331,6 +342,7 @@ def _build_v0_env(cfg: NetHackToolsetConfig | NetHackTasksetConfig, *, n_example
         # CLI-agent arms. The control arm calls `nethack.load_environment`
         # directly and never reaches this function, so it never sets this.
         self_dispatch=cfg.self_dispatch,
+        call_id_in_results=getattr(cfg, "call_id_in_results", True),
         **dict(cfg.env_args or {}),
     )
 
