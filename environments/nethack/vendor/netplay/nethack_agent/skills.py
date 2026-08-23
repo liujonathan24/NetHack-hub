@@ -366,6 +366,12 @@ def compute_visit_mask(agent: NetHackAgent, door_open_count=4):
     return to_visit
 
 def _melee_target_report(agent, target_glyph, tx, ty):
+    # melee_hints gates the whole stale-target report (c1a0bec). Off = the bare
+    # coordinate the E10 baseline was measured with. Imported lazily so the
+    # vendored package carries no harness dependency at import time.
+    from nethack_harness import tool_flags as _flags
+    if not _flags.enabled("melee_hints"):
+        return f"Unable to reach the target at ({tx}, {ty})."
     # Added 2026-08-21 (E10/E11 audit): 24% of melee calls failed "Unable to
     # reach the target" with only the STALE coordinate -- the monster had moved
     # and the model paid an extra observe+attack round to relocate it. The
@@ -655,6 +661,19 @@ def rest(agent: NetHackAgent, count: int = 5):
     # 74 rest calls across 25 games, all truncated, each provoking a blind
     # re-issue. Now: one WAIT per game turn (the skill-interrupt filter governs
     # early exit), and the completion says how much rest was delivered.
+    from nethack_harness import tool_flags as _flags
+    if not _flags.enabled("netplay_telemetry"):
+        # The pre-c1a0bec body, verbatim: the count digits typed as raw keys
+        # plus a single WAIT. It under-delivers (a count-prefixed occupation
+        # aborts on the first message), which is exactly what the baseline
+        # measured -- so this branch must stay bug-for-bug identical.
+        if count > 1:
+            for step in type_text(agent, str(count)):
+                if step.is_done():
+                    break
+                yield step
+        yield agent.step(actions.MiscDirection.WAIT)
+        return
     start = agent.blstats.time
     for _ in range(max(1, count)):
         if (agent.blstats.time - start) >= count:

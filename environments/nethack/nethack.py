@@ -2564,6 +2564,13 @@ def load_environment(
     _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
     rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
+    # Post-baseline tool fixes are flag-gated so `[base]` in
+    # configs/tool_tiers.toml is reproducible from config instead of a branch
+    # checkout. All default OFF: a cell that names none of them behaves as the
+    # tree did when the E10 baseline was measured. See nethack_harness.tool_flags.
+    from nethack_harness import tool_flags as _tool_flags
+    _tool_flags.configure(**kwargs)
+
     _describe_args = kwargs.get("describe_args", False)
     if isinstance(_describe_args, str):
         _describe_args = _describe_args.strip().lower() not in ("false","0","no","off","")
