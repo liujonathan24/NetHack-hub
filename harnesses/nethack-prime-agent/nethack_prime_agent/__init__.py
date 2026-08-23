@@ -106,6 +106,44 @@ def _strip_no_batch_rule(data: bytes) -> bytes:
     return text.replace(_NO_BATCH_RULE, "").encode()
 
 
+# The coordinate-frame note aee5c43 added to SKILL.md, and the baseline wording
+# it replaced. `skill_doc_coords` OFF (the default) must serve the E10-baseline
+# doc BYTE-FOR-BYTE, so the strip substitutes the original sentence back rather
+# than merely deleting the note. Same tool_flags family as netplay_telemetry /
+# melee_hints, but consumed HERE: the doc is materialized by the harness
+# process, which never imports the env-side flag registry -- so it is a harness
+# config field, set by the same tier that sets the env flags.
+_COORD_FRAME_NOTE = (
+    "Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,\n"
+    "top to bottom) in the MAP frame: row 0 is the FIRST row of the `=== MAP ===`\n"
+    "block, the same frame `Pos:` and all `VISIBLE FEATURES` coordinates use. Do\n"
+    "NOT count rows from the raw terminal screen (it has extra message/status\n"
+    "lines) — that yields an off-by-one that silently misses every target."
+)
+
+_COORD_FRAME_BASELINE = (
+    "Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,\n"
+    "top to bottom), exactly as shown in the map."
+)
+
+
+def _restore_baseline_coord_note(data: bytes) -> bytes:
+    """Swap the aee5c43 coordinate-frame note back to the baseline wording.
+
+    Fails loudly, same contract as `_strip_no_batch_rule`: a cell that believed
+    it was serving the baseline doc but shipped the annotated one (or vice
+    versa) is a silently invalid experiment.
+    """
+    text = data.decode()
+    if _COORD_FRAME_NOTE not in text:
+        raise RuntimeError(
+            "skill_doc_coords=False but the coordinate-frame note was not found "
+            "verbatim in SKILL.md -- the file changed and `_COORD_FRAME_NOTE` is "
+            "stale. Update it rather than serving an unknown doc as 'baseline'."
+        )
+    return text.replace(_COORD_FRAME_NOTE, _COORD_FRAME_BASELINE).encode()
+
+
 
 class PrimeAgentHarnessConfig(HarnessConfig):
     binary: str = "prime-agent"
@@ -203,6 +241,13 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     """`bwrap` executable. Resolved the same way as `binary` -- through PATH,
     with `path_prepend` applied first -- so an absolute override works for a
     non-PATH install."""
+
+    skill_doc_coords: bool = False
+    """Serve the SKILL.md coordinate-frame note (aee5c43). Default False =
+    serve the E10-baseline doc byte-for-byte (the note is swapped back to the
+    baseline wording at materialization -- `_restore_baseline_coord_note`).
+    The [human] tier turns this on together with the env-side tool_flags
+    (netplay_telemetry, melee_hints); see configs/tool_tiers.toml."""
 
     allow_batching: bool = False
     """Let Prime Agent issue as many skill calls per turn as it likes.
@@ -309,6 +354,8 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             data = (package / name).read_bytes()
             if name == "SKILL.md" and self.config.allow_batching:
                 data = _strip_no_batch_rule(data)
+            if name == "SKILL.md" and not self.config.skill_doc_coords:
+                data = _restore_baseline_coord_note(data)
             await runtime.write(f"{self._skill_dir}/{name}", data)
 
         if self.config.sandbox:

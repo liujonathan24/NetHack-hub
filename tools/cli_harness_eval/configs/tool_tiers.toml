@@ -1,0 +1,33 @@
+# Tool-tier registry for reproducible cells (docs/CONTINUAL_HARNESS_BASELINE.md).
+#
+# A cell declares ONE tier; the launcher expands it to the flags below and the
+# resolved values land in the cell's output config.toml. all-off == the tree as
+# the E10 baseline measured it; all-on == current HEAD behaviour.
+#
+# [base] -- frozen. The E10 reference surface (np_core + request_map + search
+#   on the honest harness). Reference numbers: median 3.54 / mean 5.34 /
+#   14 of 15 died / ceiling dl11 (outputs/e10_baseline/).
+# [human] -- the manually engineered post-baseline fixes (PR #29/#31):
+#   E12 measured repeat-cluster budget 67% -> 35%, outcomes unchanged.
+#   Additions to this tier require a commit + a measured cell.
+# [continual] -- reserved for tools/edits the continual harness generates.
+#   MUTATES over time: every continual run must pin this file's git commit and
+#   the generated-code commit in its output config.toml, and is its own arm --
+#   never pooled with base or human.
+
+[base]
+# env-side (ENV_ARGS -> tool_flags)
+netplay_telemetry = false
+melee_hints = false
+# harness-side (PrimeAgentHarnessConfig)
+skill_doc_coords = false
+
+[human]
+netplay_telemetry = true
+melee_hints = true
+skill_doc_coords = true
+
+[continual]
+# Inherits [human] as its starting point; entries added here must name the
+# generating run and commit. Empty until the continual-harness experiment
+# produces its first accepted edit.
