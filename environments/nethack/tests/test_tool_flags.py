@@ -118,3 +118,84 @@ def test_keys_that_predate_the_baseline_are_never_gated():
 
     assert RawKeyPress.parse("enter") == RawKeyPress.KEYPRESS_ENTER
     assert RawKeyPress.parse("esc") == RawKeyPress.KEYPRESS_ESC
+
+
+# --------------------------------------------------------------------------- #
+# ea8cc15: the nearest-monster hint on the no-monster-here path (same flag)    #
+# --------------------------------------------------------------------------- #
+def _drive_no_monster_failure():
+    """Run melee_attack against an empty tile and return the failure text."""
+    from netplay.nethack_agent.skills import melee_attack
+
+    class _Pos:
+        def __init__(self, x, y):
+            self.x, self.y = x, y
+
+    class _Level:
+        def get_monster_glyph(self, x, y):
+            return None                      # nothing at the target tile
+
+        def get_monsters(self):
+            return [(42, _Pos(10, 12)), (7, _Pos(2, 2))]
+
+    class _Agent:
+        current_level = _Level()
+
+        def waiting_for_popup(self):
+            return False          # @fail_on_popup gate
+
+    steps = list(melee_attack(_Agent(), 3, 4))
+    assert len(steps) == 1 and "fail" in str(steps[0].status).lower()
+    return steps[0].thoughts
+
+
+def test_no_monster_failure_is_bare_when_the_flag_is_off():
+    """ea8cc15 shares `melee_hints` with the stale-target report: one
+    behaviour split across two commits (see tool_flags._DEFAULTS)."""
+    text = _drive_no_monster_failure()
+    assert text == "There is no monster at (3,4)."
+
+
+def test_no_monster_failure_names_the_nearest_monster_when_on():
+    tool_flags.configure(melee_hints=True)
+    text = _drive_no_monster_failure()
+    # nearest by Manhattan distance to the requested tile, either glyph --
+    # there is no target glyph to match on this path.
+    assert "Nearest visible monster is at (2, 2)." in text
+
+
+# --------------------------------------------------------------------------- #
+# aee5c43 / skill_doc_coords: the SKILL.md coordinate-frame note               #
+# --------------------------------------------------------------------------- #
+def test_skill_doc_serves_the_baseline_wording_when_off():
+    """OFF must be byte-exact baseline: the note is swapped back, not deleted."""
+    import importlib
+    hp = importlib.import_module("nethack_prime_agent")
+
+    shipped = (importlib.resources.files("nethack_prime_agent") / "skill" / "SKILL.md").read_bytes()
+    assert hp._COORD_FRAME_NOTE in shipped.decode()   # ON-state is the file itself
+
+    off = hp._restore_baseline_coord_note(shipped).decode()
+    assert hp._COORD_FRAME_NOTE not in off
+    assert hp._COORD_FRAME_BASELINE in off
+
+
+def test_skill_doc_strip_fails_loudly_when_the_note_drifts():
+    import importlib
+    hp = importlib.import_module("nethack_prime_agent")
+
+    with pytest.raises(RuntimeError, match="stale"):
+        hp._restore_baseline_coord_note(b"# NetHack\nsome other doc\n")
+
+
+def test_launcher_tier_mapping_matches_tool_tiers_toml():
+    """launch_cell.sh duplicates the [human] mapping on purpose (no TOML
+    parsing in bash); this is the pin that keeps the two in sync."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[3]
+    tiers = (root / "tools/cli_harness_eval/configs/tool_tiers.toml").read_text()
+    launcher = (root / "tools/cli_harness_eval/launch_cell.sh").read_text()
+    for flag in ("netplay_telemetry", "melee_hints", "skill_doc_coords"):
+        assert f"{flag} = true" in tiers          # [human] section lists it
+        assert f"{flag} = false" in tiers         # [base] section lists it
+        assert flag in launcher                   # launcher expands it

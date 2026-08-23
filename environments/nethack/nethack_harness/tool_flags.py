@@ -37,11 +37,12 @@ _DEFAULTS: dict[str, bool] = {
     # of it would produce a state that never existed, so they share a flag.
     "melee_hints": False,
     # aee5c43 -- SKILL.md stating the MAP coordinate frame explicitly.
-    # DECLARED BUT NOT YET CONSUMED: that commit is local to another worktree
-    # and is not on origin/exp/e8-planning-guidance, so there is nothing here to
-    # gate. The name is reserved so configs/tool_tiers.toml can list all three
-    # members now; wiring it is a one-line strip in PrimeAgentHarness (the
-    # `allow_batching` pattern) once the commit lands on the remote.
+    # CONSUMED IN THE HARNESS PROCESS, not here: the doc is materialized by
+    # PrimeAgentHarness, which never imports this registry, so the flag rides
+    # `PrimeAgentHarnessConfig.skill_doc_coords` (the `allow_batching` pattern:
+    # OFF swaps the note back to the byte-exact baseline wording). Listed here
+    # so configs/tool_tiers.toml names all members of the [human] tier in one
+    # place; setting it through ENV_ARGS is a no-op by design.
     "skill_doc_coords": False,
 }
 

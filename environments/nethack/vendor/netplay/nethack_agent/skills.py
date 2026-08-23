@@ -402,7 +402,21 @@ def _melee_target_report(agent, target_glyph, tx, ty):
 def melee_attack(agent: NetHackAgent, x, y):
     target_glyph = agent.current_level.get_monster_glyph(x, y)
     if target_glyph is None:
-        yield Step.failed(f"There is no monster at ({x},{y}).")
+        # ea8cc15, gated under the same `melee_hints` flag as the stale-target
+        # report (one behaviour, two commits -- see tool_flags._DEFAULTS): this
+        # is the MOST common stale case, the monster moved before the call even
+        # started. Off = the bare baseline message.
+        from nethack_harness import tool_flags as _flags
+        extra = ""
+        if _flags.enabled("melee_hints"):
+            try:
+                mons = [(g, p) for g, p in agent.current_level.get_monsters()]
+                if mons:
+                    g, p = min(mons, key=lambda gp: abs(gp[1].x - x) + abs(gp[1].y - y))
+                    extra = f" Nearest visible monster is at ({p.x}, {p.y})."
+            except Exception:
+                pass
+        yield Step.failed(f"There is no monster at ({x},{y}).{extra}")
         return
 
     tx, ty = x, y

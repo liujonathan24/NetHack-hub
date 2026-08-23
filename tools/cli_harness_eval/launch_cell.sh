@@ -352,6 +352,26 @@ case "${ENV_ARGS:-}" in
   *) OVERRIDES+=(--taskset.env_args.describe_args true) ;;
 esac
 
+# TOOL_TIER expands to the post-baseline fix flags (configs/tool_tiers.toml,
+# docs/CONTINUAL_HARNESS_BASELINE.md). Omitted (or "base") = all flags off =
+# the tree as the E10 baseline measured it; "human" = all manual fixes on.
+# The mapping is duplicated from tool_tiers.toml deliberately -- the launcher
+# must not parse TOML -- and test_tool_flags.py pins the two in sync.
+if [ -n "${TOOL_TIER:-}" ]; then
+  case "${TOOL_TIER}" in
+    base) : ;;   # defaults already mean base; explicit for the config record
+    human)
+      OVERRIDES+=(--taskset.env_args.netplay_telemetry true
+                  --taskset.env_args.melee_hints true
+                  --harness.skill_doc_coords true)
+      ;;
+    *)
+      echo "launch_cell: unknown TOOL_TIER '${TOOL_TIER}' (base|human; continual cells set flags explicitly)" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
 exec "${EVAL_BIN}" @ "${CFG}" \
