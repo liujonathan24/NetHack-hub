@@ -39,6 +39,7 @@ writes the operator's `~/.prime/agent`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -81,10 +82,13 @@ _RESUME_PROMPT = (
 # package (`skills.md#python-backed-skills` layout).
 _SKILL_FILES = ("SKILL.md", "pyproject.toml", "src/nethack/__init__.py")
 
+# The no-batching instruction, verbatim. The honesty pass (9b8d5a4) rewrote
+# SKILL.md and shortened this line without updating the constant, so
+# `allow_batching=True` has been raising RuntimeError ever since -- the feature
+# was dead on both documents. Present in SKILL.md and SKILL.baseline.md
+# identically, so one constant still covers both.
 _NO_BATCH_RULE = (
-    "- Do not batch blind sequences of calls. NetHack is turn-based and adversarial;\n"
-    "  the observation after each call is what tells you whether the previous one\n"
-    "  worked.\n"
+    "- One call, read the observation, then decide. Never batch blind sequences.\n"
 )
 
 
@@ -128,11 +132,12 @@ _COORD_FRAME_BASELINE = (
 
 
 def _restore_baseline_coord_note(data: bytes) -> bytes:
-    """Swap the aee5c43 coordinate-frame note back to the baseline wording.
+    """Deprecated: kept so a caller that still patches gets the same result.
 
-    Fails loudly, same contract as `_strip_no_batch_rule`: a cell that believed
-    it was serving the baseline doc but shipped the annotated one (or vice
-    versa) is a silently invalid experiment.
+    Superseded by serving `SKILL.baseline.md` wholesale (see `_skill_doc`). The
+    patch approach pinned ONE paragraph, so any future edit elsewhere in
+    SKILL.md would have broken byte-identity with E10 while every test still
+    passed. Serving the frozen file cannot drift by construction.
     """
     text = data.decode()
     if _COORD_FRAME_NOTE not in text:
@@ -143,6 +148,37 @@ def _restore_baseline_coord_note(data: bytes) -> bytes:
         )
     return text.replace(_COORD_FRAME_NOTE, _COORD_FRAME_BASELINE).encode()
 
+
+# The E10-baseline SKILL.md, frozen. This is `aee5c43^` verbatim -- the exact
+# bytes the prime_agent arm served for every rollout in outputs/e10_baseline/.
+# Pinned by hash so an accidental edit to the fixture fails the run rather than
+# silently redefining what "baseline" means.
+_BASELINE_SKILL_SHA256 = "8585082860c747238468c4c91330524104b21844568bc4603bd3f471fbfa4864"
+
+
+def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> bytes:
+    """The SKILL.md bytes this tier serves.
+
+    `skill_doc_coords=False` (the default, i.e. [base]) serves the frozen
+    baseline file WHOLESALE rather than patching the live one. That is the only
+    way byte-identity with E10 survives future edits to SKILL.md: a patch pins
+    one paragraph, a fixture pins the document.
+    """
+    if not skill_doc_coords:
+        data = (package / "SKILL.baseline.md").read_bytes()
+        got = hashlib.sha256(data).hexdigest()
+        if got != _BASELINE_SKILL_SHA256:
+            raise RuntimeError(
+                "SKILL.baseline.md has been edited: expected sha256 "
+                f"{_BASELINE_SKILL_SHA256}, got {got}. This file is the E10 "
+                "baseline document; changing it silently redefines every [base] "
+                "cell. Restore it from `git show aee5c43^`."
+            )
+    else:
+        data = (package / "SKILL.md").read_bytes()
+    if allow_batching:
+        data = _strip_no_batch_rule(data)
+    return data
 
 
 class PrimeAgentHarnessConfig(HarnessConfig):
@@ -351,11 +387,18 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # The skill package, at a path that does not vary per rollout.
         package = resources.files(__package__) / "skill"
         for name in _SKILL_FILES:
-            data = (package / name).read_bytes()
-            if name == "SKILL.md" and self.config.allow_batching:
-                data = _strip_no_batch_rule(data)
-            if name == "SKILL.md" and not self.config.skill_doc_coords:
-                data = _restore_baseline_coord_note(data)
+            if name == "SKILL.md":
+                # Tier-selected document; the baseline variant is a frozen file,
+                # not a patch (see `_skill_doc`). `SKILL.baseline.md` is never
+                # written into the runtime skill dir -- the agent must see
+                # exactly one SKILL.md.
+                data = _skill_doc(
+                    package,
+                    skill_doc_coords=self.config.skill_doc_coords,
+                    allow_batching=self.config.allow_batching,
+                )
+            else:
+                data = (package / name).read_bytes()
             await runtime.write(f"{self._skill_dir}/{name}", data)
 
         if self.config.sandbox:

@@ -137,7 +137,7 @@ export PYTHONPATH="${REPO}/tools/pycompat:${ENG}:${REPO}:${REPO}/environments/ne
 # through `nethack_core._engine.library_path()` (there are at least two
 # libnethack.so on disk and only the build/ one is loaded); a bare python3 that
 # cannot import nethack_core degrades to "unknown", which never blocks.
-PY_BIN="$(dirname "${EVAL_BIN}")/python"
+PY_BIN="${PY_BIN:-$(dirname "${EVAL_BIN}")/python}"
 [ -x "$PY_BIN" ] || PY_BIN=python3
 "$PY_BIN" "${REPO}/tools/cli_harness_eval/engine_provenance.py" \
   --check --json "${OUT_ABS}/engine_provenance.json" || {
@@ -352,24 +352,80 @@ case "${ENV_ARGS:-}" in
   *) OVERRIDES+=(--taskset.env_args.describe_args true) ;;
 esac
 
-# TOOL_TIER expands to the post-baseline fix flags (configs/tool_tiers.toml,
-# docs/CONTINUAL_HARNESS_BASELINE.md). Omitted (or "base") = all flags off =
-# the tree as the E10 baseline measured it; "human" = all manual fixes on.
-# The mapping is duplicated from tool_tiers.toml deliberately -- the launcher
-# must not parse TOML -- and test_tool_flags.py pins the two in sync.
+# TOOL_TIER selects a row of configs/tool_tiers.toml. The mapping is NOT
+# duplicated here any more: tool_tiers.py reads the registry and emits the
+# override flags, so launcher and registry cannot drift. (They did: the previous
+# bash `case` block was pinned by a substring test that still passed when the
+# entire block was deleted.)
+#
+# TOOL_TIER now expands the CELL CONTRACT as well as the fix flags. It used to
+# expand to nothing for `base`, so a cell declaring the E10 baseline silently
+# inherited configs/prime_agent.toml -- netplay_true instead of np_core, B0
+# instead of BBOX_MIN, 150 calls instead of 200, 16 seeds instead of 5.
 if [ -n "${TOOL_TIER:-}" ]; then
-  case "${TOOL_TIER}" in
-    base) : ;;   # defaults already mean base; explicit for the config record
-    human)
-      OVERRIDES+=(--taskset.env_args.netplay_telemetry true
-                  --taskset.env_args.melee_hints true
-                  --harness.skill_doc_coords true)
-      ;;
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*) ;;
     *)
-      echo "launch_cell: unknown TOOL_TIER '${TOOL_TIER}' (base|human; continual cells set flags explicitly)" >&2
+      # `HarnessConfig` is extra="forbid" and only the prime_agent harness
+      # declares `skill_doc_coords`, so a tier carrying a harness-side flag is a
+      # hard ValidationError on the other arms. Refuse here, where the message
+      # can say why, rather than deep in pydantic.
+      echo "launch_cell: TOOL_TIER is a prime_agent concept (the tier sets" >&2
+      echo "  --harness.skill_doc_coords, which only that harness declares)." >&2
+      echo "  Arm '${ARM}' cannot take it. Set the env_args explicitly instead." >&2
       exit 2
       ;;
   esac
+  if [ -n "${ENV_ARGS:-}" ] || [ -n "${SKILL_SET:-}" ]; then
+    # Both write the same dotted paths and the CLI resolves duplicates
+    # last-wins, silently. Measured: ENV_ARGS='{"netplay_telemetry":true}' with
+    # TOOL_TIER=base produced a cell labelled base running a human-tier fix.
+    # Same class of foot-gun the SKILL_SET/ENV_ARGS guard already refuses.
+    echo "launch_cell: TOOL_TIER cannot be combined with ENV_ARGS or SKILL_SET --" >&2
+    echo "  they set the same dotted paths and the last one silently wins, so the" >&2
+    echo "  cell would not run the tier it claims. Put the difference in" >&2
+    echo "  configs/tool_tiers.toml as its own tier." >&2
+    exit 2
+  fi
+  # The tier resolver needs tomllib (3.11+). PY_BIN falls back to the system
+  # `python3` when EVAL_BIN has no sibling interpreter, and on this box that is
+  # 3.10 -- the same trap the ENV_ARGS flattener documents. Fail with the reason
+  # rather than a bare ModuleNotFoundError from inside a subshell.
+  if ! "$PY_BIN" -c 'import tomllib' 2>/dev/null; then
+    echo "launch_cell: TOOL_TIER needs a Python with tomllib (3.11+); ${PY_BIN} lacks it." >&2
+    echo "  Point EVAL_BIN at the venv binary (its sibling ./python is used), or" >&2
+    echo "  set PY_BIN to a 3.11+ interpreter." >&2
+    exit 2
+  fi
+  _TIER_CONTRACT="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" contract)" || exit 2
+  _TIER_VARIANT="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["variant"])')"
+  _TIER_CALLS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
+  _TIER_SEEDS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["seeds"]))')"
+
+  # The contract owns the encoding and the budget. A caller who passes a
+  # different one is running a different experiment and must say so.
+  if [ -n "${VARIANT:-}" ] && [ "${VARIANT}" != "${_TIER_VARIANT}" ]; then
+    echo "launch_cell: VARIANT=${VARIANT} contradicts the tier contract (${_TIER_VARIANT})." >&2
+    exit 2
+  fi
+  if [ "${MAX_CALLS}" != "${_TIER_CALLS}" ]; then
+    echo "launch_cell: MAX_CALLS=${MAX_CALLS} contradicts the tier contract (${_TIER_CALLS})." >&2
+    echo "  The reference numbers in tool_tiers.toml describe ${_TIER_CALLS} calls." >&2
+    exit 2
+  fi
+  VARIANT="${_TIER_VARIANT}"
+  OVERRIDES+=(--taskset.variant "${VARIANT}")
+  # Pin ROW SELECTION too: `--num_tasks N` only ever takes the first N of the
+  # config's own seed list, so without this the tier's seeds are advisory.
+  OVERRIDES+=(--taskset.env_args.explicit_seeds "${_TIER_SEEDS}")
+  # NOT `mapfile -t X < <(cmd) || exit`: process substitution does not set the
+  # pipeline status, so mapfile succeeds even when the resolver died and the
+  # cell launches with NO tier flags at all. Capture, check, then split.
+  _TIER_FLAGS_RAW="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" \
+    flags "${TOOL_TIER}" --arm "${ARM}")" || exit 2
+  mapfile -t _TIER_FLAGS <<< "$_TIER_FLAGS_RAW"
+  OVERRIDES+=("${_TIER_FLAGS[@]}")
+  echo "[launch_cell] tool_tier=${TOOL_TIER} -> ${_TIER_FLAGS[*]}"
 fi
 
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"

@@ -459,9 +459,20 @@ def melee_attack(agent: NetHackAgent, x, y):
                 break
 
         if not found:
-            yield Step.failed(
-                "Lost track of the target. " +
-                _melee_target_report(agent, target_glyph, tx, ty))
+            # melee_hints gates the suffix, not just _melee_target_report's body:
+            # that helper self-gates to a BARE "Unable to reach..." string, which
+            # this path then concatenated unconditionally -- so with every flag
+            # off the baseline's `Lost track of the target` became `Lost track of
+            # the target. Unable to reach the target at (x, y).`, a coordinate
+            # the baseline never printed here. Caught by adversarial review of
+            # [base] byte-fidelity, 2026-08-23.
+            from nethack_harness import tool_flags as _flags
+            if _flags.enabled("melee_hints"):
+                yield Step.failed(
+                    "Lost track of the target. " +
+                    _melee_target_report(agent, target_glyph, tx, ty))
+            else:
+                yield Step.failed(f"Lost track of the target")
             return
 
 @skill(
