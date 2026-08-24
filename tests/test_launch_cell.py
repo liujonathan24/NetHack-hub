@@ -206,6 +206,20 @@ def test_tool_tier_base_emits_the_e10_contract_not_nothing(tmp_path):
     assert json.loads(got["--taskset.env_args.explicit_seeds"]) == contract["seeds"]
 
 
+def test_the_whole_contract_is_emitted_not_half_of_it(tmp_path):
+    """model / character / task_spec were declared in the registry but never
+    emitted -- they only happened to match configs/prime_agent.toml, so an edit
+    to that file would have moved the baseline without touching the registry
+    that defines it. Found by adversarial review of the human tier."""
+    contract = _tier_cfg()["contract"]
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                   {"TOOL_TIER": "base", **_tier_env()})
+    got = _pairs(argv)
+    assert got["--model"] == contract["model"]
+    assert got["--taskset.character"] == contract["character"]
+    assert got["--taskset.task_spec"] == contract["task_spec"]
+
+
 def test_tool_tier_base_is_not_a_no_op(tmp_path):
     """The regression that made the tier meaningless: `base` produced argv
     byte-identical to leaving TOOL_TIER unset."""
@@ -288,3 +302,80 @@ def test_an_unknown_tier_is_refused(tmp_path):
     result, _ = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
                      {"TOOL_TIER": "continual+human", **_tier_env()})
     assert result.returncode != 0
+
+
+# -- E13: one store per continual experiment ---------------------------------
+#
+# Several continual experiments run side by side (same base surface, different
+# reflection instructions). Everything that could let two of them be confused on
+# disk, or let one start from another's leftovers, is pinned here.
+
+
+def test_the_continual_store_requires_a_run_id(tmp_path):
+    """An unlabelled continual cell cannot be told apart from another
+    experiment's once it is on disk."""
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                        {"CONTINUAL_HARNESS": "/tmp/vf-prime-agent/continual-harness/x",
+                         **_tier_env()})
+    assert result.returncode == 2
+    assert argv is None
+    assert "CONTINUAL_RUN_ID" in result.stderr
+
+
+def test_the_run_id_and_prompt_hash_reach_the_config(tmp_path):
+    """Two runs that differ only in the orchestrator's reflection prompt are
+    otherwise identical on disk, so the prompt hash has to be in the artifact."""
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                   {"TOOL_TIER": "continual",
+                    "CONTINUAL_HARNESS": "/tmp/vf-prime-agent/continual-harness/reflect-terse",
+                    "CONTINUAL_RUN_ID": "reflect-terse",
+                    "CONTINUAL_PROMPT_SHA": "abc123def456",
+                    **_tier_env()})
+    got = _pairs(argv)
+    assert got["--taskset.env_args.continual_run_id"] == "reflect-terse"
+    assert got["--taskset.env_args.continual_prompt_sha"] == "abc123def456"
+    assert got["--harness.continual_harness_dir"].endswith("/reflect-terse")
+    assert got["--taskset.env_args.tool_tier"] == "continual"
+
+
+def test_the_continual_tier_starts_from_the_base_surface(tmp_path):
+    """The arm's independent variable is the store the agent writes, so its
+    floor must be the same floor the denominator uses. If [continual] inherited
+    [human], a gain could be the hand-engineered fixes instead."""
+    cfg = _tier_cfg()
+    assert cfg["continual"] == cfg["base"], "continual must carry base's flags"
+    _, cont = _run(tmp_path, ["prime_agent", str(tmp_path / "c"), "200", "5"],
+                   {"TOOL_TIER": "continual", **_tier_env()})
+    _, base = _run(tmp_path, ["prime_agent", str(tmp_path / "b"), "200", "5"],
+                   {"TOOL_TIER": "base", **_tier_env()})
+    # Ignore the tier label itself and the per-cell paths, which necessarily
+    # differ; everything that decides BEHAVIOUR must match.
+    def strip(d):
+        return {k: v for k, v in d.items()
+                if "tool_tier" not in k and k not in ("--output_dir", "--taskset.trace_dir")}
+    assert strip(_pairs(cont)) == strip(_pairs(base)), (
+        "a continual cell with no store mounted must be a base cell"
+    )
+
+
+def test_a_continual_store_is_refused_on_arms_that_have_none(tmp_path):
+    result, _ = _run(tmp_path, ["claude_code", str(tmp_path / "out"), "200", "5"],
+                     {"CONTINUAL_HARNESS": "/tmp/x", "CONTINUAL_RUN_ID": "r",
+                      **_tier_env()})
+    assert result.returncode == 2 and "prime_agent" in result.stderr
+
+
+def test_seeds_can_be_overridden_and_the_override_is_recorded(tmp_path):
+    """E13's reflection corpus runs seeds 5-9 while evaluation stays on the
+    contract's 0-4. The override cannot go through ENV_ARGS (refused alongside
+    TOOL_TIER), and a silent replacement of the contract's seeds would make the
+    artifact a lie."""
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                   {"TOOL_TIER": "base", "SEEDS": "[5,6,7,8,9]", **_tier_env()})
+    got = _pairs(argv)
+    assert json.loads(got["--taskset.env_args.explicit_seeds"]) == [5, 6, 7, 8, 9]
+    assert got["--taskset.env_args.seeds_overridden"] == "true"
+
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out2"), "200", "5"],
+                   {"TOOL_TIER": "base", **_tier_env()})
+    assert "--taskset.env_args.seeds_overridden" not in _pairs(argv)

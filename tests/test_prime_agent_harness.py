@@ -605,3 +605,158 @@ def test_strip_fails_loudly_if_the_rule_text_drifts():
 
     with pytest.raises(RuntimeError, match="stale"):
         _strip_no_batch_rule(b"# SKILL\nsome other content\n")
+
+
+# -- E13: the shared continual-harness store ---------------------------------
+#
+# Prime Agent's continual harness (prompt notes, memories, reusable skill
+# descriptions, sub-agent specs) is rendered into the system prompt of every new
+# session, which makes it the cross-episode learning channel E13 is built on.
+# Under this arm it is inert by default: `--no-session` kills the local store,
+# and the global one is `<agent_dir>/harness` with `agent_dir` per-rollout. The
+# tests below pin the one link that changes that, and the two ways it could
+# silently do nothing.
+
+
+class _RecordingRuntimeWithWorkdir(_RecordingRuntime):
+    """`_RecordingRuntime` plus the `workdir` attribute `launch` requires before
+    it will build a sandbox prefix."""
+
+    workdir = "/tmp/vf-workdir"
+
+
+def _launch_sandboxed(**config_overrides):
+    """`_launch`, but on a runtime that has a `workdir` -- the precondition for
+    `launch` to build a bwrap prefix at all."""
+    import asyncio
+    import types
+
+    from nethack_prime_agent import PrimeAgentHarness, PrimeAgentHarnessConfig
+
+    harness = PrimeAgentHarness(
+        PrimeAgentHarnessConfig(id="nethack-prime-agent", **config_overrides)
+    )
+    ctx = types.SimpleNamespace(
+        model="z-ai/glm-5.2", sampling=types.SimpleNamespace(reasoning_effort=None)
+    )
+    runtime = _RecordingRuntimeWithWorkdir()
+    asyncio.run(
+        harness.launch(
+            ctx,
+            _build_trace(),
+            runtime,
+            "http://127.0.0.1:9999/v1",
+            "vf-secret",
+            {"nethack": "http://127.0.0.1:41449"},
+        )
+    )
+    return runtime
+
+
+def test_no_continual_harness_dir_means_no_symlink_and_no_extra_command():
+    """The default must leave every existing arm byte-identical: E7-E9 cells and
+    the E13 control differ by nothing at all, not by a stray `mkdir`."""
+    runtime = _launch()
+    assert not any("harness" in " ".join(argv) for argv, _ in runtime.commands), (
+        "an unset continual_harness_dir must not touch the filesystem"
+    )
+
+
+def test_the_shared_store_is_linked_at_the_one_name_prime_agent_reads():
+    """`getGlobalHarnessStateDir()` is `join(agentDir, "harness")` and the kernel
+    gets the same path as `RLM_GLOBAL_HARNESS_STATE_DIR`, so the link has to land
+    on exactly that name -- not `harness_state.json`, not a copy."""
+    store = "/tmp/vf-prime-agent/continual-harness"
+    runtime = _launch(continual_harness_dir=store)
+
+    linked = [argv for argv, _ in runtime.commands if "ln -sfn" in " ".join(argv)]
+    assert len(linked) == 1, "expected exactly one link command"
+    script = " ".join(linked[0])
+    assert f"mkdir -p {store}" in script, "the store must be created if absent"
+    assert f"ln -sfn {store} /tmp/vf-prime-agent/agent-trace-abc/harness" in script
+
+
+def test_the_per_rollout_files_stay_per_rollout():
+    """Only the harness state is shared. Seeds run CONCURRENTLY and each carries
+    its own MCP URL and interception secret, so a shared `settings.json` would
+    point five agents at each other's games."""
+    store = "/tmp/vf-prime-agent/continual-harness"
+    runtime = _launch(continual_harness_dir=store)
+
+    for name in ("settings.json", "models.json", "auth.json"):
+        assert f"/tmp/vf-prime-agent/agent-trace-abc/{name}" in runtime.files
+        assert f"{store}/{name}" not in runtime.files
+
+
+def test_the_player_cannot_write_the_shared_store_by_default():
+    """Single-writer by construction: the read-only re-bind comes after the
+    read-write `install_dir` bind, so bwrap's later, narrower mount wins."""
+    store = "/tmp/vf-prime-agent/continual-harness"
+    runtime = _launch_sandboxed(
+        continual_harness_dir=store, sandbox=True, install_dir="/tmp/vf-prime-agent"
+    )
+    argv = [a for a, _ in runtime.programs][0]
+
+    assert argv[:1] == ["bwrap"]
+    rw = argv.index("--bind")
+    ro = argv.index("--ro-bind", argv.index("/tmp/vf-prime-agent"))
+    assert argv[ro : ro + 3] == ["--ro-bind", store, store]
+    assert ro > rw, "the read-only store bind must come after the read-write one"
+
+
+def test_the_writable_variant_drops_the_read_only_rebind():
+    store = "/tmp/vf-prime-agent/continual-harness"
+    runtime = _launch_sandboxed(
+        continual_harness_dir=store,
+        continual_harness_writable=True,
+        sandbox=True,
+        install_dir="/tmp/vf-prime-agent",
+    )
+    argv = [a for a, _ in runtime.programs][0]
+    assert ["--ro-bind", store, store] != argv[argv.index("--bind") :][:3]
+    assert not any(
+        argv[i : i + 3] == ["--ro-bind", store, store] for i in range(len(argv))
+    )
+
+
+def test_a_store_the_sandbox_would_not_bind_is_refused_loudly():
+    """A store outside `install_dir` leaves the symlink dangling inside the
+    sandbox: every rollout starts from an empty harness, which reads exactly like
+    'the agent learned nothing'. Fail instead."""
+    import asyncio
+    import types
+
+    import pytest
+
+    from nethack_prime_agent import PrimeAgentHarness, PrimeAgentHarnessConfig
+
+    harness = PrimeAgentHarness(
+        PrimeAgentHarnessConfig(
+            id="nethack-prime-agent",
+            sandbox=True,
+            continual_harness_dir="/root/nld/e12/continual-harness",
+        )
+    )
+    ctx = types.SimpleNamespace(
+        model="z-ai/glm-5.2", sampling=types.SimpleNamespace(reasoning_effort=None)
+    )
+    with pytest.raises(ValueError, match="outside install_dir"):
+        asyncio.run(
+            harness.launch(
+                ctx,
+                _build_trace(),
+                _RecordingRuntimeWithWorkdir(),
+                "http://127.0.0.1:9999/v1",
+                "vf-secret",
+                {"nethack": "http://127.0.0.1:41449"},
+            )
+        )
+
+
+def test_a_sibling_path_does_not_pass_the_containment_check():
+    """`/tmp/vf-prime-agent-other` is not inside `/tmp/vf-prime-agent`."""
+    from nethack_prime_agent import _within
+
+    assert _within("/tmp/vf-prime-agent/ch", "/tmp/vf-prime-agent")
+    assert _within("/tmp/vf-prime-agent", "/tmp/vf-prime-agent")
+    assert not _within("/tmp/vf-prime-agent-other/ch", "/tmp/vf-prime-agent")

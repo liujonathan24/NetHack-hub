@@ -66,6 +66,22 @@ melee_hints = true
 skill_doc_coords = true
 
 [continual]
-# Inherits [human] as its starting point; entries added here must name the
-# generating run and commit. Empty until the continual-harness experiment
-# produces its first accepted edit.
+# STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
+# store the agent writes for itself, so its floor must be the same floor the
+# denominator uses -- otherwise a gain could be the human fixes rather than the
+# agent's own edits. All three fix-flags stay false here, exactly as in [base];
+# what differs is that a shared continual-harness store is mounted.
+#
+# The store is per-EXPERIMENT, not global: several continual experiments run
+# side by side (different reflection prompts), each with its own run id, store
+# and output tree. Path and id are passed by the launcher (CONTINUAL_HARNESS /
+# CONTINUAL_RUN_ID) because they vary per run and cannot be named statically
+# here; both, plus the reflection-prompt hash, are pinned into every cell's
+# config.toml alongside tool_tier.
+#
+# Every experiment begins with an EMPTY store -- run_e13.sh refuses to start
+# round 0 against a non-empty one -- so "starts from the base set of skills" is
+# enforced, not merely intended.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
