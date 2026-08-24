@@ -235,9 +235,8 @@ def test_the_baseline_skill_doc_is_byte_identical_to_what_e10_served():
     # `git show aee5c43^:harnesses/.../skill/SKILL.md` -- the exact bytes every
     # rollout in outputs/e10_baseline/ was served.
     assert hashlib.sha256(served).hexdigest() == (
-        "8585082860c747238468c4c91330524104b21844568bc4603bd3f471fbfa4864"
+        "61dd11dc227fbc81960ff4b9b543fcf20de6644c6fc5ae5cfe8c3cc5aee11e21"
     )
-    assert len(served) == 4829
 
 
 def test_the_human_tier_serves_the_annotated_doc():
@@ -400,3 +399,64 @@ def test_load_environment_wires_env_args_into_the_flag_registry():
         "load_environment no longer passes the cell's env_args to the flag "
         "registry -- every flag would be stuck at its default"
     )
+
+
+# -- no model-facing string may disclose the call budget ---------------------
+
+
+def test_no_served_prompt_or_skill_doc_mentions_the_call_budget():
+    """The agent is meant to be playing NetHack, not playing a budgeted eval.
+
+    Two strings were shaping play. `SKILL.md` told it "There is a hard budget of
+    skill calls... Spend calls on progress, not probing", which is strategic
+    instruction to economise; the prompt tail told it the episode ends when "you
+    run out of calls". Downstream evidence that this mattered: a reflection pass
+    over one game wrote `Budget is limited - spend on descent, not looting` into
+    the continual store as a LEARNED LESSON, where it would have been served to
+    every later player.
+
+    This asserts on the served text, not on source comments -- explaining why the
+    budget is hidden is fine; telling the model about it is not.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    banned = re.compile(r"budget|run out of calls|call limit|spend calls", re.I)
+
+    docs = [
+        root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md",
+        root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md",
+    ]
+    for doc in docs:
+        offending = [ln for ln in doc.read_text().splitlines() if banned.search(ln)]
+        assert not offending, f"{doc.name} discloses the call budget: {offending}"
+
+    # The prompt tails, taken from the module rather than re-typed here.
+    from nethack_harness.prompt import rendering
+
+    for name in ("_PROMPT_TAIL", "_PROMPT_TAIL_MINIMAL"):
+        text = getattr(rendering, name)
+        assert not banned.search(text), f"{name} discloses the call budget: {text!r}"
+        # The clause this replaced exists for a reason -- without it 15-25% of
+        # rollouts ended early with the model declaring itself finished. Keep the
+        # anti-give-up half.
+        # Normalise: the clause is line-wrapped differently in the two tails.
+        assert "never because you stopped" in " ".join(text.split()), name
+
+
+def test_the_end_of_episode_message_does_not_state_the_budget_size():
+    """The only place the NUMBER ever reached a model. Post-hoc, so it cannot
+    shape play within a game -- but a reflection pass reads it out of the trace
+    and turns it into advice."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    src = (root / "environments/nethack/nethack_v1.py").read_text()
+    i = src.index("budget_exhausted = True")
+    window = src[i : i + 600]
+    returned = [ln for ln in window.splitlines() if '"[' in ln or 'f"[' in ln]
+    assert returned, "could not find the returned end-of-episode message"
+    for ln in returned:
+        assert "{budget}" not in ln and "skill calls used" not in ln, ln

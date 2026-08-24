@@ -82,8 +82,8 @@ _PROMPT_RANGED = """- **Ranged / approaching threats.** Kill dangerous monsters 
   letting them reach you. Hit it before it hits you."""
 
 _PROMPT_TAIL = """Your top-level goal is pre-pinned as `Objective:` in JOURNAL. Keep acting
-every turn — the episode ends only when your character dies or you run out of
-calls, never because you stopped, summarized, or declared the run finished."""
+every turn — the episode ends only when your character dies, never because you
+stopped, summarized, or declared the run finished."""
 
 # (required tools, text). A block is emitted only when every tool it names is
 # in the published set, so the advertised surface can never exceed the real one.
@@ -173,8 +173,8 @@ creature. `@` hides the tile under you — read UNDER PLAYER."""
 # how the episode ends.
 _PROMPT_TAIL_MINIMAL = """Explore the environment to find the stairs down to the next level.
 Your goal is to get as far as possible in the game. Keep acting every turn —
-the episode ends only when your character dies or you run out of calls, never
-because you stopped, summarized, or declared the run finished."""
+the episode ends only when your character dies, never because you stopped,
+summarized, or declared the run finished."""
 
 _PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
     ((), _PROMPT_HEAD_MINIMAL),
