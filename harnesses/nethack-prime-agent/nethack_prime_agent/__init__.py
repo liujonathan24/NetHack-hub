@@ -793,10 +793,16 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             if mode == "copy-merge":
                 # A private copy, seeded from canonical. `cp -a .../.` copies the
                 # CONTENTS so an absent canonical store still yields an empty
-                # private one rather than a nested directory.
+                # private one rather than a nested directory -- and an empty
+                # canonical is a rc=0 no-op, so no `|| true` is needed to
+                # tolerate round 1. It must NOT be suppressed: `... || true`
+                # forced the whole script to exit 0, which made the exit-code
+                # check below dead in this mode and let a failed copy hand the
+                # rollout an empty store -- exactly the "the agent learned
+                # nothing" reading the check exists to prevent.
                 script = (
                     f"mkdir -p {shlex.quote(ch)} {shlex.quote(link)} && "
-                    f"cp -a {shlex.quote(ch)}/. {shlex.quote(link)}/ 2>/dev/null || true"
+                    f"cp -a {shlex.quote(ch)}/. {shlex.quote(link)}/"
                 )
             else:
                 script = (

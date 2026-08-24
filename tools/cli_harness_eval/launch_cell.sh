@@ -507,6 +507,12 @@ if [ -n "${CONTINUAL_HARNESS:-}" ]; then
     # persists with a non-atomic whole-file rewrite and no lock.
     OVERRIDES+=(--harness.continual_harness_mode "${CONTINUAL_HARNESS_MODE}")
   fi
+  if [ -n "${CONTINUAL_SELF_EDIT:-}" ]; then
+    # Provisioning a writable store is not instruction: without this block the
+    # player is never told the store exists, and E9 measured exactly one
+    # spontaneous write in 15 rollouts.
+    OVERRIDES+=(--taskset.env_args.continual_self_edit "${CONTINUAL_SELF_EDIT}")
+  fi
   if [ -n "${CONTINUAL_SPEC_SHA:-}" ]; then
     OVERRIDES+=(--taskset.env_args.continual_spec_sha "${CONTINUAL_SPEC_SHA}")
   fi

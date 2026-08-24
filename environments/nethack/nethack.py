@@ -2619,6 +2619,14 @@ def load_environment(
             )
     # E8b mechanic guidance: append system-prompt blocks only (published tool
     # schemas untouched). Default "" leaves every existing arm byte-identical.
+    # E13: ask the player to persist durable lessons into the continual-harness
+    # store. Provisioning a writable store is not instruction -- 1 of E9's 15
+    # control rollouts did it unprompted. Default off => byte-identical.
+    _self_edit = str(kwargs.get("continual_self_edit") or "").strip().lower()
+    if _self_edit not in ("", "false", "0", "no", "off"):
+        from nethack_harness.prompt.self_edit import SELF_EDIT_BLOCK
+        spec = _dc.replace(spec, system_prompt=spec.system_prompt + SELF_EDIT_BLOCK)
+
     _hints = str(kwargs.get("mechanic_hints") or "").strip().lower()
     if _hints:
         from nethack_harness.prompt.human_norms import MECHANIC_HINT_BLOCKS

@@ -847,3 +847,35 @@ def test_an_unknown_continual_harness_mode_is_refused():
             continual_harness_dir="/tmp/vf-prime-agent/continual-harness",
             continual_harness_mode="copy_merge",
         )
+
+
+def test_copy_merge_does_not_swallow_a_failed_copy():
+    """REGRESSION, measured. The script ended `... 2>/dev/null || true`, which
+    forces the whole `mkdir && cp` chain to exit 0 -- so `launch`'s own
+    "could not provision the continual-harness store" check could never fire in
+    this mode, and a rollout whose copy failed booted with an EMPTY store while
+    the cell reported success. `shared-ro` returned rc=1 for the same broken
+    canonical, so the two modes disagreed about whether provisioning can fail.
+
+    `cp -a <empty>/. <dst>/` is already a rc=0 no-op, so nothing about round 1
+    needs the suppression.
+    """
+    import subprocess
+
+    store = "/tmp/vf-prime-agent/continual-harness"
+    runtime = _launch(continual_harness_dir=store, continual_harness_mode="copy-merge")
+    script = next(
+        argv[-1] for argv, _ in runtime.commands if "cp -a" in " ".join(argv)
+    )
+    assert "|| true" not in script, script
+    assert "2>/dev/null" not in script, "the copy's stderr is the only diagnosis"
+
+    # And the script really does report failure when the copy cannot happen.
+    import tempfile, pathlib
+
+    with tempfile.TemporaryDirectory() as tmp:
+        blocked = pathlib.Path(tmp) / "canonical"
+        blocked.write_text("this is a file, not a store directory\n")
+        broken = script.replace(store, str(blocked))
+        rc = subprocess.run(["sh", "-c", broken], capture_output=True).returncode
+        assert rc != 0, "a copy that cannot run must not report success"

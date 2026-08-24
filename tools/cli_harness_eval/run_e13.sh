@@ -84,7 +84,7 @@ if [ -n "$(ls -A "$CH" 2>/dev/null)" ] || [ -f "$MANIFEST" ]; then
   if [ "${RESUME:-}" != "1" ]; then
     echo "run_e13: $RUN has already started (store or manifest present), so this" >&2
     echo "  run would NOT begin from the base set of skills. RESUME=1 to continue," >&2
-    echo "  bump `replicate` in the spec for an independent repeat, or clear" >&2
+    echo "  bump 'replicate' in the spec for an independent repeat, or clear" >&2
     echo "  $CH and $OUT_ROOT." >&2
     exit 3
   fi
@@ -143,6 +143,7 @@ play_round() { # <round>
       CONTINUAL_HARNESS="$CH" CONTINUAL_RUN_ID="$RUN" \
       CONTINUAL_PROMPT_SHA="$PROMPT_SHA" CONTINUAL_SPEC_SHA="$SPEC_SHA" \
       CONTINUAL_HARNESS_MODE="$MODE" \
+      ${PLAYERS_EDIT:+CONTINUAL_SELF_EDIT="$PLAYERS_EDIT"} \
       "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
@@ -151,6 +152,7 @@ play_round() { # <round>
     # players' lessons stay in per-rollout directories and never compound.
     "$PY_BIN" "$REPO/tools/cli_harness_eval/merge_harness_stores.py" \
       --canonical "$CH" --run-dir "$out" --install-dir "$INSTALL_DIR" \
+      --baseline "$out/harness_state.before.json" \
       --report "$OUT_ROOT/round${r}/merge_report.json" | sed 's/^/[merge] /'
   fi
   snapshot after "$out"
