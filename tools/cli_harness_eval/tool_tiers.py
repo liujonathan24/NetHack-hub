@@ -88,7 +88,15 @@ def flags(tier: str, arm: str = "prime_agent", cfg: dict | None = None,
         "--model", contract["model"],
         "--taskset.character", contract["character"],
         "--taskset.task_spec", contract["task_spec"],
+        "--taskset.max_parallel_skill_calls", json.dumps(contract["max_parallel_skill_calls"]),
     ]
+    # Harness-side contract factors: same arm restriction as the tier's own
+    # harness flags -- only the prime_agent harness declares them.
+    if arm in _PRIME_AGENT_ARMS:
+        out += [
+            "--harness.allow_batching", json.dumps(contract["allow_batching"]),
+            "--harness.max_relaunches", json.dumps(contract["max_relaunches"]),
+        ]
     for name, value in cfg[tier].items():
         if name in _HARNESS_SIDE:
             # Silently skipping would give the wrong doc; the launcher refuses

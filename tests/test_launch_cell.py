@@ -379,3 +379,51 @@ def test_seeds_can_be_overridden_and_the_override_is_recorded(tmp_path):
     _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out2"), "200", "5"],
                    {"TOOL_TIER": "base", **_tier_env()})
     assert "--taskset.env_args.seeds_overridden" not in _pairs(argv)
+
+
+def test_batching_cannot_defeat_the_frozen_baseline_document(tmp_path):
+    """The hole adversarial review found: `_skill_doc` hash-checks the FIXTURE,
+    then `allow_batching` strips the no-batch rule from the SERVED bytes -- so a
+    cell labelled tool_tier=base served 4753 bytes where E10 served 4829, with
+    no error. Refused at the launcher, and again in the harness."""
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                        {"TOOL_TIER": "base", "ALLOW_BATCHING": "true", **_tier_env()})
+    assert result.returncode == 2
+    assert argv is None
+    assert "ALLOW_BATCHING" in result.stderr
+
+    import nethack_prime_agent as hp
+    import pathlib
+    import pytest
+
+    pkg = pathlib.Path(hp.__file__).parent / "skill"
+    with pytest.raises(RuntimeError, match="frozen E10 baseline document"):
+        hp._skill_doc(pkg, skill_doc_coords=False, allow_batching=True)
+
+
+def test_the_harness_side_contract_factors_are_pinned(tmp_path):
+    """max_relaunches is called 'ARM SYMMETRY, load-bearing' in prime_agent.toml
+    and is ABSENT from prime_agent_b80.toml, where it defaults to 5 -- so a b80
+    cell claiming [base] silently got five extra chances to finish its budget."""
+    contract = _tier_cfg()["contract"]
+    for arm in ("prime_agent", "prime_agent_b80"):
+        _, argv = _run(tmp_path, [arm, str(tmp_path / arm), "200", "5"],
+                       {"TOOL_TIER": "base", **_tier_env()})
+        got = _pairs(argv)
+        assert json.loads(got["--harness.max_relaunches"]) == contract["max_relaunches"]
+        assert json.loads(got["--harness.allow_batching"]) == contract["allow_batching"]
+        assert json.loads(got["--taskset.max_parallel_skill_calls"]) == \
+            contract["max_parallel_skill_calls"]
+
+
+def test_a_seed_count_that_contradicts_the_contract_is_refused(tmp_path):
+    """`MAX_CALLS` got a contradiction check and `N` did not, so `... 200 1`
+    produced a 1-seed cell labelled base."""
+    result, _ = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "1"],
+                     {"TOOL_TIER": "base", **_tier_env()})
+    assert result.returncode == 2 and "seeds" in result.stderr
+
+    # A preflight mock play is allowed to be short, and says so in the artifact.
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "pf"), "3", "1"],
+                   {"TOOL_TIER": "base", "TIER_SHORT_BUDGET": "1", **_tier_env()})
+    assert _pairs(argv)["--taskset.env_args.tier_short_budget"] == "true"

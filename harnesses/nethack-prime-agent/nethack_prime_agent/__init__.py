@@ -124,8 +124,9 @@ def _strip_no_batch_rule(data: bytes) -> bytes:
 
 # The coordinate-frame note aee5c43 added to SKILL.md, and the baseline wording
 # it replaced. `skill_doc_coords` OFF (the default) must serve the E10-baseline
-# doc BYTE-FOR-BYTE, so the strip substitutes the original sentence back rather
-# than merely deleting the note. Same tool_flags family as netplay_telemetry /
+# doc BYTE-FOR-BYTE. That is now done by serving the frozen `SKILL.baseline.md`
+# wholesale (see `_skill_doc`); the sentence-substitution below is superseded
+# and kept only so an old caller gets the same result. Same tool_flags family as netplay_telemetry /
 # melee_hints, but consumed HERE: the doc is materialized by the harness
 # process, which never imports the env-side flag registry -- so it is a harness
 # config field, set by the same tier that sets the env flags.
@@ -189,6 +190,17 @@ def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> byte
     else:
         data = (package / "SKILL.md").read_bytes()
     if allow_batching:
+        if not skill_doc_coords:
+            # The hash check above verifies the FIXTURE; stripping afterwards
+            # changes the SERVED bytes, so a [base] cell was serving 4753 bytes
+            # where E10 served 4829 and nothing fired. The launcher refuses the
+            # combination; this refuses it again for any other caller.
+            raise RuntimeError(
+                "allow_batching=True with skill_doc_coords=False would strip the "
+                "no-batch rule out of the frozen E10 baseline document, so the "
+                "bytes served would not be the bytes E10 served. A batching cell "
+                "is a different experiment: run it on its own tier."
+            )
         data = _strip_no_batch_rule(data)
     return data
 

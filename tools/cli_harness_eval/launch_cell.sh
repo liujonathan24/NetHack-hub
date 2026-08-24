@@ -233,7 +233,7 @@ if [ -n "${ENV_ARGS:-}" ]; then
   # ("Input should be a valid dictionary"). Dotted paths are also what the
   # existing SKILL_SET override uses, so both go through the same mechanism and
   # merge into the config's table instead of replacing it.
-  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$(dirname "${EVAL_BIN}")/python" - <<'PYFLAT'
+  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$PY_BIN" - <<'PYFLAT'
 import json, os
 def walk(prefix, node):
     for k, v in node.items():
@@ -413,6 +413,25 @@ if [ -n "${TOOL_TIER:-}" ]; then
   # config match the tier, does the surface come up) rather than producing a
   # measurable cell. It records the fact in the artifact so a short cell can
   # never be mistaken for a real one.
+  # ALLOW_BATCHING is not a free knob under a tier: it strips the no-batch rule
+  # from the served document AFTER the frozen-doc hash check, so a [base] cell
+  # would serve a document the E10 baseline never served, and nothing would
+  # fire. The contract pins it; a contradicting env var is refused.
+  if [ -n "${ALLOW_BATCHING:-}" ]; then
+    echo "launch_cell: ALLOW_BATCHING contradicts the tier contract" >&2
+    echo "  (allow_batching is pinned by configs/tool_tiers.toml). A batching" >&2
+    echo "  cell is a different experiment -- give it its own tier." >&2
+    exit 2
+  fi
+  # The seed list is the contract's; running fewer rows than it names is a
+  # SUBSET, which is fine for a mock play and misleading for anything else.
+  _TIER_NSEEDS="$(printf '%s' "$_TIER_SEEDS" | "$PY_BIN" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  if [ -z "${SEEDS:-}" ] && [ "${TIER_SHORT_BUDGET:-}" != "1" ] && [ "${N}" != "${_TIER_NSEEDS}" ]; then
+    echo "launch_cell: N=${N} but the tier contract names ${_TIER_NSEEDS} seeds." >&2
+    echo "  Pass SEEDS to run a different set deliberately, or TIER_SHORT_BUDGET=1" >&2
+    echo "  for a preflight mock play." >&2
+    exit 2
+  fi
   if [ "${TIER_SHORT_BUDGET:-}" = "1" ]; then
     OVERRIDES+=(--taskset.env_args.tier_short_budget "true")
   elif [ "${MAX_CALLS}" != "${_TIER_CALLS}" ]; then
