@@ -361,8 +361,13 @@ def test_the_prompt_is_passed_after_an_option_terminator():
     runtime = _launch()
     argv, _ = runtime.programs[0]
     assert argv[-2:] == ["--", "Play NetHack."]
-    assert argv[argv.index("--append-system-prompt") + 1] == "You are a Valkyrie."
     assert "--no-session" in argv and "--print" in argv
+    # `--append-system-prompt` was REMOVED on 2026-08-21 (see the de-dup note in
+    # __init__.py): AGENTS.md already carries the resolved system prompt and
+    # Prime Agent embeds it as Project Context, so passing both delivered the
+    # gameplay block twice. This asserts the flag stays gone -- re-adding it
+    # silently doubles the prompt, which is what the v3 seed-2 post-mortem found.
+    assert "--append-system-prompt" not in argv
 
 
 def test_pythonpath_is_unset_before_the_agent_starts():
@@ -571,14 +576,23 @@ def test_strip_removes_the_rule_and_leaves_the_rest_intact():
     from nethack_prime_agent import _strip_no_batch_rule
 
     raw = (resources.files(pkg) / "skill" / "SKILL.md").read_bytes()
-    assert b"Do not batch" in raw, "fixture assumption: the rule ships in SKILL.md"
+    # Assert against the CONSTANT, not a hardcoded phrase. This test duplicated
+    # the wording ("Do not batch"), so when the honesty pass reworded the rule
+    # both the constant and this fixture went stale together -- and the red test
+    # was read as pre-existing noise rather than as "allow_batching now raises".
+    rule = pkg._NO_BATCH_RULE
+    assert rule in raw.decode(), "fixture assumption: the rule ships in SKILL.md"
 
     out = _strip_no_batch_rule(raw)
-    assert b"Do not batch" not in out
+    assert rule not in out.decode()
     # Everything else the agent needs must survive — this file is its only
     # instruction sheet.
-    for keep in (b"Every tool is `async`", b"hard budget of skill calls",
-                 b"McpToolError", b"=== MAP ==="):
+    # Re-anchored 2026-08-23: the honesty pass rewrote SKILL.md and these three
+    # phrases went with it, so this guard had been asserting against a document
+    # that no longer existed. Anchors below are lines the current doc actually
+    # carries; keep them in sync with the doc, not with memory of it.
+    for keep in (b"Every tool is **async**", b"await nethack.request_map()",
+                 b"np_melee_attack", b"=== MAP ==="):
         assert keep in out, f"stripping removed unrelated guidance: {keep!r}"
 
 

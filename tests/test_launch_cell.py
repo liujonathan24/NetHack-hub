@@ -155,3 +155,136 @@ def test_missing_eval_binary_fails_loudly(tmp_path):
     )
     assert result.returncode == 2
     assert "eval binary not found" in result.stderr
+
+
+# -- TOOL_TIER: what the launcher ACTUALLY emits -----------------------------
+#
+# The previous pin for this was a substring test over the two files' text. It
+# could not detect: the human branch emitting `false`, the tier values being
+# swapped in the TOML, the harness flag being rerouted to `--taskset.env_args.*`
+# (a documented no-op), or the entire TOOL_TIER block being deleted. All four
+# mutations passed it. These tests run the launcher and read its argv, so a
+# mapping that does not reach the eval CLI cannot pass.
+
+import tomllib
+
+TIERS = REPO / "tools/cli_harness_eval/configs/tool_tiers.toml"
+
+
+def _tier_cfg():
+    return tomllib.load(open(TIERS, "rb"))
+
+
+def _tier_env():
+    """The launcher resolves its Python as EVAL_BIN's sibling `./python`, which
+    in production is the venv interpreter. The stub EVAL_BIN has no sibling, so
+    PY_BIN would fall back to the system python3 -- 3.10 here, no tomllib. Point
+    it at the interpreter running the tests, which is the same venv."""
+    import sys
+    return {"PY_BIN": sys.executable}
+
+
+def _pairs(argv):
+    """argv as {flag: value} -- every override is emitted as two elements."""
+    return {argv[i]: argv[i + 1] for i in range(len(argv) - 1) if argv[i].startswith("--")}
+
+
+def test_tool_tier_base_emits_the_e10_contract_not_nothing(tmp_path):
+    """`TOOL_TIER=base` used to expand to nothing, so a cell claiming the E10
+    baseline inherited configs/prime_agent.toml: netplay_true instead of
+    np_core, B0 instead of BBOX_MIN, 150 calls, 16 seeds. Wrong on four factors
+    while calling itself the baseline."""
+    contract = _tier_cfg()["contract"]
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                        {"TOOL_TIER": "base", **_tier_env()})
+    assert argv is not None, result.stderr
+    got = _pairs(argv)
+    assert got["--taskset.env_args.skill_set"] == contract["skill_set"]
+    assert got["--taskset.env_args.auto_dismiss"] == contract["auto_dismiss"]
+    assert float(got["--taskset.env_args.tune.reveal_map"]) == contract["tune"]["reveal_map"]
+    assert got["--taskset.variant"] == contract["variant"]
+    assert json.loads(got["--taskset.env_args.explicit_seeds"]) == contract["seeds"]
+
+
+def test_tool_tier_base_is_not_a_no_op(tmp_path):
+    """The regression that made the tier meaningless: `base` produced argv
+    byte-identical to leaving TOOL_TIER unset."""
+    _, with_tier = _run(tmp_path, ["prime_agent", str(tmp_path / "a"), "200", "5"],
+                        {"TOOL_TIER": "base", **_tier_env()})
+    _, without = _run(tmp_path, ["prime_agent", str(tmp_path / "b"), "200", "5"])
+    assert with_tier != without
+
+
+def test_each_tier_emits_its_own_flag_values(tmp_path):
+    """Reads the expected values FROM the TOML, so swapping [base] and [human]
+    in the registry flips what these assertions require -- the mutation the old
+    substring test could not see."""
+    cfg = _tier_cfg()
+    for tier in ("base", "human"):
+        _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / tier), "200", "5"],
+                       {"TOOL_TIER": tier, **_tier_env()})
+        got = _pairs(argv)
+        for flag, value in cfg[tier].items():
+            key = ("--harness." if flag == "skill_doc_coords"
+                   else "--taskset.env_args.") + flag
+            assert key in got, f"{tier}: {flag} never reached the CLI"
+            assert json.loads(got[key]) is value, f"{tier}: {flag} emitted {got[key]}"
+
+
+def test_the_harness_side_flag_is_not_rerouted_to_env_args(tmp_path):
+    """`skill_doc_coords` is consumed by the harness process, which never
+    imports the env flag registry -- sending it through env_args is a
+    documented no-op, i.e. a silently wrong doc."""
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                   {"TOOL_TIER": "human", **_tier_env()})
+    assert "--harness.skill_doc_coords" in argv
+    assert "--taskset.env_args.skill_doc_coords" not in argv
+
+
+def test_the_tier_records_its_own_provenance(tmp_path):
+    """A result has to be replayable from its output config.toml alone."""
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                   {"TOOL_TIER": "base", **_tier_env()})
+    got = _pairs(argv)
+    assert got["--taskset.env_args.tool_tier"] == "base"
+    assert len(got["--taskset.env_args.tool_tier_hash"]) == 16
+    assert got["--taskset.env_args.tool_tier_commit"]
+
+
+def test_tool_tier_refuses_to_be_combined_with_env_args(tmp_path):
+    """Both write the same dotted paths and the CLI resolves duplicates
+    last-wins silently: ENV_ARGS='{"netplay_telemetry":true}' with TOOL_TIER=base
+    produced a cell labelled base running a human-tier fix."""
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                        {"TOOL_TIER": "base", "ENV_ARGS": '{"netplay_telemetry":true}', **_tier_env()})
+    assert result.returncode == 2
+    assert argv is None, "the eval binary must not have been reached"
+    assert "cannot be combined" in result.stderr
+
+
+def test_tool_tier_is_refused_on_arms_whose_harness_lacks_the_field(tmp_path):
+    """HarnessConfig is extra='forbid' and only the prime_agent harness declares
+    skill_doc_coords, so this was a raw pydantic ValidationError before."""
+    result, _ = _run(tmp_path, ["claude_code", str(tmp_path / "out"), "200", "5"],
+                     {"TOOL_TIER": "human", **_tier_env()})
+    assert result.returncode == 2
+    assert "prime_agent" in result.stderr
+
+
+def test_a_contradicting_variant_or_budget_is_refused(tmp_path):
+    """The contract owns the encoding and the budget; the reference numbers
+    describe them. A caller passing different ones is running a different
+    experiment."""
+    result, _ = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                     {"TOOL_TIER": "base", "VARIANT": "B0", **_tier_env()})
+    assert result.returncode == 2 and "contradicts the tier contract" in result.stderr
+
+    result, _ = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "150", "5"],
+                     {"TOOL_TIER": "base", **_tier_env()})
+    assert result.returncode == 2 and "MAX_CALLS" in result.stderr
+
+
+def test_an_unknown_tier_is_refused(tmp_path):
+    result, _ = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "200", "5"],
+                     {"TOOL_TIER": "continual+human", **_tier_env()})
+    assert result.returncode != 0

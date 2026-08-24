@@ -10,6 +10,8 @@ actually changing the behaviour it names.
 """
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from nethack_harness import tool_flags
@@ -188,14 +190,213 @@ def test_skill_doc_strip_fails_loudly_when_the_note_drifts():
         hp._restore_baseline_coord_note(b"# NetHack\nsome other doc\n")
 
 
-def test_launcher_tier_mapping_matches_tool_tiers_toml():
-    """launch_cell.sh duplicates the [human] mapping on purpose (no TOML
-    parsing in bash); this is the pin that keeps the two in sync."""
-    import pathlib
-    root = pathlib.Path(__file__).resolve().parents[3]
-    tiers = (root / "tools/cli_harness_eval/configs/tool_tiers.toml").read_text()
-    launcher = (root / "tools/cli_harness_eval/launch_cell.sh").read_text()
+def test_the_launcher_mapping_is_pinned_elsewhere_and_why():
+    """The launcher no longer duplicates the tier mapping, so there is nothing
+    here to keep in sync.
+
+    The old test grepped both files for flag NAMES. It passed when the human
+    branch emitted `false`, when [base]/[human] were swapped in the TOML, when
+    the harness flag was rerouted to a documented no-op path, and when the
+    entire TOOL_TIER block was deleted -- four mutations, four passes. The
+    mapping now lives only in tools/cli_harness_eval/tool_tiers.py, which
+    launch_cell.sh calls, and it is pinned by tests that RUN the launcher and
+    read its argv: see tests/test_launch_cell.py::test_each_tier_emits_its_own_
+    flag_values and friends.
+    """
+    launcher = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "tools/cli_harness_eval/launch_cell.sh"
+    ).read_text()
+    # Prose is fine (the refusal messages name the flags); an EMISSION is the
+    # duplication. Strip comments and echoes, then look for the flag names.
+    code = "\n".join(
+        line for line in launcher.splitlines()
+        if not line.lstrip().startswith("#") and "echo " not in line
+    )
     for flag in ("netplay_telemetry", "melee_hints", "skill_doc_coords"):
-        assert f"{flag} = true" in tiers          # [human] section lists it
-        assert f"{flag} = false" in tiers         # [base] section lists it
-        assert flag in launcher                   # launcher expands it
+        assert flag not in code, (
+            f"{flag} is emitted by the launcher again -- the duplication that "
+            "the substring pin could not police. Keep the mapping in the registry."
+        )
+
+def test_the_baseline_skill_doc_is_byte_identical_to_what_e10_served():
+    """The load-bearing claim. Previously nothing pinned it: the assertion was
+    `_COORD_FRAME_BASELINE in served`, trivially true for any value of that
+    constant, and a substring check rather than a byte comparison. Now the
+    baseline doc is a frozen FILE and this is its hash -- so an edit anywhere in
+    it, not just in the coordinate note, fails."""
+    import hashlib
+    import pathlib
+
+    import nethack_prime_agent as hp
+
+    pkg = pathlib.Path(hp.__file__).parent / "skill"
+    served = hp._skill_doc(pkg, skill_doc_coords=False, allow_batching=False)
+    # `git show aee5c43^:harnesses/.../skill/SKILL.md` -- the exact bytes every
+    # rollout in outputs/e10_baseline/ was served.
+    assert hashlib.sha256(served).hexdigest() == (
+        "8585082860c747238468c4c91330524104b21844568bc4603bd3f471fbfa4864"
+    )
+    assert len(served) == 4829
+
+
+def test_the_human_tier_serves_the_annotated_doc():
+    import pathlib
+
+    import nethack_prime_agent as hp
+
+    pkg = pathlib.Path(hp.__file__).parent / "skill"
+    on = hp._skill_doc(pkg, skill_doc_coords=True, allow_batching=False)
+    off = hp._skill_doc(pkg, skill_doc_coords=False, allow_batching=False)
+    assert on != off
+    assert b"Do\nNOT count rows from the raw terminal screen" in on
+    assert b"NOT count rows from the raw terminal screen" not in off
+
+
+def test_editing_the_frozen_baseline_doc_fails_the_run(tmp_path):
+    """The fixture IS the definition of [base]; a silent edit would redefine
+    every baseline cell."""
+    import pathlib
+    import shutil
+
+    import nethack_prime_agent as hp
+    import pytest
+
+    real = pathlib.Path(hp.__file__).parent / "skill"
+    fake = tmp_path / "skill"
+    shutil.copytree(real, fake)
+    (fake / "SKILL.baseline.md").write_bytes(b"# not the baseline\n")
+    with pytest.raises(RuntimeError, match="has been edited"):
+        hp._skill_doc(fake, skill_doc_coords=False, allow_batching=False)
+
+
+def test_the_harness_flag_defaults_off():
+    """Neutering check: flipping this default made [base] cells serve the
+    annotated doc, and every existing test still passed."""
+    from nethack_prime_agent import PrimeAgentHarnessConfig
+
+    assert PrimeAgentHarnessConfig(id="x").skill_doc_coords is False
+
+
+def test_allow_batching_still_works_on_both_tier_documents():
+    """`_NO_BATCH_RULE` went stale when the honesty pass rewrote SKILL.md, so
+    allow_batching=True raised RuntimeError -- the feature was dead on both
+    documents and only a red test recorded it."""
+    import pathlib
+
+    import nethack_prime_agent as hp
+
+    pkg = pathlib.Path(hp.__file__).parent / "skill"
+    for coords in (False, True):
+        plain = hp._skill_doc(pkg, skill_doc_coords=coords, allow_batching=False)
+        batched = hp._skill_doc(pkg, skill_doc_coords=coords, allow_batching=True)
+        assert hp._NO_BATCH_RULE in plain.decode()
+        assert hp._NO_BATCH_RULE not in batched.decode()
+        assert len(batched) < len(plain)
+
+
+def _lost_track_agent():
+    """Minimal agent that drives melee_attack to the `not found` branch: the
+    target is present at (x,y), one reachable neighbour exists, the step lands
+    on it, and the monster is then gone from (x,y) and every neighbour."""
+    class _Blstats:
+        x, y = 4, 4
+
+    class _Level:
+        def __init__(self):
+            self.calls = 0
+
+        def get_monster_glyph(self, x, y):
+            # Present for the initial lookup, gone from every later query.
+            self.calls += 1
+            return 42 if self.calls == 1 else None
+
+        def get_neighbors(self, x, y):
+            return [(4, 4)]
+
+        def get_monsters(self):
+            return []
+
+    class _Agent:
+        blstats = _Blstats()
+
+        def __init__(self):
+            self.current_level = _Level()
+
+        def get_path_to(self, x, y, **kw):
+            return [(x, y)]
+
+        def distance_to(self, x, y, **kw):
+            return 0
+
+        def step(self, action, **kw):
+            from netplay.core.agent_base import Step, StepStatus, ThoughtType
+            # `running` has no classmethod factory; construct it directly so the
+            # driver keeps pulling the generator.
+            return Step(status=StepStatus.running, thoughts="stepped",
+                        thought_type=ThoughtType.System, step_data=None)
+
+        def waiting_for_popup(self):
+            # melee_attack is wrapped in @fail_on_popup, which probes this
+            # before and after every yielded step.
+            return False
+
+    return _Agent()
+
+
+def _drive_lost_track(monkeypatch):
+    """Run melee_attack to the `not found` branch and return the last Step.
+
+    `get_move_towards_action` is stubbed to a non-WAIT sentinel so the skill
+    takes the "walk toward the target" path rather than the adjacent-kill path;
+    real pathfinding is not what these two tests are about.
+    """
+    from netplay.nethack_agent import skills
+
+    monkeypatch.setattr(skills, "get_move_towards_action",
+                        lambda *a, **k: "MOVE_SENTINEL")
+    agent = _lost_track_agent()
+    last = None
+    for step in skills.melee_attack(agent, 5, 4):
+        last = step
+    return last
+
+
+def test_lost_track_message_is_bare_when_melee_hints_is_off(monkeypatch):
+    """The one ungated hunk in c1a0bec. `_melee_target_report` self-gates its
+    BODY, and this path concatenated the result unconditionally -- so [base]
+    emitted `Lost track of the target. Unable to reach the target at (x, y).`
+    where the baseline emitted `Lost track of the target`, including a
+    coordinate the baseline never printed here. Drives the real generator, so
+    replacing the gate with `if True` fails this."""
+    step = _drive_lost_track(monkeypatch)
+    assert step is not None
+    assert "Lost track of the target" in str(step.thoughts)
+    assert "Unable to reach" not in str(step.thoughts), (
+        "the stale-target suffix leaked into a [base] cell"
+    )
+
+
+def test_lost_track_message_carries_the_report_when_melee_hints_is_on(monkeypatch):
+    tool_flags.configure(melee_hints=True)
+    step = _drive_lost_track(monkeypatch)
+    assert "Lost track of the target." in str(step.thoughts)
+    assert "Unable to reach" in str(step.thoughts)
+
+def test_load_environment_wires_env_args_into_the_flag_registry():
+    """Structural pin: replacing `configure(**kwargs)` with `pass` left all 694
+    tests passing, i.e. nothing proved a cell could turn a flag on at all.
+
+    A full `load_environment` call needs the engine, so this asserts the call
+    survives in the source of the function that receives the cell's env_args.
+    Crude, but it fails on the exact neuter that nothing else caught."""
+    import inspect
+
+    import nethack
+
+    src = inspect.getsource(nethack.load_environment)
+    assert "tool_flags" in src, "load_environment no longer imports the flag registry"
+    assert "configure(**kwargs)" in src, (
+        "load_environment no longer passes the cell's env_args to the flag "
+        "registry -- every flag would be stuck at its default"
+    )
