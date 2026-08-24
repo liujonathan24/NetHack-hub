@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "entries": {
+    "prompt": {
+      "prioritize_descent_over_exploration": {
+        "id": "prioritize_descent_over_exploration",
+        "kind": "prompt",
+        "title": "Prioritize descent over exploration",
+        "content": "Find stairs FAST: request_map → np_move_to('>') → np_press_key('>'). Don't explore every room or grab every item. Budget is limited — spend on descent, not looting.",
+        "path": "policy",
+        "scope": "global",
+        "reference": {},
+        "arguments": {},
+        "metadata": {},
+        "source": "agent",
+        "created_at": "2026-08-24T07:31:23.762181+00:00",
+        "updated_at": "2026-08-24T07:31:23.762186+00:00",
+        "version": 1
+      }
+    },
+    "memory": {
+      "vault_guard_mechanic": {
+        "id": "vault_guard_mechanic",
+        "kind": "memory",
+        "title": "Vault guard mechanic",
+        "content": "Vault guard asks name: type 1-2 letters + ENTER. Then d + $ to drop gold, follow guard out. NEVER re-pick gold — guard turns hostile and kills you.",
+        "path": "general",
+        "scope": "global",
+        "reference": {},
+        "arguments": {},
+        "metadata": {},
+        "source": "agent",
+        "created_at": "2026-08-24T07:31:23.759977+00:00",
+        "updated_at": "2026-08-24T07:31:23.759982+00:00",
+        "version": 1
+      },
+      "explore_level_near_peaceful_npcs": {
+        "id": "explore_level_near_peaceful_npcs",
+        "kind": "memory",
+        "title": "explore_level near peaceful NPCs",
+        "content": "np_explore_level paths through guards/peaceful NPCs, triggering 'Really attack?' prompt loops. Use np_move_to to walk away from them FIRST, then explore.",
+        "path": "general",
+        "scope": "global",
+        "reference": {},
+        "arguments": {},
+        "metadata": {},
+        "source": "agent",
+        "created_at": "2026-08-24T07:31:23.760387+00:00",
+        "updated_at": "2026-08-24T07:31:23.760392+00:00",
+        "version": 1
+      },
+      "answer_prompts_don_t_repeat_skills": {
+        "id": "answer_prompts_don_t_repeat_skills",
+        "kind": "memory",
+        "title": "Answer prompts, don't repeat skills",
+        "content": "When a prompt/menu is open the game is FROZEN. Answer ONLY with np_press_key. Re-calling explore or move re-triggers the same prompt — pure waste.",
+        "path": "general",
+        "scope": "global",
+        "reference": {},
+        "arguments": {},
+        "metadata": {},
+        "source": "agent",
+        "created_at": "2026-08-24T07:31:23.760639+00:00",
+        "updated_at": "2026-08-24T07:31:23.760642+00:00",
+        "version": 1
+      }
+    },
+    "skill": {
+      "descend_one_level": {
+        "id": "descend_one_level",
+        "kind": "skill",
+        "title": "Descend one level",
+        "content": "Standard descent: request_map to find '>', np_move_to to stairs tile, np_press_key('>'). If move_to fails on closed door, np_kick it first.",
+        "path": "general",
+        "scope": "global",
+        "reference": {
+          "type": "python",
+          "import": "nethack",
+          "call_pattern": "await nethack.np_press_key(key='>')"
+        },
+        "arguments": {},
+        "metadata": {},
+        "source": "agent",
+        "created_at": "2026-08-24T07:31:23.763443+00:00",
+        "updated_at": "2026-08-24T07:31:23.763447+00:00",
+        "version": 1
+      }
+    },
+    "subagent": {}
+  },
+  "refinements": []
+}

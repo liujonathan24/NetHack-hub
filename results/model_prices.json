@@ -24,20 +24,10 @@
     "input_per_million": 0.04,
     "output_per_million": 0.08
   },
-  "Qwen/Qwen3.5-122B-A10B": {
-    "cached_input_per_million": 0.3,
-    "input_per_million": 0.3,
-    "output_per_million": 0.9
-  },
   "Qwen/Qwen3.5-2B": {
     "cached_input_per_million": 0.06,
     "input_per_million": 0.06,
     "output_per_million": 0.18
-  },
-  "Qwen/Qwen3.5-35B-A3B:gme6etj7zzg9epje3rv8lxmo": {
-    "cached_input_per_million": 0.1,
-    "input_per_million": 0.1,
-    "output_per_million": 0.2
   },
   "Qwen/Qwen3.5-4B": {
     "cached_input_per_million": 0.1,
@@ -144,6 +134,11 @@
     "input_per_million": 0.14,
     "output_per_million": 0.28
   },
+  "deepseek/deepseek-v4-flash-0731": {
+    "cached_input_per_million": 0.14,
+    "input_per_million": 0.14,
+    "output_per_million": 0.28
+  },
   "deepseek/deepseek-v4-pro": {
     "cached_input_per_million": 2.1,
     "input_per_million": 2.1,
@@ -234,20 +229,10 @@
     "input_per_million": 0.1,
     "output_per_million": 0.25
   },
-  "mistralai/mistral-small-24b-instruct-2501": {
-    "cached_input_per_million": 0.8,
-    "input_per_million": 0.8,
-    "output_per_million": 0.8
-  },
   "mistralai/mistral-small-2603": {
     "cached_input_per_million": 0.1875,
     "input_per_million": 0.1875,
     "output_per_million": 0.75
-  },
-  "mistralai/mistral-small-3.2-24b-instruct": {
-    "cached_input_per_million": 0.2,
-    "input_per_million": 0.2,
-    "output_per_million": 0.5
   },
   "mistralai/mixtral-8x22b-instruct": {
     "cached_input_per_million": 2.0,
@@ -278,21 +263,6 @@
     "cached_input_per_million": 3.0,
     "input_per_million": 3.0,
     "output_per_million": 15.0
-  },
-  "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16": {
-    "cached_input_per_million": 0.1,
-    "input_per_million": 0.1,
-    "output_per_million": 0.3
-  },
-  "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16": {
-    "cached_input_per_million": 0.35,
-    "input_per_million": 0.35,
-    "output_per_million": 1.05
-  },
-  "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B": {
-    "cached_input_per_million": 1.0,
-    "input_per_million": 1.0,
-    "output_per_million": 2.5
   },
   "nvidia/nemotron-3-nano-30b-a3b": {
     "cached_input_per_million": 0.05,
@@ -439,6 +409,16 @@
     "input_per_million": 0.07,
     "output_per_million": 0.3
   },
+  "poolside/laguna-s-2.1": {
+    "cached_input_per_million": 0.1,
+    "input_per_million": 0.1,
+    "output_per_million": 0.19
+  },
+  "poolside/laguna-xs-2.1": {
+    "cached_input_per_million": 0.065,
+    "input_per_million": 0.065,
+    "output_per_million": 0.13
+  },
   "qwen/qwen3-235b-a22b-2507": {
     "cached_input_per_million": 0.22,
     "input_per_million": 0.22,
@@ -505,14 +485,19 @@
     "output_per_million": 3.6
   },
   "qwen/qwen3.6-35b-a3b": {
-    "cached_input_per_million": 0.23,
-    "input_per_million": 0.23,
+    "cached_input_per_million": 0.3,
+    "input_per_million": 0.3,
     "output_per_million": 1.8
   },
   "qwen/qwen3.7-flash": {
     "cached_input_per_million": 0.03,
     "input_per_million": 0.03,
     "output_per_million": 0.13
+  },
+  "qwen/qwen3.8-max": {
+    "cached_input_per_million": 2.0,
+    "input_per_million": 2.0,
+    "output_per_million": 6.0
   },
   "x-ai/grok-4.20": {
     "cached_input_per_million": 2.0,
@@ -573,6 +558,11 @@
     "cached_input_per_million": 1.68,
     "input_per_million": 1.68,
     "output_per_million": 5.28
+  },
+  "z-ai/glm-5.3": {
+    "cached_input_per_million": 1.4,
+    "input_per_million": 1.4,
+    "output_per_million": 4.4
   },
   "zai-org/GLM-4.7": {
     "cached_input_per_million": 0.6,

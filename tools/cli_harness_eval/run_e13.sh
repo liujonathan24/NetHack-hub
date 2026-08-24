@@ -158,6 +158,18 @@ play_round() { # <round>
   snapshot after "$out"
 }
 
+# MANDATORY PROTOCOL. No paid round starts until a mock play on this tier has
+# read back clean. SKIP_PREFLIGHT=1 is for a rerun in the same session on an
+# unchanged tree -- not for "I am fairly sure it is fine". Note the first
+# preflight of a NEW experiment also pays the one-time kernel-venv build for its
+# install_dir (~10 minutes, measured), which is exactly the cost you want to hit
+# on a 3-call mock rather than on round 1.
+if [ "${SKIP_PREFLIGHT:-}" != "1" ]; then
+  echo "[pre  ] $(date -u +%H:%M:%S) preflight $TIER"
+  INSTALL_DIR="$INSTALL_DIR" "$REPO/tools/cli_harness_eval/preflight_cell.sh" "$TIER" \
+    || { echo "run_e13: preflight failed -- batch not launched." >&2; exit 7; }
+fi
+
 for r in $(seq 1 "$ROUNDS"); do
   echo "[round] $(date -u +%H:%M:%S) === $RUN round $r/$ROUNDS ==="
   if [ "${RESUME:-}" = "1" ] && [ -f "$OUT_ROOT/round${r}/corpus__prime_agent/traces.jsonl" ]; then

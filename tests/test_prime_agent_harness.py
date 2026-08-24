@@ -879,3 +879,49 @@ def test_copy_merge_does_not_swallow_a_failed_copy():
         broken = script.replace(store, str(blocked))
         rc = subprocess.run(["sh", "-c", broken], capture_output=True).returncode
         assert rc != 0, "a copy that cannot run must not report success"
+
+
+# -- what the arm declares vs what it inherits -------------------------------
+#
+# An audit of the launch found three capabilities taking undeclared scaffold
+# defaults. Each is pinned here so a scaffold upgrade cannot move it silently.
+
+
+def test_auto_refine_is_written_into_settings_not_inherited():
+    """`autoRefine` defaults to ENABLED in the scaffold and is undocumented in
+    settings.md. It is inert under `--no-session` only by accident: the gate
+    needs a local session dir, and the host mints an ephemeral one on the PARENT
+    the first time a player calls `rlm(...)` -- so an arm would change behaviour
+    mid-run because the model happened to spawn a sub-agent, spending two
+    out-of-band model calls per fire on the eval's interception endpoint."""
+    runtime = _launch()
+    settings = json.loads(runtime.files["/tmp/vf-prime-agent/agent-trace-abc/settings.json"])
+    assert settings["autoRefine"] == {"enabled": False}
+
+    runtime = _launch(auto_refine=True)
+    settings = json.loads(runtime.files["/tmp/vf-prime-agent/agent-trace-abc/settings.json"])
+    assert settings["autoRefine"] == {"enabled": True}
+
+
+def test_the_recursion_depth_is_declared_in_the_launch_env():
+    """There is no CLI flag and no settings key for depth, so this env var is
+    the only record of what the arm ran with."""
+    runtime = _launch()
+    _, env = runtime.programs[0]
+    assert env["RLM_MAX_DEPTH"] == "1"
+    runtime = _launch(rlm_max_depth=2)
+    _, env = runtime.programs[0]
+    assert env["RLM_MAX_DEPTH"] == "2"
+
+
+def test_an_unset_thinking_level_is_recorded_as_a_known_unknown():
+    """The docstring claimed the scaffold default was `xhigh`; the shipped 0.3.3
+    bundle says `medium`. This pins the FLAG behaviour (absent when unset, passed
+    when set) so the arm's reasoning effort is at least visible in argv."""
+    runtime = _launch()
+    argv, _ = runtime.programs[0]
+    assert "--thinking" not in argv
+
+    runtime = _launch(thinking="xhigh")
+    argv, _ = runtime.programs[0]
+    assert argv[argv.index("--thinking") + 1] == "xhigh"

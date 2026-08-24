@@ -230,7 +230,15 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     based cluster may not carry either."""
 
     thinking: str = ""
-    """`--thinking` level. Empty leaves Prime Agent's default (`xhigh`)."""
+    """`--thinking` level.
+
+    CORRECTED 2026-08-24: this said "Empty leaves Prime Agent's default
+    (`xhigh`)". The shipped 0.3.3 bundle says otherwise --
+    `DEFAULT_THINKING_LEVEL = "medium"` -- so every cell that left this empty has
+    been running at MEDIUM reasoning effort while the docstring (and
+    docs/settings.md) claimed xhigh. Reasoning effort is not a free variable in a
+    controlled comparison: pin it per arm rather than inheriting an undeclared
+    default that a scaffold upgrade can move."""
 
     websearch: bool = False
     """Load Prime Agent's bundled `websearch` skill. Off by default: the control
@@ -271,6 +279,26 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     asks for one, or from an orchestrator process pointed at the same directory
     between cells. That is a feature for an experiment: every write is deliberate
     and attributable, not a background process editing the arm mid-cell."""
+
+    rlm_max_depth: int = 1
+    """Recursion depth for `rlm(...)` sub-agents, written into the launch env.
+
+    1 = the root player may spawn children; children may not spawn
+    grandchildren. That is the scaffold default, but there is no CLI flag and no
+    settings key for it, so inheriting it leaves no record of what the arm
+    actually ran with."""
+
+    auto_refine: bool = False
+    """Prime Agent's automatic trajectory review (`autoRefine`).
+
+    Default OFF and always written into settings.json explicitly, because the
+    scaffold's own default is ON and only inert by accident under `--no-session`
+    (see the settings block in `launch`). Turning it on is a deliberate arm
+    choice with two consequences worth stating: it costs two extra model calls
+    per fire on the interception endpoint, unattributed to the rollout; and its
+    edits are LOCAL-scope, landing in the session artifact dir rather than the
+    shared continual store, so they are discarded unless something harvests
+    them."""
 
     continual_harness_mode: str = "shared-ro"
     """How the shared continual-harness store reaches a rollout.
@@ -743,6 +771,19 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         }
         settings = {
             "onboardingShown": True,
+            # PINNED, not inherited. `autoRefine` defaults to enabled (turnInterval
+            # 25, 20-minute cooldown) and is undocumented in settings.md. It is
+            # inert here only by ACCIDENT -- `_autoRefineAllowedForSession()`
+            # needs a local session dir and `--no-session` denies one -- but the
+            # moment a player calls `rlm(...)`, the host mints an ephemeral RLM
+            # session dir on the PARENT, the gate opens mid-run, and auto-refine
+            # starts spending two out-of-band `completeSimple` calls per fire on
+            # the eval's own interception endpoint. Those are real completions
+            # that never enter the session transcript, so they land in the run's
+            # provider cost unattributed, and their edits are LOCAL-scope and
+            # discarded. An arm must not change behaviour because the model
+            # happened to spawn a sub-agent.
+            "autoRefine": {"enabled": self.config.auto_refine},
             "quietStartup": True,
             # Belt and braces: `--provider/--model` already pin the route, but a
             # fallback that silently picked a built-in provider would run the
@@ -823,6 +864,12 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                 KEY_VAR: secret,
                 MCP_TOKEN_VAR: mcp_token,
                 "PRIME_AGENT_CODING_AGENT_DIR": agent_dir,
+                # DECLARED, not inherited. There is no CLI flag and no settings
+                # key for recursion depth -- this env var is the only record. The
+                # default is 1 (root may spawn children, children may not
+                # recurse), which is what we want; writing it down means a
+                # scaffold upgrade cannot move it silently.
+                "RLM_MAX_DEPTH": str(self.config.rlm_max_depth),
                 # No update checks, no telemetry, no package-update fetches.
                 "PI_OFFLINE": "1",
                 "PI_SKIP_VERSION_CHECK": "1",

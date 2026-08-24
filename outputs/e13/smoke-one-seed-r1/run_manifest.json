@@ -1,0 +1,9 @@
+{
+  "experiment": "smoke-one-seed", "replicate": 1, "run": "smoke-one-seed-r1",
+  "spec": "/root/nld/e13-land/configs/continual/experiment.toml", "spec_sha256_16": "40e6b2d894c0563c",
+  "reflection_prompt": "default.md", "prompt_sha256_16": "517968dd7990a078",
+  "rounds": 1, "corpus_seeds": [5],
+  "eval_seeds": [0, 1, 2, 3, 4],
+  "players_may_edit": true, "store_mode": "copy-merge",
+  "tier": "continual", "store": "/tmp/vf-prime-agent-smoke-one-seed-r1/continual-harness", "install_dir": "/tmp/vf-prime-agent-smoke-one-seed-r1"
+}

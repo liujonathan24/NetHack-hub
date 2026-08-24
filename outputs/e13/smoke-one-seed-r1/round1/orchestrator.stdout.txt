@@ -1,0 +1,5 @@
+All entries are created and verified. Here is the summary:
+
+## Summary
+
+I analyzed one rollout (seed 5, Valkyrie, model z-ai/glm-5.2) that died on dungeon level 2 after 44 skill calls. The player descended efficiently from dlvl 1→2 in 5 calls (turns 0-4), but then stalled on dlvl 2: `np_explore_level` spent 8 calls interrupting for trivial items instead of heading to stairs, the player wandered into a vault and wasted 6 calls typing a name one character at a time, and then `np_explore_level` repeatedly tried to path through the vault guard, triggering "Really attack?" prompt loops that consumed 8 more calls. The player eventually answered "y" making the guard hostile, re-picked the dropped gold, and was killed by thrown daggers. I created 3 global memories (vault guard mechanics, avoiding explore_level near peaceful NPCs, and answering prompts instead of re-calling skills), 1 prompt note (prioritize descent over exploration), and 1 skill entry (the proven 5-call descent sequence including door-kicking). All entries are under 180 characters, well within the 6-per-kind budget, and each is backed by specific turn-number evidence in the rationale file.
