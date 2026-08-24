@@ -61,7 +61,7 @@ await nethack.search(times=10)              # Search adjacent tiles for hidden d
                                             # passages, times consecutive tries (1–20).
 ```
 
-## How to descend (the objective is to go DOWN)
+## How to descend
 
 1. `await nethack.request_map()` — find the down staircase, shown as `>`.
 2. `await nethack.np_move_to(x=..., y=...)` — walk onto that tile.

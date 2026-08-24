@@ -235,7 +235,7 @@ def test_the_baseline_skill_doc_is_byte_identical_to_what_e10_served():
     # `git show aee5c43^:harnesses/.../skill/SKILL.md` -- the exact bytes every
     # rollout in outputs/e10_baseline/ was served.
     assert hashlib.sha256(served).hexdigest() == (
-        "61dd11dc227fbc81960ff4b9b543fcf20de6644c6fc5ae5cfe8c3cc5aee11e21"
+        "6ade6d428d956baeee79f8db0fad46db64fe090444599ddb779ba24cbeeb54c0"
     )
 
 

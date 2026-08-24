@@ -165,16 +165,26 @@ creature. `@` hides the tile under you — read UNDER PLAYER."""
 # for the minimal prompt — no per-tier description, no milestone list.
 #
 # CLI-harness eval: `stop_condition = "agent_completed"` only means the CLI
+# GOAL FRAMING (2026-08-24). This block used to open "Explore the environment to
+# find the stairs down to the next level. Your goal is to get as far as possible
+# in the game." Depth is a PROXY we invented; the game's objective is to win, and
+# winning requires staying alive. Measured under the old wording: 14 of 15
+# baseline rollouts died, mean XL 2.80 against mean depth ~6, XL/Dlvl 0.47 -- the
+# agent arrived on each new level roughly twice as underlevelled as it was deep,
+# and E11 needed a descent GATE to force the leveling the prompt was discouraging.
+# Stating the real objective is not the same as telling it how to play: no
+# tactical advice is added here, deliberately, so that any change in leveling is
+# the model's own and not ours.
 # process exited 0 with no `@stop` firing mid-rollout — under `--print` mode
 # that happens the moment the model stops emitting tool calls, whether or not
 # the character is still alive, costing 15-25% of measured rollouts. One
 # sentence, not a section (see the module-level note above on why the prompt
 # stays BALROG-minimal): tell the agent explicitly that ending its turn is not
 # how the episode ends.
-_PROMPT_TAIL_MINIMAL = """Explore the environment to find the stairs down to the next level.
-Your goal is to get as far as possible in the game. Keep acting every turn —
-the episode ends only when your character dies, never because you stopped,
-summarized, or declared the run finished."""
+_PROMPT_TAIL_MINIMAL = """Your goal is to win: survive, and descend toward the
+Amulet of Yendor. Dying ends the run. Keep acting every turn — the episode ends
+only when your character dies, never because you stopped, summarized, or
+declared the run finished."""
 
 _PROMPT_BLOCKS_MINIMAL: list[tuple[tuple[str, ...], str]] = [
     ((), _PROMPT_HEAD_MINIMAL),
