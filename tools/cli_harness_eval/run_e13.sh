@@ -1,45 +1,23 @@
 #!/usr/bin/env bash
 # E13: does past play make future play cheaper?
 #
-#   run_e13.sh <RUN_ID>
+#   run_e13.sh              run this worktree's experiment
+#   run_e13.sh --list       what exists on disk for it
+#   RESUME=1 run_e13.sh     continue where it stopped
 #
-# A RUN_ID names one continual-harness EXPERIMENT. Several run side by side --
-# same base surface, different reflection instructions -- so everything is
-# namespaced by it and nothing is shared between them:
+# ONE EXPERIMENT PER WORKTREE. Identity comes from configs/continual/
+# experiment.toml, not from an argument, so anything that is a code or content
+# edit -- the starting skill package, the env, the reflection prompt -- is just
+# an edit in this worktree.
 #
-#   store    /tmp/vf-prime-agent/continual-harness/<RUN_ID>
-#   prompt   configs/continual/<RUN_ID>.md   (falls back to default.md)
-#   outputs  outputs/e13/<RUN_ID>/round<r>/...
+#   round r:  N corpus games (the experiment's seeds), players writing lessons
+#             -> merge their private stores into canonical
+#             -> orchestrate: read the round's traces, curate the merged store
 #
-# EVERY RUN STARTS FROM THE BASE SET OF SKILLS. Round 0 refuses to begin against
-# a non-empty store, and the [continual] tier carries base's flags (all fix-
-# flags off), so a gain cannot come from the human tier or from another
-# experiment's leftovers. RESUME=1 continues an existing run instead.
-#
-#   round 0:  corpus cell  (seeds 5-9, TOOL_TIER=base)  -- the games to reflect on
-#             control cell (seeds 0-4, TOOL_TIER=base)  -- the concurrent baseline
-#   round r:  orchestrate (reads the seeds 5-9 corpus, edits this run's store)
-#             -> eval   cell (seeds 0-4, TOOL_TIER=continual + store)
-#             -> corpus cell (seeds 5-9, same) -- next round's corpus
-#
-# Reflection and evaluation use DISJOINT seeds: the orchestrator only ever sees
-# 5-9; the headline is on 0-4, which also puts E13 beside E10's baseline and
-# E11's handcrafted gates.
+# The held-out evaluation is NOT part of a round. When the experiment ends its
+# final store is frozen into outputs/, and we evaluate that snapshot on seeds
+# 0-4 ourselves with tools/cli_harness_eval/eval_frozen.sh.
 set -uo pipefail
-
-RUN_ID="${1:-}"
-if [ -z "$RUN_ID" ]; then
-  echo "usage: run_e13.sh <RUN_ID>   (e.g. reflect-default, reflect-terse)" >&2
-  echo "  a RUN_ID names one continual experiment; it is pinned into every" >&2
-  echo "  cell's config.toml so two experiments cannot be confused on disk." >&2
-  exit 2
-fi
-case "$RUN_ID" in
-  *[!a-zA-Z0-9._-]*)
-    echo "run_e13: RUN_ID '$RUN_ID' must be [A-Za-z0-9._-] -- it becomes a" >&2
-    echo "  directory name and a config value." >&2
-    exit 2 ;;
-esac
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The harness package is an editable install pointing at the MAIN checkout, so a
@@ -49,39 +27,99 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export PYTHONPATH="${REPO}/harnesses/nethack-prime-agent${PYTHONPATH:+:${PYTHONPATH}}"
 export ENG="${ENG:-/root/NetHack-engine}"
 export EVAL_BIN="${EVAL_BIN:-/root/NetHack-hub/.venv-cli-eval/bin/eval}"
-PY_BIN="$(dirname "${EVAL_BIN}")/python"
-LAUNCH="$REPO/tools/cli_harness_eval/launch_cell.sh"
-ORCH="$REPO/tools/cli_harness_eval/e13_orchestrate.sh"
+PY_BIN="${PY_BIN:-$(dirname "${EVAL_BIN}")/python}"
+SPEC="$REPO/configs/continual/experiment.toml"
+[ -f "$SPEC" ] || { echo "run_e13: no experiment spec at $SPEC" >&2; exit 2; }
 
-CH="${CH:-/tmp/vf-prime-agent/continual-harness/${RUN_ID}}"
-OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e13/${RUN_ID}}"
-PROMPT_FILE="${PROMPT_FILE:-$REPO/configs/continual/${RUN_ID}.md}"
-[ -f "$PROMPT_FILE" ] || PROMPT_FILE="$REPO/configs/continual/default.md"
+read_spec() { "$PY_BIN" - "$SPEC" "$1" <<'PYS'
+import json, sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb"))
+v = d[sys.argv[2]]
+print(json.dumps(v) if isinstance(v, (list, dict, bool)) else v)
+PYS
+}
+EXP_ID="$(read_spec id)"; REPLICATE="$(read_spec replicate)"
+ROUNDS="${ROUNDS:-$(read_spec rounds)}"
+CORPUS_SEEDS="$(read_spec corpus_seeds)"
+PLAYERS_EDIT="$(read_spec players_may_edit)"
+PROMPT_NAME="$(read_spec prompt)"; TIER="$(read_spec tier)"
+SPEC_SHA="$(sha256sum "$SPEC" | cut -c1-16)"
+RUN="${EXP_ID}-r${REPLICATE}"
+
+# Per-experiment install_dir. FIXED per experiment, not globally: the kernel venv
+# is keyed on the Python-skill paths, and two worktrees sharing /tmp/vf-prime-agent
+# would overwrite each other's skill package mid-run.
+INSTALL_DIR="${INSTALL_DIR:-/tmp/vf-prime-agent-${RUN}}"
+CH="${CH:-${INSTALL_DIR}/continual-harness}"
+OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e13/${RUN}}"
+PROMPT_FILE="$REPO/configs/continual/${PROMPT_NAME}"
 [ -f "$PROMPT_FILE" ] || { echo "run_e13: no reflection prompt at $PROMPT_FILE" >&2; exit 2; }
 PROMPT_SHA="$(sha256sum "$PROMPT_FILE" | cut -c1-16)"
+[ "$PLAYERS_EDIT" = "true" ] && MODE="copy-merge" || MODE="shared-ro"
+N_SEEDS="$(printf '%s' "$CORPUS_SEEDS" | "$PY_BIN" -c 'import json,sys;print(len(json.load(sys.stdin)))')"
 
-ROUNDS="${ROUNDS:-1}"      # 1 = the pilot (20 games). Each extra round is +10.
-CELL_N=5
-HELD_SEEDS='[5,6,7,8,9]'
-cd "$REPO"
-
-echo "[e13  ] run_id=$RUN_ID store=$CH"
-echo "[e13  ] prompt=$PROMPT_FILE sha=$PROMPT_SHA rounds=$ROUNDS"
-
-# --- the base-set guarantee --------------------------------------------------
-mkdir -p "$CH"
-if [ "${RESUME:-}" != "1" ] && [ -n "$(ls -A "$CH" 2>/dev/null)" ]; then
-  echo "run_e13: store $CH is not empty, so this run would NOT start from the" >&2
-  echo "  base set of skills -- it would inherit whatever is already there." >&2
-  echo "  Use a fresh RUN_ID, RESUME=1 to continue this one, or delete it." >&2
-  exit 3
+if [ "${1:-}" = "--list" ]; then
+  echo "experiment : $RUN   (spec $SPEC_SHA, prompt $PROMPT_NAME $PROMPT_SHA)"
+  echo "store      : $CH"
+  echo "outputs    : $OUT_ROOT"
+  if [ -d "$OUT_ROOT" ]; then
+    for d in "$OUT_ROOT"/round*; do
+      [ -d "$d" ] || continue
+      n=$(ls -d "$d"/*__prime_agent 2>/dev/null | wc -l)
+      echo "  $(basename "$d"): $n cell(s)$( [ -f "$d/merge_report.json" ] && echo ', merged' )"
+    done
+  else
+    echo "  (nothing run yet)"
+  fi
+  [ -d "$OUT_ROOT/final" ] && echo "  FROZEN: $OUT_ROOT/final"
+  exit 0
 fi
+
+echo "[e13  ] experiment=$RUN rounds=$ROUNDS seeds=$CORPUS_SEEDS mode=$MODE"
+echo "[e13  ] spec=$SPEC_SHA prompt=$PROMPT_NAME($PROMPT_SHA) install_dir=$INSTALL_DIR"
+
+mkdir -p "$CH" "$OUT_ROOT"
+MANIFEST="$OUT_ROOT/run_manifest.json"
+if [ -n "$(ls -A "$CH" 2>/dev/null)" ] || [ -f "$MANIFEST" ]; then
+  if [ "${RESUME:-}" != "1" ]; then
+    echo "run_e13: $RUN has already started (store or manifest present), so this" >&2
+    echo "  run would NOT begin from the base set of skills. RESUME=1 to continue," >&2
+    echo "  bump `replicate` in the spec for an independent repeat, or clear" >&2
+    echo "  $CH and $OUT_ROOT." >&2
+    exit 3
+  fi
+  # Resuming with different instructions would mix two reflection regimes in one
+  # store, and nothing downstream could tell.
+  if [ -f "$MANIFEST" ]; then
+    prev_spec="$("$PY_BIN" -c 'import json,sys;print(json.load(open(sys.argv[1]))["spec_sha256_16"])' "$MANIFEST")"
+    prev_prompt="$("$PY_BIN" -c 'import json,sys;print(json.load(open(sys.argv[1]))["prompt_sha256_16"])' "$MANIFEST")"
+    if [ "$prev_spec" != "$SPEC_SHA" ] || [ "$prev_prompt" != "$PROMPT_SHA" ]; then
+      echo "run_e13: refusing to resume -- the spec or the reflection prompt changed" >&2
+      echo "  since this run started (spec $prev_spec -> $SPEC_SHA, prompt" >&2
+      echo "  $prev_prompt -> $PROMPT_SHA). Resuming would mix two reflection" >&2
+      echo "  regimes in one store. Start a new replicate instead." >&2
+      exit 3
+    fi
+  fi
+fi
+
+cat > "$MANIFEST" <<JSON
+{
+  "experiment": "${EXP_ID}", "replicate": ${REPLICATE}, "run": "${RUN}",
+  "spec": "${SPEC}", "spec_sha256_16": "${SPEC_SHA}",
+  "reflection_prompt": "${PROMPT_NAME}", "prompt_sha256_16": "${PROMPT_SHA}",
+  "rounds": ${ROUNDS}, "corpus_seeds": ${CORPUS_SEEDS},
+  "eval_seeds": $(read_spec eval_seeds),
+  "players_may_edit": ${PLAYERS_EDIT}, "store_mode": "${MODE}",
+  "tier": "${TIER}", "store": "${CH}", "install_dir": "${INSTALL_DIR}"
+}
+JSON
 
 reset_daemon() {
   echo "[reset] $(date -u +%H:%M:%S) tearing down prime-agent daemon"
   prime-agent shutdown >/dev/null 2>&1 || true
-  pkill -9 -f 'prime-agent'  2>/dev/null || true
-  pkill -9 -f 'nethack_v1'   2>/dev/null || true
+  pkill -9 -f 'prime-agent' 2>/dev/null || true
+  pkill -9 -f 'nethack_v1'  2>/dev/null || true
   rm -rf /tmp/prime-agent-0 2>/dev/null || true
   local s; s=$(date +%s)
   for d in daemon-workers session-leases; do
@@ -90,79 +128,67 @@ reset_daemon() {
   sleep 3
 }
 
-# The store is the independent variable, so every cell records the exact bytes
-# it ran against -- before AND after. A differing pair means a player wrote to a
-# store we believe is read-only, and the cell is not reproducible from either.
-snapshot() {  # <label> <destdir>
-  local label="$1" dest="$2"
-  mkdir -p "$dest"
-  if [ -e "$CH/harness_state.json" ]; then
-    cp "$CH/harness_state.json" "$dest/harness_state.$label.json"
-  else
-    echo '{"note":"empty store"}' > "$dest/harness_state.$label.json"
-  fi
-  ( cd "$CH" 2>/dev/null && find . -type f -exec sha256sum {} \; | sort ) \
-    > "$dest/harness_store.$label.sha256" 2>/dev/null || true
+snapshot() { # <label> <destdir>
+  local label="$1" dest="$2"; mkdir -p "$dest"
+  if [ -e "$CH/harness_state.json" ]; then cp "$CH/harness_state.json" "$dest/harness_state.$label.json"
+  else echo '{"note":"empty store"}' > "$dest/harness_state.$label.json"; fi
 }
 
-run_cell() {  # <outdir> <tier> <seeds-json|""> <mount-store: 0|1>
-  local out="$1" tier="$2" seeds="$3" mount="$4"
-  echo "[cell ] $(date -u +%H:%M:%S) -> $out (tier=$tier mount=$mount)"
-  reset_daemon
-  mkdir -p "$out"
-  snapshot before "$out"
-  local -a env_pairs=(TOOL_TIER="$tier")
-  [ -n "$seeds" ] && env_pairs+=(SEEDS="$seeds")
-  if [ "$mount" = "1" ]; then
-    env_pairs+=(CONTINUAL_HARNESS="$CH" CONTINUAL_RUN_ID="$RUN_ID" CONTINUAL_PROMPT_SHA="$PROMPT_SHA")
-  fi
-  env "${env_pairs[@]}" "$LAUNCH" prime_agent "$out" 200 "$CELL_N" \
+play_round() { # <round>
+  local r="$1" out="$OUT_ROOT/round${r}/corpus__prime_agent"
+  echo "[cell ] $(date -u +%H:%M:%S) -> $out (tier=$TIER mode=$MODE seeds=$CORPUS_SEEDS)"
+  reset_daemon; mkdir -p "$out"; snapshot before "$out"
+  env TOOL_TIER="$TIER" SEEDS="$CORPUS_SEEDS" \
+      INSTALL_DIR="$INSTALL_DIR" \
+      CONTINUAL_HARNESS="$CH" CONTINUAL_RUN_ID="$RUN" \
+      CONTINUAL_PROMPT_SHA="$PROMPT_SHA" CONTINUAL_SPEC_SHA="$SPEC_SHA" \
+      CONTINUAL_HARNESS_MODE="$MODE" \
+      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
-  snapshot after "$out"
-  if ! cmp -s "$out/harness_store.before.sha256" "$out/harness_store.after.sha256"; then
-    echo "[WARN ] $(date -u +%H:%M:%S) the store CHANGED during $out -- expected" \
-         "only with CONTINUAL_HARNESS_WRITABLE=1." >&2
+  if [ "$MODE" = "copy-merge" ]; then
+    # Single-threaded reconciliation of the private copies. Without this the
+    # players' lessons stay in per-rollout directories and never compound.
+    "$PY_BIN" "$REPO/tools/cli_harness_eval/merge_harness_stores.py" \
+      --canonical "$CH" --run-dir "$out" --install-dir "$INSTALL_DIR" \
+      --report "$OUT_ROOT/round${r}/merge_report.json" | sed 's/^/[merge] /'
   fi
+  snapshot after "$out"
 }
 
-# A manifest per run, so two experiments are told apart from their outputs alone.
-mkdir -p "$OUT_ROOT"
-cat > "$OUT_ROOT/run_manifest.json" <<JSON
-{
-  "run_id": "${RUN_ID}",
-  "store": "${CH}",
-  "reflection_prompt": "${PROMPT_FILE}",
-  "reflection_prompt_sha256_16": "${PROMPT_SHA}",
-  "rounds": ${ROUNDS},
-  "eval_seeds": [0, 1, 2, 3, 4],
-  "corpus_seeds": ${HELD_SEEDS},
-  "corpus_tier": "base",
-  "eval_tier": "continual",
-  "started_from_empty_store": $( [ "${RESUME:-}" = "1" ] && echo false || echo true )
-}
-JSON
-echo "[e13  ] manifest -> $OUT_ROOT/run_manifest.json"
-
-# --- round 0: the corpus to reflect on, and the concurrent control -----------
-if [ "${SKIP_ROUND0:-}" != "1" ]; then
-  run_cell "$OUT_ROOT/round0/corpus__prime_agent"  base "$HELD_SEEDS" 0
-  for rep in $(seq 1 "${CONTROL_REPS:-1}"); do
-    run_cell "$OUT_ROOT/round0/control_r${rep}__prime_agent" base "" 0
-  done
-fi
-
-# --- rounds 1..N -------------------------------------------------------------
 for r in $(seq 1 "$ROUNDS"); do
-  prev=$((r - 1))
-  echo "[round] $(date -u +%H:%M:%S) === ${RUN_ID} round $r ==="
-  reset_daemon   # the orchestrator is a prime-agent process too; start it clean
-  "$ORCH" "$OUT_ROOT/round$prev/corpus__prime_agent" "$CH" "$OUT_ROOT/round$r" "$PROMPT_FILE" \
+  echo "[round] $(date -u +%H:%M:%S) === $RUN round $r/$ROUNDS ==="
+  if [ "${RESUME:-}" = "1" ] && [ -f "$OUT_ROOT/round${r}/corpus__prime_agent/traces.jsonl" ]; then
+    echo "[round] round $r already has traces -- skipping (RESUME)"
+    continue
+  fi
+  play_round "$r"
+  reset_daemon   # the orchestrator is a prime-agent process too
+  "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" \
+    "$OUT_ROOT/round${r}/corpus__prime_agent" "$CH" "$OUT_ROOT/round${r}" "$PROMPT_FILE" \
     || echo "[FAIL ] orchestrator round $r rc=$?" >&2
-  for rep in $(seq 1 "${EVAL_REPS:-1}"); do
-    run_cell "$OUT_ROOT/round$r/eval_r${rep}__prime_agent" continual "" 1
-  done
-  run_cell "$OUT_ROOT/round$r/corpus__prime_agent" continual "$HELD_SEEDS" 1
 done
 
-echo "[e13  ] $(date -u +%H:%M:%S) ${RUN_ID} finished; store at $CH"
+# --- freeze ------------------------------------------------------------------
+# Into the repo, not /tmp: the sandbox has no persistent volume, so a /tmp store
+# is one rebuild away from gone -- and this snapshot is what the held-out
+# evaluation is run against.
+FINAL="$OUT_ROOT/final"; mkdir -p "$FINAL"
+cp "$CH/harness_state.json" "$FINAL/harness_state.json" 2>/dev/null || echo '{}' > "$FINAL/harness_state.json"
+cp "$SPEC" "$FINAL/experiment.toml"; cp "$PROMPT_FILE" "$FINAL/reflection_prompt.md"
+cp "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md" "$FINAL/SKILL.md" 2>/dev/null || true
+"$PY_BIN" - "$FINAL" "$RUN" "$SPEC_SHA" "$PROMPT_SHA" <<'PYF'
+import json, pathlib, sys, hashlib
+final, run, spec_sha, prompt_sha = pathlib.Path(sys.argv[1]), *sys.argv[2:]
+state = json.loads((final / "harness_state.json").read_text())
+counts = {k: len(v) for k, v in state.get("entries", {}).items()}
+(final / "FROZEN.json").write_text(json.dumps({
+    "run": run, "spec_sha256_16": spec_sha, "prompt_sha256_16": prompt_sha,
+    "entry_counts": counts,
+    "harness_state_sha256": hashlib.sha256((final / "harness_state.json").read_bytes()).hexdigest(),
+    "note": "Evaluate with tools/cli_harness_eval/eval_frozen.sh; the store is "
+            "mounted read-only so the evaluation cannot contaminate what it tests.",
+}, indent=2))
+print(f"[freeze] {run}: {counts}")
+PYF
+echo "[e13  ] $(date -u +%H:%M:%S) $RUN finished; frozen at $FINAL"

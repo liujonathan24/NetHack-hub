@@ -760,3 +760,90 @@ def test_a_sibling_path_does_not_pass_the_containment_check():
     assert _within("/tmp/vf-prime-agent/ch", "/tmp/vf-prime-agent")
     assert _within("/tmp/vf-prime-agent", "/tmp/vf-prime-agent")
     assert not _within("/tmp/vf-prime-agent-other/ch", "/tmp/vf-prime-agent")
+
+
+# -- E13: `copy-merge` vs `shared-ro` provisioning ---------------------------
+#
+# The two modes differ in exactly two places, and both are invisible at runtime
+# if they regress: a `copy-merge` rollout that got a SYMLINK writes straight
+# into canonical (the five-concurrent-writers loss the mode exists to avoid),
+# and a `shared-ro` rollout that lost its read-only re-bind lets a player edit
+# the single-writer store. Neither shows up as a failed rollout.
+
+
+def test_copy_merge_copies_the_store_instead_of_linking_it():
+    """`cp -a <canonical>/. <agent_dir>/harness/` -- contents, into a real dir.
+
+    `/.` rather than the bare directory is load-bearing twice: an ABSENT
+    canonical yields an empty private dir instead of a nested
+    `harness/continual-harness`, and an existing one is copied by contents so
+    the destination `mkdir -p` above it is not undone.
+    """
+    store = "/tmp/vf-prime-agent/continual-harness"
+    runtime = _launch(continual_harness_dir=store, continual_harness_mode="copy-merge")
+
+    scripts = [" ".join(argv) for argv, _ in runtime.commands if "harness" in " ".join(argv)]
+    assert len(scripts) == 1, f"expected exactly one provisioning command, got {scripts}"
+    script = scripts[0]
+
+    link = "/tmp/vf-prime-agent/agent-trace-abc/harness"
+    assert f"cp -a {store}/. {link}/" in script, script
+    assert "ln -sfn" not in script, "copy-merge must not symlink the canonical store"
+    # The private copy must be a real directory before `cp` writes into it.
+    assert f"mkdir -p {store} {link}" in script, script
+
+
+def test_shared_ro_still_symlinks_and_copy_merge_never_does():
+    """The default is unchanged by the new mode: one `ln -sfn`, no `cp`."""
+    store = "/tmp/vf-prime-agent/continual-harness"
+    link = "/tmp/vf-prime-agent/agent-trace-abc/harness"
+
+    for cfg in ({}, {"continual_harness_mode": "shared-ro"}):
+        runtime = _launch(continual_harness_dir=store, **cfg)
+        scripts = [" ".join(a) for a, _ in runtime.commands if "harness" in " ".join(a)]
+        assert len(scripts) == 1, cfg
+        assert f"ln -sfn {store} {link}" in scripts[0], (cfg, scripts[0])
+        assert "cp -a" not in scripts[0], (cfg, scripts[0])
+
+
+def test_copy_merge_drops_the_read_only_rebind_and_shared_ro_keeps_it():
+    """The re-bind is what makes `shared-ro` single-writer -- and what would
+    make `copy-merge` pointless: the private copy lives under `install_dir`, so
+    a read-only bind of CANONICAL is simply not what constrains this rollout,
+    while re-binding it read-only costs a mount for nothing."""
+    store = "/tmp/vf-prime-agent/continual-harness"
+
+    ro = _launch_sandboxed(
+        continual_harness_dir=store, sandbox=True, install_dir="/tmp/vf-prime-agent"
+    )
+    ro_argv = [a for a, _ in ro.programs][0]
+    assert any(
+        ro_argv[i : i + 3] == ["--ro-bind", store, store] for i in range(len(ro_argv))
+    ), "shared-ro must re-bind the canonical store read-only"
+
+    cm = _launch_sandboxed(
+        continual_harness_dir=store,
+        continual_harness_mode="copy-merge",
+        sandbox=True,
+        install_dir="/tmp/vf-prime-agent",
+    )
+    cm_argv = [a for a, _ in cm.programs][0]
+    assert cm_argv[:1] == ["bwrap"], "the sandbox prefix must still be built"
+    assert not any(
+        cm_argv[i : i + 3] == ["--ro-bind", store, store] for i in range(len(cm_argv))
+    ), "copy-merge must not re-bind canonical read-only"
+    # install_dir stays read-write, which is where the private copy is written.
+    assert any(
+        cm_argv[i : i + 3] == ["--bind", "/tmp/vf-prime-agent", "/tmp/vf-prime-agent"]
+        for i in range(len(cm_argv))
+    ), cm_argv
+
+
+def test_an_unknown_continual_harness_mode_is_refused():
+    """A typo'd mode must not silently fall back to a symlink: that is the
+    players-write arm quietly running as the single-writer one."""
+    with pytest.raises(ValueError, match="continual_harness_mode"):
+        _launch(
+            continual_harness_dir="/tmp/vf-prime-agent/continual-harness",
+            continual_harness_mode="copy_merge",
+        )

@@ -52,43 +52,129 @@ fixes rather than the agent's own edits. A test asserts
 `cfg["continual"] == cfg["base"]`, and another asserts that a continual cell
 with no store mounted produces argv identical to a base cell.
 
-### 0.1 One store per experiment
+### 0.1 What "editing skills" means here — two channels, only one in scope
 
-Several continual experiments run side by side — same base surface, same seeds,
-same code, **different reflection instructions**. Each is named by a `RUN_ID`
-and shares nothing with the others:
+The word *skill* covers two different things in this stack, and only one of them
+is what E13 tests.
+
+**(b) Continual-harness skill entries — IN SCOPE.** Rows in the store's
+`harness_state.json`: a title, ≤180 characters of content, and a required
+`reference` such as
+`{"type":"python","import":"nethack","call_pattern":"await nethack.np_explore_level()"}`.
+They are **not code**. The scaffold renders them into the next session's system
+prompt as routing hints:
 
 ```
-run_e13.sh reflect-terse
-
-  store    /tmp/vf-prime-agent/continual-harness/reflect-terse
-  prompt   configs/continual/reflect-terse.md   (falls back to default.md)
-  outputs  outputs/e13/reflect-terse/round<r>/...
+skill: 1
+  - [global:stairs_first_loop] stairs-first loop (general, v1)
+    ref={"call_pattern": "await nethack.np_explore_level()", ...}:
+    call 2-3x consecutively, NOT alternating with request_map...
 ```
 
-Shipped variants: `default` (unopinionated control), `terse` (imperative
-one-liners — tests whether the 180-char render budget is the binding
-constraint), `mechanics-only` (game facts, no strategy — tests whether the
-deficit is knowledge or inertness). Adding one is a file in
-`configs/continual/`; the protocol itself is not variable, because the
-experiment-specific text is appended *after* the invariant contract rather than
-replacing it. A variant can add guidance; it cannot drop the output format, the
-entry budget, or the read-only rule.
+An agent writes them with `rlm.harness.create_skill(..., global_=True)`, which
+means it can describe **compositions of tools that already exist** — not author
+new executable capability. Prime Agent's own docs draw the line: a harness skill
+entry "is a persisted description of a reusable Python call… it does not replace
+packaging new functionality with `skill-creator`."
 
-**Every run starts from the base set of skills.** `run_e13.sh` refuses to begin
-round 0 against a non-empty store, so a run cannot silently inherit another
-experiment's entries or its own earlier attempt (`RESUME=1` continues one
-deliberately). Round 0's corpus and control cells run at `TOOL_TIER=base` with
-no store mounted at all.
+**(a) Prime Agent skill packages — OUT OF SCOPE, a possible future change.** A
+directory with `SKILL.md`, optionally `pyproject.toml` and
+`src/<name>/__init__.py`. This is real executable code — it is how the game is
+reachable at all (`await nethack.np_move_to(...)`). An agent *can* author one
+via the built-in `skill-creator`, but:
+
+- the skill roster is scanned at process start and `/reload` is a TUI command
+  with no host-request equivalent, so a package written mid-episode takes effect
+  for the NEXT rollout, never the current one;
+- a dependency change rebuilds the shared kernel venv;
+- merging is directory-level, and two rollouts writing different bodies to
+  `skills/pathing/SKILL.md` has no mechanical resolution;
+- a bad generated package can break the kernel for every later rollout.
+
+So (a) is deliberately not part of the first experiment. It is a genuine future
+option rather than a rejected one — if we take it, the shape would be
+orchestrator-only authoring between rounds, with players proposing through (b).
+Nothing in the current design forecloses it.
+
+### 0.2 One experiment per worktree
+
+Experiment identity is the **worktree**, not a config key. Anything that is a
+code or content edit — the starting skill package
+(`harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md`), the env,
+the launcher, the reflection prompt — is just an edit in that worktree, which is
+far easier to keep current than a config file enumerating every variation.
+
+`configs/continual/experiment.toml` therefore holds only what is genuinely a
+number, plus the identity used to name things: `id`, `replicate`, `rounds`,
+`corpus_seeds`, `eval_seeds`, `players_may_edit`, `merge`, `prompt`, `tier`.
+
+```
+git worktree add /root/nld/e13-one-seed -b exp/e13-one-seed <base>
+# edit experiment.toml (corpus_seeds = [5]) and, if wanted, SKILL.md
+tools/cli_harness_eval/run_e13.sh
+```
+
+**Isolation:** `install_dir` is per experiment (`/tmp/vf-prime-agent-<id>-r<n>`).
+It is fixed *per experiment* on purpose — Prime Agent keys the kernel venv on the
+set of Python-skill paths — but the shipped default is global, so two worktrees
+running concurrently would overwrite each other's skill package mid-run.
+
+**Starting from base is enforced:** the runner refuses to begin when the store or
+manifest already exists (`RESUME=1` continues deliberately), and refuses to
+*resume* when the spec or prompt hash has changed since the run started, because
+that would mix two reflection regimes in one store and nothing downstream could
+tell.
+
+### 0.3 Why players get a private copy of the store
+
+With `players_may_edit = true`, five games run concurrently and each wants to
+persist what it learned. Sharing one store does not work, measured:
+
+| | entries kept | per seed |
+|---|---|---|
+| one shared store, 5 concurrent writers × 6 entries | **12 of 30** | 3, 3, 4, 2, **0** |
+| private copy per rollout, merged after | **30 of 30** | 6, 6, 6, 6, 6 |
+
+`rlm.harness` persists with a non-atomic whole-file rewrite (`open("w")` +
+`json.dump`, no lock, no tmp+rename) and its loader treats an unreadable state
+file as **empty** rather than erroring — so a player landing mid-write boots with
+no accumulated knowledge and nothing reports it.
+
+So `continual_harness_mode = copy-merge` seeds each rollout's harness directory
+with a copy of canonical at launch, and
+`tools/cli_harness_eval/merge_harness_stores.py` reconciles the copies
+single-threaded afterwards, keyed by `(kind, id)`, newest `updated_at` winning,
+with every same-id disagreement written to a merge report whether or not it
+changed the outcome. That also buys attribution: each rollout's contribution is a
+separate file, so "what did seed 7 add?" is answerable.
+
+### 0.4 Freeze, and the held-out evaluation
+
+When an experiment ends, its final store, spec, reflection prompt and skill
+document are frozen into `outputs/e13/<run>/final/` **in the repo** — not `/tmp`,
+which has no persistent volume here.
+
+The held-out evaluation is **not part of a round**. We run it ourselves, after
+the fact, with `tools/cli_harness_eval/eval_frozen.sh <final-dir>`: it copies the
+frozen store into an isolated install dir, mounts it **read-only**, plays the
+held-out seeds, and fails the run if the store's hash changed. An evaluation that
+could write would contaminate the artifact it is testing.
+
+It measures one thing: whether the accumulated lessons generalise to dungeons the
+agent never played and never reflected on. It does not measure whether the
+learning loop was efficient — that is the corpus-side curve.
+
+### 0.5 Provenance and protocol
 
 **Provenance.** Each cell records `tool_tier`, `tool_tier_hash`,
-`tool_tier_commit`, `continual_run_id` and `continual_prompt_sha` in its own
-`config.toml`, and each run writes `run_manifest.json`. Two experiments are
+`tool_tier_commit`, `continual_run_id`, `continual_prompt_sha` and
+`continual_spec_sha` in its own `config.toml`, and each run writes
+`run_manifest.json`. Two experiments are
 therefore distinguishable from their artifacts alone — without which, outputs
 that differ only by reflection prompt are indistinguishable after the fact.
 
-**Seeds.** Evaluation uses the contract's seeds 0–4; the reflection corpus uses
-5–9 via the `SEEDS` knob, which records `seeds_overridden` in the artifact. It
+**Seeds.** The held-out evaluation uses the contract's seeds 0–4; the reflection
+corpus uses the experiment's `corpus_seeds` via the `SEEDS` knob, which records `seeds_overridden` in the artifact. It
 cannot go through `ENV_ARGS`, which `TOOL_TIER` refuses (they write the same
 dotted paths and duplicates resolve last-wins silently).
 

@@ -474,6 +474,14 @@ fi
 # id and the reflection-prompt hash all vary per run and are pinned into this
 # cell's config.toml next to tool_tier. Without the id in the artifact, two
 # experiments' outputs are indistinguishable after the fact.
+# INSTALL_DIR isolates one experiment's skill package and kernel venv from
+# another's. It is fixed per experiment on purpose -- Prime Agent keys the kernel
+# venv on the set of Python-skill paths -- but the DEFAULT is global, so two
+# worktrees running concurrently would overwrite each other's SKILL.md mid-run.
+if [ -n "${INSTALL_DIR:-}" ]; then
+  OVERRIDES+=(--harness.install_dir "${INSTALL_DIR}")
+fi
+
 if [ -n "${CONTINUAL_HARNESS:-}" ]; then
   case " ${ARM} " in
     *" prime_agent "*|*" prime_agent_b80 "*) ;;
@@ -491,6 +499,17 @@ if [ -n "${CONTINUAL_HARNESS:-}" ]; then
     exit 2
   fi
   OVERRIDES+=(--harness.continual_harness_dir "${CONTINUAL_HARNESS}")
+  if [ -n "${CONTINUAL_HARNESS_MODE:-}" ]; then
+    # shared-ro = one store, symlinked, read-only for players (single writer).
+    # copy-merge = a private copy per rollout, merged afterwards -- the arm where
+    # players write. Measured: five concurrent writers on ONE store kept 12 of
+    # 30 entries and one of the five contributed nothing, because rlm.harness
+    # persists with a non-atomic whole-file rewrite and no lock.
+    OVERRIDES+=(--harness.continual_harness_mode "${CONTINUAL_HARNESS_MODE}")
+  fi
+  if [ -n "${CONTINUAL_SPEC_SHA:-}" ]; then
+    OVERRIDES+=(--taskset.env_args.continual_spec_sha "${CONTINUAL_SPEC_SHA}")
+  fi
   OVERRIDES+=(--taskset.env_args.continual_run_id "${CONTINUAL_RUN_ID}")
   if [ -n "${CONTINUAL_PROMPT_SHA:-}" ]; then
     # Which reflection instructions produced this store. Two runs that differ
