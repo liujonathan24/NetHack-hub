@@ -116,16 +116,9 @@ cat > "$MANIFEST" <<JSON
 JSON
 
 reset_daemon() {
-  echo "[reset] $(date -u +%H:%M:%S) tearing down prime-agent daemon"
-  prime-agent shutdown >/dev/null 2>&1 || true
-  pkill -9 -f 'prime-agent' 2>/dev/null || true
-  pkill -9 -f 'nethack_v1'  2>/dev/null || true
-  rm -rf /tmp/prime-agent-0 2>/dev/null || true
-  local s; s=$(date +%s)
-  for d in daemon-workers session-leases; do
-    [ -d "/root/.prime/agent/$d" ] && mv "/root/.prime/agent/$d" "/root/.prime/agent/$d.bak-e13-$s" 2>/dev/null || true
-  done
-  sleep 3
+  # Scoped by install_dir and serialised with flock, so a re-baseline can run
+  # alongside an experiment. See tools/cli_harness_eval/reset_daemon.sh.
+  "$REPO/tools/cli_harness_eval/reset_daemon.sh" "$INSTALL_DIR"
 }
 
 snapshot() { # <label> <destdir>

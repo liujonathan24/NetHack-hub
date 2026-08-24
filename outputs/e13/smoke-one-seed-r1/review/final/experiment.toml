@@ -14,15 +14,15 @@
 #   # edit this file + the reflection prompt + (optionally) the skill package
 #   tools/cli_harness_eval/run_e13.sh
 
-id = "multi-verify"
+id = "smoke-one-seed"
 replicate = 1
 
 # How many reflect -> play rounds. Each round is len(corpus_seeds) games.
-rounds = 2
+rounds = 1
 
 # The games the agent plays and reflects on. The other arm of the headline
 # comparison sets this to a single seed and asks the same lessons to generalise.
-corpus_seeds = [5, 6, 7, 8, 9]
+corpus_seeds = [5]
 
 # HELD OUT. Never played during the experiment and never reflected on; the
 # frozen store is evaluated on these by tools/cli_harness_eval/eval_frozen.sh,
