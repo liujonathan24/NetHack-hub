@@ -1416,14 +1416,19 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         from nethack_harness import tool_flags as _flags
         keep = {"np_explore_level", "np_melee_attack", "np_move_to",
                 "np_press_key", "np_pray", "np_apply", "np_rest", "np_kick"}
-        # skills-as-code arm: retire the four COMPOSITES, keeping the primitive
-        # floor (np_press_key / np_pray / np_apply / np_rest, plus request_map
-        # and search from the tier's skill_set). The agent re-implements the
-        # composites client-side in its own editable `netplay` package. Leaving
-        # the server-side versions reachable would let it no-op the whole arm
-        # by calling the frozen implementation instead of its own.
+        # skills-as-code arm: retire the composites the agent can REBUILD from
+        # the primitive floor, and keep the ones it cannot. move_to,
+        # melee_attack and explore_level are all reconstructable -- pathfinding
+        # plus stepping, both expressible through np_press_key + request_map --
+        # so they are retired and re-implemented in `netplay`. np_kick is NOT
+        # reconstructable: kicking is Ctrl-D, and RawKeyPress.parse (the frozen
+        # np_press_key boundary) rejects every control character, so no floor
+        # call can produce it. Retiring np_kick would delete kicking from the
+        # arm, not relocate it -- so it stays published and the floor exposes it.
+        # Leaving a RECONSTRUCTABLE composite reachable would let the agent
+        # no-op the arm by calling the server version instead of its own.
         if not _flags.enabled("netplay_composites"):
-            keep -= {"np_move_to", "np_melee_attack", "np_explore_level", "np_kick"}
+            keep -= {"np_move_to", "np_melee_attack", "np_explore_level"}
         missing = keep - set(skill_registry.all_schemas())
         assert not missing, f"np_core tools not registered: {missing}"
         out = []

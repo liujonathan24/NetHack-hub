@@ -113,6 +113,9 @@ _NETPLAY_FROZEN_FILES = ("src/netplay/__init__.py", "src/netplay/_base.py")
 # rather than relying on git's default, which varies with `init.defaultBranch`.
 _NETPLAY_BASE_BRANCH = "netplay-canonical"
 
+# The frozen files as bare basenames under src/netplay/, for presence checks.
+_NETPLAY_FROZEN_FILES_LOCAL = ("__init__.py", "_base.py")
+
 _NETPLAY_SEED_FILES = (
     "src/netplay/explore.py",
     "src/netplay/descend.py",
@@ -219,7 +222,7 @@ _BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d3
 # different tool sets (this one retires the four server-side composites), so
 # there is no shared paragraph to patch. Regenerate after a deliberate edit:
 #   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.code.md
-_CODE_SKILL_SHA256 = "324d79a4214c0763836612bbdd64783b05c4328302899370e990604150154688"
+_CODE_SKILL_SHA256 = "d1b67851795248c2890c3a45e2a0293f12f1b2ab0ca5d3da84011f577c07c100"
 
 
 def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool,
@@ -631,44 +634,107 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             # the artifact under test, so this mode's whole contract is that it
             # writes nothing -- including the frozen files, which are already
             # in the tree the caller pinned.
-            if not await self._path_exists(runtime, f"{self._skill_dir}/src/netplay/_base.py"):
+            # Verify the WHOLE expected surface is present, not just one file:
+            # a tree with _base.py but no __init__.py imports as a namespace
+            # package with none of the policies, and the eval would silently
+            # measure an empty netplay. Check both frozen files plus at least
+            # one composite.
+            missing = []
+            for n in _NETPLAY_FROZEN_FILES_LOCAL:
+                if not await self._path_exists(runtime, f"{self._skill_dir}/src/netplay/{n}"):
+                    missing.append(f"src/netplay/{n}")
+            has_any_composite = False
+            for n in _NETPLAY_SEED_FILES:
+                if await self._path_exists(runtime, f"{self._skill_dir}/{n}"):
+                    has_any_composite = True
+                    break
+            if missing or not has_any_composite:
                 raise ValueError(
-                    "netplay_code_mode='pinned' but no tree is present at "
-                    f"{self._skill_dir}/src/netplay. Pinned mode materialises "
-                    "nothing by design -- the caller (eval_frozen.sh) must copy "
-                    "the frozen tree into place before the cell starts."
+                    "netplay_code_mode='pinned' but the tree at "
+                    f"{self._skill_dir}/src/netplay is incomplete "
+                    f"(missing frozen: {missing or 'none'}; any composite: "
+                    f"{has_any_composite}). Pinned mode materialises nothing by "
+                    "design -- eval_frozen.sh must copy the agent's full frozen "
+                    "tree into place before the cell starts."
                 )
             logger.info("netplay: pinned tree, materialising nothing")
             return
 
-        if mode == "mutable" and not self.config.sandbox:
-            # The skills path is FIXED (it has to be, or the kernel-venv key
-            # changes per seed), so concurrent rollouts share one `src/netplay`
-            # unless the sandbox gives each its own bind. Unsandboxed, five
-            # seeds would interleave writes into one tree and the round would
-            # merge a chimera. Refuse rather than corrupt: this is the same
-            # single-writer discipline `continual_harness_writable` documents,
-            # and it fails at setup rather than at merge time.
-            raise ValueError(
-                "netplay_code_mode='mutable' requires harness.sandbox=true: "
-                "the per-rollout bind is what keeps concurrent seeds from "
-                "sharing one mutable code tree. Either enable the sandbox, or "
-                "run this cell one seed at a time with netplay_code_mode="
-                "'frozen'."
+        tree = f"{self._skill_dir}/src/netplay"
+
+        async def _write_frozen() -> None:
+            for name in _NETPLAY_FROZEN_FILES:
+                await runtime.write(f"{self._skill_dir}/{name}",
+                                    (package / name).read_bytes())
+
+        async def _write_seeds() -> None:
+            for name in _NETPLAY_SEED_FILES:
+                await runtime.write(f"{self._skill_dir}/{name}",
+                                    (package / name).read_bytes())
+
+        if mode == "frozen":
+            # Control arm: rewrite everything every rollout, so nothing the agent
+            # does accumulates. No git, no base -- frozen contributes nothing by
+            # design, which is what makes it the control.
+            await _write_frozen()
+            await _write_seeds()
+            return
+
+        # mutable: the git-based accumulation model. Each rollout starts from the
+        # round BASE -- the `netplay-canonical` branch, which is the seed on
+        # round 1 and the merged tree thereafter -- edits independently, and
+        # teardown commits its generation on `agent-<id>` off that base. The
+        # round merge (merge_netplay_code.py) combines the branches.
+        #
+        # RUN ONE SEED AT A TIME. Every rollout of a round shares this one tree
+        # and this one repo; two concurrent teardown commits would race and the
+        # round would merge a chimera. run_e13.sh pins MAX_CONCURRENT=1 for this
+        # tier -- the same single-writer discipline `continual_harness_writable`
+        # documents for the JSON store, and enforced the same way (by the
+        # launcher, because the harness cannot see the concurrency).
+        has_repo = await self._path_exists(runtime, f"{tree}/.git/HEAD")
+        if not has_repo:
+            # First rollout ever: write the seeds and commit them as the pristine
+            # base BEFORE the agent touches anything, so every rollout of round 1
+            # starts from identical code. Committing the base at teardown instead
+            # -- which an earlier version did -- baked the first agent's edits
+            # into what every later rollout called "base".
+            await _write_frozen()
+            await _write_seeds()
+            init = (
+                f"set -e; cd {tree}; git init -q -b {_NETPLAY_BASE_BRANCH} .; "
+                f"printf '__pycache__/\\n*.pyc\\n' > .gitignore; "
+                f"git config user.email netplay@localhost; "
+                f"git config user.name 'netplay seed'; "
+                f"git add -A; git commit -q -m 'round-0 seed'; "
+                f"git tag -f round-0"
             )
-
-        for name in _NETPLAY_FROZEN_FILES:
-            await runtime.write(f"{self._skill_dir}/{name}",
-                                (package / name).read_bytes())
-
-        for name in _NETPLAY_SEED_FILES:
-            target = f"{self._skill_dir}/{name}"
-            if mode == "mutable" and await self._path_exists(runtime, target):
-                # The agent's own generation. Leave it alone -- this is the
-                # only line in the harness that lets code accumulate.
-                logger.info("netplay: keeping agent-authored %s", name)
-                continue
-            await runtime.write(target, (package / name).read_bytes())
+            probe = await runtime.run(["sh", "-c", init], self._env_with_path())
+            if probe.exit_code != 0:
+                raise RuntimeError(
+                    "netplay seed init failed: "
+                    f"{(probe.stderr or probe.stdout or '').strip()[-300:]}"
+                )
+        else:
+            # Later rollout: reset the working tree to the round base, discarding
+            # the previous rollout's edits (already captured on its own branch),
+            # so this rollout starts independent. `clean -fd` drops any file a
+            # prior rollout created that base does not have.
+            restore = (
+                f"set -e; cd {tree}; "
+                f"git checkout -q -f {_NETPLAY_BASE_BRANCH}; "
+                f"git reset -q --hard {_NETPLAY_BASE_BRANCH}; "
+                f"git clean -q -fd"
+            )
+            probe = await runtime.run(["sh", "-c", restore], self._env_with_path())
+            if probe.exit_code != 0:
+                raise RuntimeError(
+                    "netplay base restore failed: "
+                    f"{(probe.stderr or probe.stdout or '').strip()[-300:]}"
+                )
+            # Re-heal the frozen boundary on top of the restored base, in case a
+            # merged generation ever carried a tampered copy past the gate.
+            await _write_frozen()
 
     async def setup(self, runtime: Runtime) -> None:
         binary = self.config.binary
@@ -1263,27 +1329,27 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # rollout branches from whatever canonical left there. Committing even a
         # FAILED tree is deliberate: the branch is the evidence, and the merge
         # is where it gets refused.
-        if mode == "pinned":
-            # A held-out cell contributes nothing by construction. Committing
-            # here would create a branch off the artifact under test.
-            logger.info("netplay: pinned mode, not committing trace %s", trace_id)
+        if mode != "mutable":
+            # frozen and pinned contribute nothing that persists: frozen is the
+            # control, pinned is held-out evaluation. Gate them (a broken tree
+            # is worth knowing about) but never commit -- a commit here would
+            # create a branch off the artifact under test.
+            logger.info("netplay: %s mode, gate only, not committing trace %s",
+                        mode, trace_id)
             return
 
+        # Commit this rollout's generation on its own branch, off the round base
+        # that setup restored. `-B agent-<id>` with NO start point creates the
+        # branch at the current HEAD (the base) while KEEPING the working-tree
+        # edits, so the commit is exactly base + this rollout's changes. HEAD is
+        # returned to the base branch afterwards so the next rollout's setup, and
+        # the round merge, both find it there. The repo already exists -- setup
+        # committed the pristine base before the agent ran.
         verdict = "pass" if not findings else f"fail:{len(findings)}"
         script = (
             f"set -e; cd {tree}; "
-            f"if [ ! -d .git ]; then git init -q -b {_NETPLAY_BASE_BRANCH} . && "
-            f"printf '__pycache__/\n*.pyc\n' > .gitignore; fi; "
             f"git config user.email netplay@localhost; "
             f"git config user.name 'netplay rollout'; "
-            # HEAD is returned to the base branch below. Leaving it on
-            # `agent-<id>` was a real defect: canonical's HEAD would still be
-            # the LAST rollout's branch when the round merge ran, so that
-            # tree was already canonical and never gated -- the merger saw
-            # "no commits over base" while a gate-failing generation sat in
-            # the tree. See the round-merge probe report.
-            f"git rev-parse --verify -q {_NETPLAY_BASE_BRANCH} >/dev/null 2>&1 "
-            f"|| git checkout -q -B {_NETPLAY_BASE_BRANCH}; "
             f"git checkout -q -B agent-{trace_id}; "
             f"git add -A; "
             f"git commit -q -m 'rollout {trace_id}: gate={verdict} calls={calls}' "

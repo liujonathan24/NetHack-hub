@@ -201,6 +201,12 @@ def merge(canonical: pathlib.Path, branches: list[str], *, round_tag: str | None
     report["head"] = _git(canonical, "rev-parse", "--short", "HEAD").stdout.strip()
     if round_tag:
         _git(canonical, "tag", "-f", round_tag, check=False)
+    # Delete the rollout branches now that the round is captured in the tag's
+    # history (merged) and in the report (rejected/conflicted/failed). Leaving
+    # them makes the NEXT round re-discover and re-merge this round's work --
+    # _branches() globs every agent-* ref, and a stale one would be merged again.
+    for branch in branches:
+        _git(canonical, "branch", "-D", branch, check=False)
     report["clean_after"] = not _is_dirty(canonical)
     return report
 

@@ -7,7 +7,7 @@ description: Play NetHack. Every move, attack and descent goes through this skil
 
 Two layers, and the difference between them matters.
 
-**`nethack`** is the game boundary — six primitives, listed below. That is the
+**`nethack`** is the game boundary — seven primitives, listed below. That is the
 complete set of tools: there is nothing else to call, and nothing else to find.
 You cannot edit them.
 
@@ -27,6 +27,8 @@ read it before deciding the next call. It is your only view of the game.
 
 ## The primitive floor (the complete tool set)
 
+Seven calls. Six are single actions; `np_kick` is the exception, noted below.
+
 Coordinates: `x` is the column (0–78), `y` is the row (0–20) in the MAP frame:
 row 0 is the FIRST row of the `=== MAP ===` block, the same frame `Pos:` and all
 `VISIBLE FEATURES` coordinates use. Do NOT count rows from the raw terminal
@@ -44,6 +46,13 @@ await nethack.np_rest(count=5)              # Rest in place count moves, or unti
                                             # happens.
 await nethack.search(times=10)              # Search adjacent tiles for hidden doors /
                                             # passages, times consecutive tries (1–20).
+
+await nethack.np_kick(x=31, y=7)            # Kick the tile at (x, y) — a locked door,
+                                            # a chest. Walks adjacent first if needed.
+                                            # This is the one call that is not a single
+                                            # keystroke: kicking is Ctrl-D, which the
+                                            # keystroke tools cannot send, so it stays a
+                                            # primitive rather than something you rebuild.
 ```
 
 Movement and attacking are `np_press_key`: the vi keys `hjkl` (W/S/N/E) and

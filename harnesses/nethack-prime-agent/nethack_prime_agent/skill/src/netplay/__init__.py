@@ -42,6 +42,7 @@ from netplay._base import (  # noqa: F401  -- re-exported for the agent
     check,
     features,
     grid,
+    kick,
     monsters,
     position,
     pray,
