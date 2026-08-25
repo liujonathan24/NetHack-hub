@@ -40,6 +40,13 @@ dat/
 # encoding-eval launcher, or a one-off probe dir) had its multi-hundred-MB
 # traces show up as untracked-but-committable. Already-tracked artifacts under
 # outputs/encoding_eval/ are unaffected -- .gitignore does not untrack files.
+# A run's resolved config and engine provenance are OUTPUT, not source: they are
+# regenerated per cell and pin a commit, so committing them puts a moving
+# artifact in review. `git add -A` in a worktree that has just run an experiment
+# picks them up silently -- that is how PR #36 ended up 3.4k lines of run data
+# around ~1.5k of code, and it happened again on 2026-08-25.
+/outputs/**/config.toml
+/outputs/**/engine_provenance.json
 /outputs/**/traces.jsonl
 /outputs/**/turns/
 /outputs/**/eval.log
