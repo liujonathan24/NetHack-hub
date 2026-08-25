@@ -69,6 +69,28 @@ def _natural(name: str) -> tuple:
                  for p in re.split(r"(\d+)", name))
 
 
+def collect(canonical: pathlib.Path, work_parent: pathlib.Path) -> list[str]:
+    """Fetch every per-rollout clone's `agent-*` branch into canonical.
+
+    Under parallel play each rollout committed in its OWN clone
+    ({install_dir}/netplay-work/<id>); the branches are not in canonical yet.
+    Fetching is serial and orchestrator-only, so there is no concurrent write to
+    canonical. Returns the branch names now present for the merge to combine.
+    """
+    fetched: list[str] = []
+    if not work_parent.is_dir():
+        return fetched
+    for work in sorted(p for p in work_parent.iterdir() if (p / ".git").exists()):
+        # Each clone was checked out on exactly one agent-<id> branch.
+        head = _git(work, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip()
+        if not head.startswith("agent-"):
+            continue
+        r = _git(canonical, "fetch", "-q", str(work), f"{head}:{head}", check=False)
+        if r.returncode == 0:
+            fetched.append(head)
+    return sorted(set(fetched), key=_natural)
+
+
 def _branches(repo: pathlib.Path) -> list[str]:
     out = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/").stdout
     return sorted((b.strip() for b in out.splitlines()
@@ -257,6 +279,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="the canonical netplay git repo")
     ap.add_argument("--branch", action="append", default=[],
                     help="rollout branch to merge; defaults to every agent-* branch")
+    ap.add_argument("--collect", type=pathlib.Path, default=None,
+                    help="parent dir of per-rollout clones (netplay-work); fetch "
+                         "each clone's agent-* branch into canonical before merging")
     ap.add_argument("--frozen-reference", type=pathlib.Path, default=None,
                     help="repo copy of netplay/, to detect edits to frozen files")
     ap.add_argument("--round", dest="round_tag", default=None,
@@ -277,6 +302,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"rolled back to {args.rollback}: "
               f"{report['rollback']['from']} -> {report['rollback']['to']}")
     else:
+        if args.collect:
+            got = collect(args.canonical, args.collect)
+            print(f"collected {len(got)} rollout branch(es) from {args.collect}")
         branches = args.branch or _branches(args.canonical)
         if not branches:
             # Still tag and still report. "Every round ends tagged" has to hold

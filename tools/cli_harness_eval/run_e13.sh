@@ -63,14 +63,25 @@ CH="${CH:-${INSTALL_DIR}/continual-harness}"
 # isolation is deferred; until it exists, this serialises.
 case "$TIER" in
   continual-code)
-    export NETPLAY_CANONICAL="${INSTALL_DIR}/skills/nethack/src/netplay"
-    export MAX_CONCURRENT=1
-    echo "[e13  ] netplay canonical=$NETPLAY_CANONICAL (serial: MAX_CONCURRENT=1)"
-    ;;
-  continual-code-frozen)
-    # The control accumulates nothing, so no canonical and no merge -- but its
-    # rollouts still write the shared tree, so serialise them too.
-    export MAX_CONCURRENT=1
+    # Canonical is a SEPARATE git repo; each rollout edits a private clone bound
+    # over the fixed skill path inside its sandbox, so rollouts run in PARALLEL.
+    export NETPLAY_CANONICAL="${INSTALL_DIR}/netplay-canonical"
+    export NETPLAY_WORK="${INSTALL_DIR}/netplay-work"
+    # Seed canonical ONCE, serially, before any rollout -- a rollout cannot seed
+    # it safely because concurrent clones would race to create it.
+    if [ ! -d "$NETPLAY_CANONICAL/.git" ]; then
+      SEED="$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/src/netplay"
+      mkdir -p "$NETPLAY_CANONICAL"
+      cp "$SEED"/*.py "$NETPLAY_CANONICAL/"
+      ( cd "$NETPLAY_CANONICAL"
+        git init -q -b netplay-canonical .
+        printf '__pycache__/\n*.pyc\n' > .gitignore
+        git config user.email netplay@localhost
+        git config user.name 'netplay seed'
+        git add -A && git commit -q -m 'round-0 seed' && git tag -f round-0 )
+      echo "[e13  ] seeded netplay canonical at $NETPLAY_CANONICAL"
+    fi
+    echo "[e13  ] netplay canonical=$NETPLAY_CANONICAL (PARALLEL: private per-rollout clones)"
     ;;
 esac
 OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e13/${RUN}}"
@@ -172,9 +183,12 @@ play_round() { # <round>
   if [ -n "${NETPLAY_CANONICAL:-}" ]; then
     "$PY_BIN" "$REPO/tools/cli_harness_eval/merge_netplay_code.py" \
       --canonical "$NETPLAY_CANONICAL" \
+      --collect "${NETPLAY_WORK:-${INSTALL_DIR}/netplay-work}" \
       --frozen-reference "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/src/netplay" \
       --round "round-${r}" \
       --report "$OUT_ROOT/round${r}/netplay_merge_report.json" | sed 's/^/[nmrg] /'
+    # Clear the per-rollout clones so the next round starts clean.
+    rm -rf "${NETPLAY_WORK:-${INSTALL_DIR}/netplay-work}"/* 2>/dev/null || true
   fi
   if [ "$MODE" = "copy-merge" ]; then
     # Single-threaded reconciliation of the private copies. Without this the

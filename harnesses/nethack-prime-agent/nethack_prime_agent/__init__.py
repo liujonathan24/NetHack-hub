@@ -607,6 +607,67 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             return False
         return True
 
+    def _netplay_mode(self) -> str:
+        """The resolved netplay_code_mode. Quote-stripped (see the materialiser
+        note on the json.dumps era) and lowercased."""
+        return str(self.config.netplay_code_mode).strip().strip('"\'').lower()
+
+    @property
+    def _netplay_canonical(self) -> str:
+        """The one git repo the mutable arm accumulates in. SEPARATE from the
+        fixed skill path, which under a sandbox is only a per-rollout bind
+        mountpoint. run_e13.sh seeds this before round 1."""
+        return f"{self.config.install_dir}/netplay-canonical"
+
+    def _netplay_work(self, trace_id: str) -> str:
+        """This rollout's PRIVATE netplay tree. Per-rollout like `agent-<id>`,
+        so parallel rollouts never share it. Bound over the fixed skill path
+        inside the sandbox (the same later-narrower-bind trick the store uses),
+        which is what lets the mutable arm run in parallel."""
+        return f"{self.config.install_dir}/netplay-work/{trace_id}"
+
+    def _netplay_parallel(self) -> bool:
+        """True when this rollout gets its own bound work tree. Only the mutable
+        arm under a sandbox: the bind is what isolates concurrent writers, and
+        without the sandbox there is no bind (sandbox=false stays serial)."""
+        return self.config.sandbox and self._netplay_mode() == "mutable"
+
+    async def _provision_netplay_worktree(self, runtime: Runtime, trace_id: str,
+                                          package) -> str:
+        """Clone canonical into this rollout's private tree, on its own branch.
+
+        A CLONE, not a shared worktree: clone only READS canonical, so any
+        number of rollouts can provision concurrently with no lock. Teardown
+        commits into the clone; the round merge fetches each clone's branch back
+        into canonical. Returns the work-tree path to bind.
+        """
+        canonical, work = self._netplay_canonical, self._netplay_work(trace_id)
+        if not await self._path_exists(runtime, f"{canonical}/.git/HEAD"):
+            raise RuntimeError(
+                f"netplay canonical repo missing at {canonical}. It must be "
+                "seeded once, serially, before any rollout -- run_e13.sh does "
+                "this before round 1. A rollout cannot seed it safely because "
+                "concurrent rollouts would race to create it."
+            )
+        script = (
+            f"set -e; rm -rf {work}; mkdir -p {work}; "
+            f"git clone -q {canonical} {work}; cd {work}; "
+            f"git checkout -q -B agent-{trace_id} {_NETPLAY_BASE_BRANCH}; "
+            f"git config user.email netplay@localhost; "
+            f"git config user.name 'netplay rollout'"
+        )
+        probe = await runtime.run(["sh", "-c", script], self._env_with_path())
+        if probe.exit_code != 0:
+            raise RuntimeError(
+                "netplay worktree clone failed: "
+                f"{(probe.stderr or probe.stdout or '').strip()[-300:]}"
+            )
+        # Re-heal the frozen boundary in the private tree, on top of the base.
+        for name in _NETPLAY_FROZEN_FILES_LOCAL:
+            await runtime.write(f"{work}/{name}",
+                                (package / f"src/netplay/{name}").read_bytes())
+        return work
+
     async def _materialise_netplay(self, runtime: Runtime, package) -> None:
         """Write the agent-editable `netplay` layer, per `netplay_code_mode`.
 
@@ -680,8 +741,20 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             await _write_seeds()
             return
 
-        # mutable: the git-based accumulation model. Each rollout starts from the
-        # round BASE -- the `netplay-canonical` branch, which is the seed on
+        if self._netplay_parallel():
+            # Parallel mutable: the accumulating git repo is canonical
+            # ({install_dir}/netplay-canonical), and each rollout edits a private
+            # CLONE bound over this fixed path in the sandbox (provisioned in
+            # launch). Here we only need a valid tree at the fixed path so the
+            # bind has a mountpoint and the sandbox=false fallback still works --
+            # no git on the fixed path, since the per-rollout clones own it.
+            await _write_frozen()
+            await _write_seeds()
+            return
+
+        # mutable, SERIAL (sandbox=false): the git-based accumulation model runs
+        # on the fixed path itself. Each rollout starts from the round base --
+        # the `netplay-canonical` branch, which is the seed on
         # round 1 and the merged tree thereafter -- edits independently, and
         # teardown commits its generation on `agent-<id>` off that base. The
         # round merge (merge_netplay_code.py) combines the branches.
@@ -819,7 +892,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             env["PATH"] = f"{self.config.path_prepend}:{inherited}"
         return env
 
-    def _sandbox_prefix(self, workdir: str) -> list[str]:
+    def _sandbox_prefix(self, workdir: str, netplay_src: str | None = None) -> list[str]:
         """Build the `bwrap` argv that hides everything from the sandboxed
         process except an explicit allowlist. Base recipe verified working on
         this machine (configs/README.md §7): base OS dirs read-only, a fresh
@@ -929,6 +1002,17 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "--bind",
             self.config.install_dir,
             self.config.install_dir,
+            # Skills-as-code: this rollout's PRIVATE netplay tree, re-bound over
+            # the fixed skill path AFTER the install_dir bind so the later,
+            # narrower mount wins (the same ordering the store re-bind below
+            # relies on). Inside the sandbox `src/netplay` is this rollout's own
+            # tree; the venv key is the skill-package path, which is unchanged,
+            # so no rebuild. This is what lets the mutable arm run in parallel.
+            *(
+                ["--bind", netplay_src,
+                 f"{self._skill_dir}/src/netplay"]
+                if netplay_src else []
+            ),
             # E13: in `shared-ro` the store is re-bound READ-ONLY on top of the
             # read-write `install_dir` bind (bwrap applies binds in order, so the
             # later, narrower one wins) -- that is what keeps a single-writer arm
@@ -1197,7 +1281,16 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                     "Set `harness.runtime.type = \"subprocess\"` or "
                     "`harness.sandbox = false`."
                 )
-            argv = self._sandbox_prefix(str(workdir)) + argv
+            netplay_src = None
+            if self._netplay_parallel():
+                # Private, bound per-rollout tree -> parallel-safe. Provisioned
+                # here (not setup) because it needs the trace id, and cloned from
+                # canonical so every rollout starts from the round base.
+                netplay_src = await self._provision_netplay_worktree(
+                    runtime, str(trace.id).replace("/", "-"),
+                    resources.files(__package__) / "skill",
+                )
+            argv = self._sandbox_prefix(str(workdir), netplay_src) + argv
 
         # NOTE the absent teardown. `rm -rf agent_dir` is the obvious cleanup and
         # it BREAKS THE NEXT ROLLOUT: the supervisor at the shared socket keeps
@@ -1263,12 +1356,17 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         not be turned into a harness error by its bookkeeping -- the findings
         are recorded on the trace and the merge decides what to do with them.
         """
-        mode = str(self.config.netplay_code_mode).strip().lower()
+        mode = self._netplay_mode()
         if mode == "off":
             return
 
-        tree = f"{self._skill_dir}/src/netplay"
         trace_id = str(getattr(trace, "id", "unknown")).replace("/", "-")
+        # Under a parallel mutable rollout the agent's edits are in its private
+        # bound tree, NOT at the fixed skill path (which the bind shadowed). Read
+        # and commit THAT tree, or the gate would inspect an empty mountpoint and
+        # the commit would capture nothing.
+        parallel = self._netplay_parallel()
+        tree = self._netplay_work(trace_id) if parallel else f"{self._skill_dir}/src/netplay"
 
         # --- 1. the gate ---
         findings: list[dict] = []
@@ -1338,24 +1436,32 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                         mode, trace_id)
             return
 
-        # Commit this rollout's generation on its own branch, off the round base
-        # that setup restored. `-B agent-<id>` with NO start point creates the
-        # branch at the current HEAD (the base) while KEEPING the working-tree
-        # edits, so the commit is exactly base + this rollout's changes. HEAD is
-        # returned to the base branch afterwards so the next rollout's setup, and
-        # the round merge, both find it there. The repo already exists -- setup
-        # committed the pristine base before the agent ran.
+        # Commit this rollout's generation on its own branch.
         verdict = "pass" if not findings else f"fail:{len(findings)}"
-        script = (
-            f"set -e; cd {tree}; "
-            f"git config user.email netplay@localhost; "
-            f"git config user.name 'netplay rollout'; "
-            f"git checkout -q -B agent-{trace_id}; "
-            f"git add -A; "
-            f"git commit -q -m 'rollout {trace_id}: gate={verdict} calls={calls}' "
-            f"--allow-empty; "
-            f"git checkout -q {_NETPLAY_BASE_BRANCH}"
-        )
+        if parallel:
+            # The private clone is already on branch agent-<id> (provisioning did
+            # the checkout), so just capture the working tree. The round merge
+            # fetches this branch out of the clone into canonical.
+            script = (
+                f"set -e; cd {tree}; git add -A; "
+                f"git commit -q -m 'rollout {trace_id}: gate={verdict} calls={calls}' "
+                f"--allow-empty"
+            )
+        else:
+            # Serial (sandbox=false): the fixed path IS canonical. `-B agent-<id>`
+            # with no start point branches at the current HEAD (the round base
+            # that setup restored) while KEEPING the working edits, then HEAD is
+            # returned to the base branch for the next rollout and the merge.
+            script = (
+                f"set -e; cd {tree}; "
+                f"git config user.email netplay@localhost; "
+                f"git config user.name 'netplay rollout'; "
+                f"git checkout -q -B agent-{trace_id}; "
+                f"git add -A; "
+                f"git commit -q -m 'rollout {trace_id}: gate={verdict} calls={calls}' "
+                f"--allow-empty; "
+                f"git checkout -q {_NETPLAY_BASE_BRANCH}"
+            )
         try:
             probe = await runtime.run(["sh", "-c", script], self._env_with_path())
             if probe.exit_code != 0:
