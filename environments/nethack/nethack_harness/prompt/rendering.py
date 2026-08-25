@@ -370,7 +370,17 @@ _NETPLAY_BLOCK = (
     "  await edit(path=f'{netplay_dir}/explore.py', old_str=..., new_str=...)\n"
     "  print(netplay.check())                       # compile-check your edit\n"
     "  import importlib; importlib.reload(netplay)   # make it live this game\n"
-    "Read SKILL.md in the skill directory for the full contract and what is frozen."
+    "Read SKILL.md in the skill directory for the full contract and what is frozen.\n"
+    "\n"
+    "=== SYSTEM ACCESS (strict) ===\n"
+    "The shell and filesystem may be used for exactly ONE thing: editing your\n"
+    "netplay policy code inside os.path.dirname(netplay.__file__). Nothing else\n"
+    "is permitted. Do NOT search the filesystem, probe the network, launch\n"
+    "servers or background processes, or read or write anything outside that\n"
+    "directory. The game engine is NOT on disk: it cannot be found, inspected,\n"
+    "or rebuilt, and any substitute you build is not the real game and scores\n"
+    "zero. If a game tool call fails or stalls, retry it or end the turn --\n"
+    "do not investigate the system."
 )
 
 def render_system_prompt(published_tools=None, verbose: bool = False,
