@@ -173,6 +173,7 @@ for r in $(seq 1 "$ROUNDS"); do
   reset_daemon   # the orchestrator is a prime-agent process too
   "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" \
     "$OUT_ROOT/round${r}/corpus__prime_agent" "$CH" "$OUT_ROOT/round${r}" "$PROMPT_FILE" \
+    "$OUT_ROOT" \
     || echo "[FAIL ] orchestrator round $r rc=$?" >&2
 done
 

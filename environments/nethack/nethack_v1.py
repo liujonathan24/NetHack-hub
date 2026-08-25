@@ -149,6 +149,7 @@ class NetHackState(vf.State):
     scout_reward_total: float = 0.0
     descent_count: float = 0.0
     max_dlvl_reached: int = 1
+    max_xp_level: int = 1
     succeeded: bool = False
     ascended: bool = False
     died: bool = False
@@ -571,6 +572,7 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.scout_reward_total = float(v0.get("scout_reward_total", 0.0) or 0.0)
         state.descent_count = float(v0.get("descent_count", 0.0) or 0.0)
         state.max_dlvl_reached = int(v0.get("max_dlvl_reached", 1) or 1)
+        state.max_xp_level = int(v0.get("max_xp_level", 1) or 1)
         state.succeeded = bool(v0.get("succeeded"))
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
@@ -712,11 +714,34 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
                 "parallel_refusals": float(state.parallel_refusals),
                 "budget_exhausted": float(state.budget_exhausted),
                 "max_dlvl_reached": float(state.max_dlvl_reached),
+                "max_xp_level": float(state.max_xp_level),
                 "descent_count": float(state.descent_count),
                 "scout_reward_total": float(state.scout_reward_total),
                 "died": float(state.died),
                 "terminated": float(state.terminated),
                 "moves_executed": float(state.moves_executed),
+            }
+        )
+        # BALROG, both halves. Previously absent from traces.jsonl entirely: XL
+        # was not published at all, so every report either skipped the metric or
+        # re-derived it by re-reading turns/*.ndjson and re-implementing the
+        # score. The house rule is that a table carries the `max` AND the `min`
+        # over the (Dlvl, XL) axes -- a max alone cannot distinguish "descended"
+        # from "levelled up while stuck" -- so publish the pair and the
+        # xp_carried flag that falls out of it.
+        from nethack_harness.prompt.balrog import balrog_both
+
+        _hi, _lo = balrog_both(
+            state.max_dlvl_reached,
+            state.max_xp_level,
+            reached_planes=False,
+            ascended=bool(state.ascended),
+        )
+        trace.metrics.update(
+            {
+                "balrog_pct": 100.0 * _hi,
+                "balrog_min_pct": 100.0 * _lo,
+                "xp_carried": float(_hi > 0.0 and _lo == 0.0),
             }
         )
         # Published so a run's own output says how much of the agent's reasoning

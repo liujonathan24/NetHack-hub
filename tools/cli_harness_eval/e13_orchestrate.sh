@@ -16,7 +16,7 @@
 # thing it may write.
 set -uo pipefail
 
-TRAIN_DIR="${1:?usage: e13_orchestrate.sh <train_dir> <ch_dir> <round_out>}"
+TRAIN_DIR="${1:?usage: e13_orchestrate.sh <train_dir> <ch_dir> <round_out> [prompt] [run_root]}"
 CH="${2:?}"
 ROUND_OUT="${3:?}"
 # The reflection instructions, as a FILE. This is the knob that distinguishes
@@ -24,6 +24,11 @@ ROUND_OUT="${3:?}"
 # code -- different instructions to the orchestrator. Its sha is pinned into
 # every cell of the run, so two experiments are told apart from their artifacts.
 PROMPT_FILE="${4:-}"
+# The run root (parent of round*/), so the reflection pass can be shown how the
+# PREVIOUS rounds went. Without it the orchestrator sees only the round it just
+# ran -- it was being told "an entry that made things worse is the most valuable
+# thing you can find" while having no way to observe worse.
+RUN_ROOT="${5:-$(dirname "$ROUND_OUT")}"
 MODEL="${ORCH_MODEL:-z-ai/glm-5.2}"
 # PIN THE PROVIDER. `--model z-ai/glm-5.2` alone is a model *pattern*: it matched
 # openrouter's catalog entry first and died with "No API key found for
@@ -138,6 +143,39 @@ if [ -n "$PROMPT_FILE" ] && [ -f "$PROMPT_FILE" ]; then
 === EXPERIMENT-SPECIFIC REFLECTION INSTRUCTIONS ($(basename "$PROMPT_FILE")) ===
 $(cat "$PROMPT_FILE")"
   echo "[orch ] reflection prompt: $PROMPT_FILE ($(sha256sum "$PROMPT_FILE" | cut -c1-16))"
+fi
+
+# --- round-over-round evidence ----------------------------------------------
+# Generated BEFORE the model call and appended to the prompt, so the reflection
+# pass can see which of its own past edits helped and which hurt.
+REPORT_TXT="$ROUND_OUT/round_report.txt"
+if [ -d "$RUN_ROOT" ]; then
+  "${PY_BIN:-python3}" "$(dirname "$0")/round_report.py" "$RUN_ROOT" --text \
+      > "$REPORT_TXT" 2>"$ROUND_OUT/round_report.err" \
+    && "${PY_BIN:-python3}" "$(dirname "$0")/round_report.py" "$RUN_ROOT" \
+      > "$ROUND_OUT/round_report.json" 2>/dev/null \
+    || echo "[orch ] WARNING: round_report failed; see $ROUND_OUT/round_report.err" >&2
+fi
+if [ -s "$REPORT_TXT" ]; then
+  PROMPT="${PROMPT}
+
+=== HOW THE PREVIOUS ROUNDS WENT ===
+This is the scoreboard for THIS run, including the rounds before the one you are
+reading. Every delta is seed-matched -- the same seeds compared against
+themselves -- because averaging different seeds across rounds compares luck.
+BALmax/BALmin are the BALROG pair over the (dungeon level, experience level)
+axes: a max that rises while the min stays at zero means the score came from one
+axis alone, which is usually a character that descended without levelling.
+
+Use this to check your own past edits. An entry you added that was followed by a
+drop is the strongest evidence available to you, and deleting it is a real
+result. But read the attribution note: when several entries changed at the same
+boundary, that round cannot tell them apart.
+
+$(cat "$REPORT_TXT")"
+  echo "[orch ] round report: $(wc -l < "$REPORT_TXT") lines"
+else
+  echo "[orch ] WARNING: no round report -- reflecting on this round alone" >&2
 fi
 
 echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH (provider=$PROVIDER model=$MODEL)"
