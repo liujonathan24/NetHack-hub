@@ -233,7 +233,7 @@ if [ -n "${ENV_ARGS:-}" ]; then
   # ("Input should be a valid dictionary"). Dotted paths are also what the
   # existing SKILL_SET override uses, so both go through the same mechanism and
   # merge into the config's table instead of replacing it.
-  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$(dirname "${EVAL_BIN}")/python" - <<'PYFLAT'
+  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$PY_BIN" - <<'PYFLAT'
 import json, os
 def walk(prefix, node):
     for k, v in node.items():
@@ -408,7 +408,33 @@ if [ -n "${TOOL_TIER:-}" ]; then
     echo "launch_cell: VARIANT=${VARIANT} contradicts the tier contract (${_TIER_VARIANT})." >&2
     exit 2
   fi
-  if [ "${MAX_CALLS}" != "${_TIER_CALLS}" ]; then
+  # TIER_SHORT_BUDGET=1 is the preflight's escape: a mock play needs a handful of
+  # calls, not the contract's 200, and it is checking PLUMBING (does the resolved
+  # config match the tier, does the surface come up) rather than producing a
+  # measurable cell. It records the fact in the artifact so a short cell can
+  # never be mistaken for a real one.
+  # ALLOW_BATCHING is not a free knob under a tier: it strips the no-batch rule
+  # from the served document AFTER the frozen-doc hash check, so a [base] cell
+  # would serve a document the E10 baseline never served, and nothing would
+  # fire. The contract pins it; a contradicting env var is refused.
+  if [ -n "${ALLOW_BATCHING:-}" ]; then
+    echo "launch_cell: ALLOW_BATCHING contradicts the tier contract" >&2
+    echo "  (allow_batching is pinned by configs/tool_tiers.toml). A batching" >&2
+    echo "  cell is a different experiment -- give it its own tier." >&2
+    exit 2
+  fi
+  # The seed list is the contract's; running fewer rows than it names is a
+  # SUBSET, which is fine for a mock play and misleading for anything else.
+  _TIER_NSEEDS="$(printf '%s' "$_TIER_SEEDS" | "$PY_BIN" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  if [ -z "${SEEDS:-}" ] && [ "${TIER_SHORT_BUDGET:-}" != "1" ] && [ "${N}" != "${_TIER_NSEEDS}" ]; then
+    echo "launch_cell: N=${N} but the tier contract names ${_TIER_NSEEDS} seeds." >&2
+    echo "  Pass SEEDS to run a different set deliberately, or TIER_SHORT_BUDGET=1" >&2
+    echo "  for a preflight mock play." >&2
+    exit 2
+  fi
+  if [ "${TIER_SHORT_BUDGET:-}" = "1" ]; then
+    OVERRIDES+=(--taskset.env_args.tier_short_budget "true")
+  elif [ "${MAX_CALLS}" != "${_TIER_CALLS}" ]; then
     echo "launch_cell: MAX_CALLS=${MAX_CALLS} contradicts the tier contract (${_TIER_CALLS})." >&2
     echo "  The reference numbers in tool_tiers.toml describe ${_TIER_CALLS} calls." >&2
     exit 2
@@ -417,7 +443,18 @@ if [ -n "${TOOL_TIER:-}" ]; then
   OVERRIDES+=(--taskset.variant "${VARIANT}")
   # Pin ROW SELECTION too: `--num_tasks N` only ever takes the first N of the
   # config's own seed list, so without this the tier's seeds are advisory.
-  OVERRIDES+=(--taskset.env_args.explicit_seeds "${_TIER_SEEDS}")
+  # SEEDS overrides the contract's row selection for cells that deliberately
+  # run a different half -- E13's reflection corpus is seeds 5-9 while its
+  # evaluation stays on the contract's 0-4. It cannot go through ENV_ARGS (the
+  # guard above refuses that alongside TOOL_TIER, for good reason), so it is its
+  # own knob, and the artifact records that the contract's seeds were replaced.
+  if [ -n "${SEEDS:-}" ]; then
+    OVERRIDES+=(--taskset.env_args.explicit_seeds "${SEEDS}")
+    OVERRIDES+=(--taskset.env_args.seeds_overridden "true")
+    echo "[launch_cell] seeds overridden: ${SEEDS} (contract: ${_TIER_SEEDS})"
+  else
+    OVERRIDES+=(--taskset.env_args.explicit_seeds "${_TIER_SEEDS}")
+  fi
   # NOT `mapfile -t X < <(cmd) || exit`: process substitution does not set the
   # pipeline status, so mapfile succeeds even when the resolver died and the
   # cell launches with NO tier flags at all. Capture, check, then split.
@@ -426,6 +463,44 @@ if [ -n "${TOOL_TIER:-}" ]; then
   mapfile -t _TIER_FLAGS <<< "$_TIER_FLAGS_RAW"
   OVERRIDES+=("${_TIER_FLAGS[@]}")
   echo "[launch_cell] tool_tier=${TOOL_TIER} -> ${_TIER_FLAGS[*]}"
+fi
+
+# CONTINUAL_HARNESS mounts a shared Prime Agent continual-harness store into
+# every rollout of this cell, so lessons an earlier game persisted are in a
+# later game's system prompt (docs/EXPERIMENT_E13.md). prime_agent only.
+#
+# Per EXPERIMENT, not global. Several continual experiments run side by side --
+# different reflection prompts, same base surface -- so the store path, the run
+# id and the reflection-prompt hash all vary per run and are pinned into this
+# cell's config.toml next to tool_tier. Without the id in the artifact, two
+# experiments' outputs are indistinguishable after the fact.
+if [ -n "${CONTINUAL_HARNESS:-}" ]; then
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*) ;;
+    *)
+      echo "launch_cell: CONTINUAL_HARNESS is a prime_agent knob (the store is" >&2
+      echo "  mounted into that harness's per-rollout agent dir). Arm '${ARM}'" >&2
+      echo "  has no such store. Refusing." >&2
+      exit 2
+      ;;
+  esac
+  if [ -z "${CONTINUAL_RUN_ID:-}" ]; then
+    echo "launch_cell: CONTINUAL_HARNESS requires CONTINUAL_RUN_ID -- an" >&2
+    echo "  unlabelled continual cell cannot be told apart from another" >&2
+    echo "  experiment's once it is on disk." >&2
+    exit 2
+  fi
+  OVERRIDES+=(--harness.continual_harness_dir "${CONTINUAL_HARNESS}")
+  OVERRIDES+=(--taskset.env_args.continual_run_id "${CONTINUAL_RUN_ID}")
+  if [ -n "${CONTINUAL_PROMPT_SHA:-}" ]; then
+    # Which reflection instructions produced this store. Two runs that differ
+    # only in the orchestrator's prompt are otherwise identical on disk.
+    OVERRIDES+=(--taskset.env_args.continual_prompt_sha "${CONTINUAL_PROMPT_SHA}")
+  fi
+  if [ -n "${CONTINUAL_HARNESS_WRITABLE:-}" ]; then
+    OVERRIDES+=(--harness.continual_harness_writable "${CONTINUAL_HARNESS_WRITABLE}")
+  fi
+  echo "[launch_cell] continual: run_id=${CONTINUAL_RUN_ID} store=${CONTINUAL_HARNESS}"
 fi
 
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"

@@ -80,7 +80,23 @@ def flags(tier: str, arm: str = "prime_agent", cfg: dict | None = None,
         "--taskset.env_args.skill_set", contract["skill_set"],
         "--taskset.env_args.auto_dismiss", contract["auto_dismiss"],
         "--taskset.env_args.tune.reveal_map", json.dumps(contract["tune"]["reveal_map"]),
+        # model / character / task_spec were declared in the contract but never
+        # emitted -- they only happened to match configs/prime_agent.toml, so a
+        # change to that file would have moved the "baseline" without touching
+        # the registry that claims to define it. Emit them, so the contract is
+        # enforced rather than coincidental.
+        "--model", contract["model"],
+        "--taskset.character", contract["character"],
+        "--taskset.task_spec", contract["task_spec"],
+        "--taskset.max_parallel_skill_calls", json.dumps(contract["max_parallel_skill_calls"]),
     ]
+    # Harness-side contract factors: same arm restriction as the tier's own
+    # harness flags -- only the prime_agent harness declares them.
+    if arm in _PRIME_AGENT_ARMS:
+        out += [
+            "--harness.allow_batching", json.dumps(contract["allow_batching"]),
+            "--harness.max_relaunches", json.dumps(contract["max_relaunches"]),
+        ]
     for name, value in cfg[tier].items():
         if name in _HARNESS_SIDE:
             # Silently skipping would give the wrong doc; the launcher refuses

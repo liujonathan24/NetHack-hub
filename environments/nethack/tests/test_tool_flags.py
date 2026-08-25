@@ -277,22 +277,31 @@ def test_the_harness_flag_defaults_off():
     assert PrimeAgentHarnessConfig(id="x").skill_doc_coords is False
 
 
-def test_allow_batching_still_works_on_both_tier_documents():
-    """`_NO_BATCH_RULE` went stale when the honesty pass rewrote SKILL.md, so
-    allow_batching=True raised RuntimeError -- the feature was dead on both
-    documents and only a red test recorded it."""
+def test_allow_batching_works_on_the_human_doc_and_is_refused_on_the_baseline():
+    """Two things at once.
+
+    (a) allow_batching was DEAD -- the honesty pass reworded the rule and
+    `_NO_BATCH_RULE` went stale, so it raised RuntimeError on every document.
+    (b) It must NOT silently apply to the frozen baseline doc: the hash check
+    verifies the fixture, and stripping afterwards changed the SERVED bytes, so
+    a [base] cell served 4753 where E10 served 4829 and nothing fired.
+    """
     import pathlib
+
+    import pytest
 
     import nethack_prime_agent as hp
 
     pkg = pathlib.Path(hp.__file__).parent / "skill"
-    for coords in (False, True):
-        plain = hp._skill_doc(pkg, skill_doc_coords=coords, allow_batching=False)
-        batched = hp._skill_doc(pkg, skill_doc_coords=coords, allow_batching=True)
-        assert hp._NO_BATCH_RULE in plain.decode()
-        assert hp._NO_BATCH_RULE not in batched.decode()
-        assert len(batched) < len(plain)
 
+    plain = hp._skill_doc(pkg, skill_doc_coords=True, allow_batching=False)
+    batched = hp._skill_doc(pkg, skill_doc_coords=True, allow_batching=True)
+    assert hp._NO_BATCH_RULE in plain.decode()
+    assert hp._NO_BATCH_RULE not in batched.decode()
+    assert len(batched) < len(plain)
+
+    with pytest.raises(RuntimeError, match="frozen E10 baseline document"):
+        hp._skill_doc(pkg, skill_doc_coords=False, allow_batching=True)
 
 def _lost_track_agent():
     """Minimal agent that drives melee_attack to the `not found` branch: the
