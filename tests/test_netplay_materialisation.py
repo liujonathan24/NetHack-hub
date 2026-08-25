@@ -174,3 +174,78 @@ def test_frozen_without_a_sandbox_is_allowed():
 def test_an_unknown_mode_is_refused_rather_than_silently_off():
     with pytest.raises(ValueError, match="netplay_code_mode"):
         _setup(netplay_code_mode="mutabel")
+
+
+# ---------- `pinned`: held-out evaluation ----------
+
+def test_pinned_materialises_nothing_at_all():
+    """The artifact under test must be exactly what the evaluator placed."""
+    placed = {
+        f"{SKILL_DIR}/src/netplay/_base.py": b"# the agent's final floor\n",
+        f"{SKILL_DIR}/src/netplay/__init__.py": b"# agent init\n",
+        f"{SKILL_DIR}/src/netplay/explore.py": b"# the agent's generation 5\n",
+    }
+    runtime = _setup(_SetupRuntime(placed), netplay_code_mode="pinned")
+    for path, content in placed.items():
+        assert runtime.files[path] == content, f"pinned mode rewrote {path}"
+
+
+def test_pinned_does_not_even_restore_the_frozen_files():
+    """Unlike every other mode. `_base.py` is part of the frozen artifact here,
+    so restoring ours would swap out a piece of what is being measured."""
+    placed = {f"{SKILL_DIR}/src/netplay/_base.py": b"# agent floor\n",
+              f"{SKILL_DIR}/src/netplay/__init__.py": b"# agent init\n"}
+    runtime = _setup(_SetupRuntime(placed), netplay_code_mode="pinned")
+    assert runtime.files[f"{SKILL_DIR}/src/netplay/_base.py"] == b"# agent floor\n"
+
+
+def test_pinned_without_a_tree_is_refused_not_silently_empty():
+    """The failure this whole mode exists to prevent: evaluating a code arm
+    with no code, and reporting the number as the arm's."""
+    with pytest.raises(ValueError, match="pinned"):
+        _setup(netplay_code_mode="pinned")
+
+
+def test_pinned_still_serves_the_code_document():
+    """`off` would materialise nothing too -- and serve the baseline doc, which
+    advertises four tools this tier retired. That is why `pinned` exists."""
+    from nethack_prime_agent import _skill_doc
+    from importlib import resources
+
+    pkg = resources.files("nethack_prime_agent") / "skill"
+    pinned = _skill_doc(pkg, skill_doc_coords=False, allow_batching=False,
+                        netplay_code_mode="pinned")
+    code = _skill_doc(pkg, skill_doc_coords=False, allow_batching=False,
+                      netplay_code_mode="mutable")
+    off = _skill_doc(pkg, skill_doc_coords=False, allow_batching=False,
+                     netplay_code_mode="off")
+    assert pinned == code and pinned != off
+    # The retired tools are not mentioned AT ALL. Naming them, even only to say
+    # they are unavailable, puts four callable-looking names in front of a model
+    # that cannot call them. The document states instead that the six listed are
+    # the complete set -- absence is the clearer instruction.
+    text = pinned.decode()
+    for retired in ("np_move_to", "np_melee_attack", "np_explore_level", "np_kick"):
+        assert retired not in text, (
+            f"{retired} is named in the code-tier document; the six primitives "
+            "are meant to be presented as the whole surface"
+        )
+    # Normalise whitespace: these phrases wrap across lines in the markdown, so
+    # a literal match would pin the line width rather than the wording.
+    flat = " ".join(text.split())
+    assert "complete set of tools" in flat
+    # The editable/not-editable split is the other thing this document has to be
+    # unambiguous about, because it is the only place the agent learns it.
+    assert "You cannot edit them" in flat
+    assert "you can edit every one of them" in flat
+
+
+def test_every_mode_is_accounted_for():
+    """A new mode must be a deliberate edit here, not an accident elsewhere."""
+    import inspect
+
+    from nethack_prime_agent import PrimeAgentHarness
+
+    src = inspect.getsource(PrimeAgentHarness._materialise_netplay)
+    for mode in ("off", "frozen", "mutable", "pinned"):
+        assert f'"{mode}"' in src or f"'{mode}'" in src

@@ -306,3 +306,94 @@ def test_the_module_accessor_returns_modules_not_functions(netplay):
     assert netplay.module("explore").__name__ == "netplay.explore"
     with pytest.raises(KeyError):
         netplay.module("nonexistent")
+
+
+# ---------- adversarial corpus ----------
+#
+# Every entry below was a WORKING bypass of the first version of this gate,
+# found by an adversarial pass. The gate matched the most literal spelling of
+# each rule and missed every one-indirection variant, which composed into a
+# single innocuous-looking module that passed `check_tree` with no findings.
+#
+# They are kept as a corpus rather than prose because the failure mode is
+# regression: a later simplification of the walker will silently reopen them.
+
+BYPASS_CORPUS = {
+    # Rule: the shim is reachable only from the frozen floor.
+    "boundary via _base attribute": "from netplay import _base\n_b = _base.nethack\n",
+    "boundary via private name":    "from netplay import _base\n_b = _base._nethack\n",
+    # Rule: no imports outside the allowlist. Both of these ARE the import.
+    "importlib.import_module":      "import importlib\ns = importlib.import_module('socket')\n",
+    "os process escape":            "import os\nos.system('id')\n",
+    # Rule: no dynamic execution. The call site is not where to catch it.
+    "aliased eval":                 "e = eval\ne('1+2')\n",
+    "builtins subscript":           "__builtins__['ev'+'al']('1+2')\n",
+    "getattr exec":                 "getattr(__builtins__, 'exec')('x')\n",
+    # Rule: never rebind the floor. Seven spellings of one assignment.
+    "aliased patch":                "from netplay import _base as b\nb.press = None\n",
+    "dotted patch":                 "import netplay._base\nnetplay._base.press = None\n",
+    "module alias patch":           "import netplay as np\nnp._base.press = None\n",
+    "rebound local":                "from netplay import _base\nm = _base\nm.press = None\n",
+    "chained rebind":               "from netplay import _base\nm = _base\nn = m\nn.screen = None\n",
+    "tuple target":                 "from netplay import _base\n_base.press, q = None, 1\n",
+    "starred target":               "from netplay import _base\n*_base.press, q = [1, 2]\n",
+    "annotated dotted":             "import netplay._base\nnetplay._base.press: int = 5\n",
+    "vars() subscript":             "from netplay import _base\nvars(_base)['press'] = None\n",
+    "__dict__ subscript":           "from netplay import _base\n_base.__dict__['x'] = None\n",
+    "setattr on alias":             "from netplay import _base as b\nsetattr(b, 'press', None)\n",
+    "for-loop target":              "from netplay import _base\ndef f(it):\n    for _base.press in it: pass\n",
+}
+
+
+@pytest.mark.parametrize("label", sorted(BYPASS_CORPUS), ids=lambda s: s.replace(" ", "-"))
+def test_known_bypasses_stay_closed(label):
+    found = netplay_gate.check_source(Path("pwn.py"), BYPASS_CORPUS[label])
+    assert found, f"BYPASS REOPENED: {label!r} produced no finding"
+
+
+def test_the_composed_attack_module_is_rejected():
+    """The single file that defeated every rule at once. It must not come back."""
+    pwn = (
+        "from netplay import _base\n"
+        "import importlib\n"
+        "_boundary = _base.nethack\n"
+        "async def pwn(key='>'):\n"
+        "    return await _boundary.np_press_key(key=key)\n"
+        "def exfil():\n"
+        "    return importlib.import_module('socket'), eval('1+1')\n"
+        "def repatch():\n"
+        "    b = _base\n"
+        "    b.press = None\n"
+    )
+    kinds = {f["kind"] for f in netplay_gate.check_source(Path("pwn.py"), pwn)}
+    for expected in ("bypasses-floor", "unlisted-import", "dynamic-exec", "patches-boundary"):
+        assert expected in kinds, f"composed attack no longer flagged as {expected}: {kinds}"
+
+
+LEGITIMATE = {
+    "reads through the floor":
+        "from netplay import _base\nasync def f():\n    o = await _base.screen()\n    return _base.status(o)\n",
+    "local alias for reading":
+        "from netplay import _base\nasync def f():\n    b = _base\n    return await b.screen()\n",
+    "sibling import":
+        "from netplay.explore import move_to\nasync def f():\n    return await move_to(1, 2)\n",
+    "allowed stdlib":
+        "import re\nimport itertools\nfrom typing import Any\n",
+}
+
+
+@pytest.mark.parametrize("label", sorted(LEGITIMATE), ids=lambda s: s.replace(" ", "-"))
+def test_ordinary_policy_code_is_not_flagged(label):
+    """A gate that rejects normal code trains the agent to route around it."""
+    found = netplay_gate.check_source(Path("ok.py"), LEGITIMATE[label])
+    assert found == [], f"false positive on {label!r}: {found}"
+
+
+def test_the_boundary_is_not_a_public_attribute_of_the_floor():
+    """Structural half of the fix: even without the gate, `_base.nethack` must
+    not exist. Defence in depth -- the gate is the rule, this is the shape."""
+    src = (NETPLAY / "_base.py").read_text(encoding="utf-8")
+    assert "import nethack as _nethack" in src
+    assert "\nimport nethack\n" not in src, (
+        "binding the shim publicly hands every composite the game without beacons"
+    )

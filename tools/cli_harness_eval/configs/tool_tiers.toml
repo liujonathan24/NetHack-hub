@@ -146,3 +146,20 @@ melee_hints = false
 skill_doc_coords = false
 netplay_composites = false
 netplay_code_mode = "frozen"
+
+[continual-code-heldout]
+# HELD-OUT EVALUATION of a finished code arm. Not an arm you run rounds on --
+# `eval_frozen.sh` selects it, and selects it for BOTH code arms, because a
+# held-out cell must measure the frozen artifact rather than reproduce the
+# accumulation that produced it.
+#
+# Identical to [continual-code] except `netplay_code_mode = "pinned"`: the
+# harness materialises nothing, so the tree the evaluator copied into place --
+# the agent's own final code -- is what runs. `mutable` would let the
+# evaluation write to the artifact it is measuring; `frozen` would overwrite
+# the agent's composites with our repo seeds and measure those instead.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+netplay_composites = false
+netplay_code_mode = "pinned"

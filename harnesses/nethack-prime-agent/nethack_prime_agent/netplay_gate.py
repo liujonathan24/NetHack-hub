@@ -38,10 +38,22 @@ from pathlib import Path
 # only sanctioned way to touch the game, so everything else is bookkeeping.
 ALLOWED_ROOTS = frozenset({
     "netplay",
-    "__future__", "ast", "collections", "dataclasses", "enum", "functools",
-    "heapq", "importlib", "itertools", "json", "math", "os", "pathlib",
-    "random", "re", "string", "textwrap", "time", "typing", "warnings",
+    "__future__", "collections", "dataclasses", "enum", "functools",
+    "heapq", "itertools", "json", "math", "random", "re", "string",
+    "textwrap", "time", "typing",
 })
+
+# Removed from the allowlist after an adversarial pass found each of them was a
+# one-line escape from every other rule here:
+#   importlib -- `importlib.import_module("socket")` imports anything the
+#                denylist forbids, and the import never appears as an AST import
+#   os        -- `os.system` / `os.popen` are process escapes
+#   ast       -- only `_base.check()` needs it, and that file is frozen
+#   pathlib   -- filesystem reach the policies do not need
+#   warnings  -- only the frozen `__init__` needs it
+# The frozen files legitimately use several of these and are policy-exempt, so
+# nothing we ship is affected. If a composite genuinely needs one, add it back
+# deliberately -- do not widen this set to make a failing gate pass.
 
 # `nethack` is the MCP shim itself. Only the FROZEN files may import it: a
 # composite that reaches it directly gets the game without the correlation
@@ -60,7 +72,23 @@ DENIED_ROOTS = frozenset({
 # Dynamic-execution escapes. `compile`/`exec`/`eval`/`__import__` would let a
 # tree import a denied module at runtime, which every static check above would
 # miss. `open` is NOT denied -- reading its own source is legitimate.
-DENIED_CALLS = frozenset({"exec", "eval", "compile", "__import__"})
+# Checked as any REFERENCE, not only as a call. `e = eval` followed by `e(...)`
+# is a call whose func is `Name('e')`, which no denylist of call names can catch
+# -- so the alias is rejected where it is created.
+DENIED_NAMES = frozenset({
+    "exec", "eval", "compile", "__import__", "__builtins__",
+    # Attribute and namespace reflection: each one turns a static rule below
+    # into a suggestion. `vars(_base)["press"] = None` and
+    # `setattr(b, "press", None)` both rebind the floor.
+    "getattr", "setattr", "delattr", "vars", "globals", "locals",
+})
+DENIED_CALLS = DENIED_NAMES   # back-compat for callers importing the old name
+
+# Names whose ATTRIBUTES must never be assigned, however the expression is
+# spelled. Resolved by walking to the root of the attribute/subscript chain, so
+# `netplay._base.press = x` and `b.press, q = ...` are caught alongside the
+# simple form.
+BOUNDARY_ROOTS = frozenset({"nethack", "_base", "netplay", "_nethack"})
 
 # Files we ship. An agent may add modules, but not replace these.
 FROZEN_FILES = frozenset({"__init__.py", "_base.py"})
@@ -73,6 +101,42 @@ def _finding(path: Path, node: ast.AST | None, kind: str, detail: str) -> dict:
         "kind": kind,
         "detail": detail,
     }
+
+
+def _root_name(node: ast.AST) -> str | None:
+    """The base Name of an attribute/subscript chain, or None.
+
+    `netplay._base.press` and `vars(_base)["press"]` both have to resolve to
+    something the boundary rules can test; matching the literal spelling
+    `_base.press` only catches the shortest of the several ways to write it.
+    """
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    if isinstance(node, ast.Call):                 # vars(_base)[...] / getattr(...)
+        return _root_name(node.func) if not node.args else _root_name(node.args[0])
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _targets(node: ast.AST) -> list[ast.expr]:
+    """Every expression a statement ASSIGNS TO.
+
+    Covers the forms the first version of this walker missed entirely: tuple and
+    starred packing, annotated assignment, `for` targets, `with ... as`, and
+    comprehension targets. Each of them can rebind an attribute of the floor.
+    """
+    if isinstance(node, ast.Assign):
+        return list(node.targets)
+    if isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
+        return [node.target]
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return [node.target]
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        return [i.optional_vars for i in node.items if i.optional_vars]
+    if isinstance(node, ast.comprehension):
+        return [node.target]
+    if isinstance(node, ast.Delete):
+        return list(node.targets)
+    return []
 
 
 def check_source(path: Path, source: str, *, policy: bool = True) -> list[dict]:
@@ -94,6 +158,40 @@ def check_source(path: Path, source: str, *, policy: bool = True) -> list[dict]:
     if not policy:
         return findings
 
+    # Local names that end up bound to the floor or the shim. `from netplay
+    # import _base as b` makes `b.press = None` a rebinding of the floor under
+    # a name no fixed list could contain, so the names are collected from the
+    # file's own imports before any rule is applied.
+    boundary = set(BOUNDARY_ROOTS)
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name.split(".")[0] in BOUNDARY_ROOTS:
+                    boundary.add(a.asname or a.name.split(".")[0])
+        elif isinstance(n, ast.ImportFrom):
+            mod = "netplay" if n.level else (n.module or "")
+            if mod.split(".")[0] in BOUNDARY_ROOTS:
+                for a in n.names:
+                    boundary.add(a.asname or a.name)
+
+    # Propagate through plain `x = y` rebinding, to a fixpoint. A module bound
+    # to a local (`m = _base`) is ordinary style, so the assignment itself is
+    # not a finding -- but every attribute write through `m` has to be. Two
+    # passes are not enough in a chain (`m = _base; n = m`), so this loops.
+    for _ in range(len(tree.body) + 1):
+        grew = False
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Assign) or not isinstance(n.value, ast.Name):
+                continue
+            if n.value.id not in boundary:
+                continue
+            for t in n.targets:
+                if isinstance(t, ast.Name) and t.id not in boundary:
+                    boundary.add(t.id)
+                    grew = True
+        if not grew:
+            break
+
     for node in ast.walk(tree):
         # --- imports ---
         roots: list[str] = []
@@ -114,33 +212,42 @@ def check_source(path: Path, source: str, *, policy: bool = True) -> list[dict]:
             elif root not in ALLOWED_ROOTS:
                 findings.append(_finding(path, node, "unlisted-import", root))
 
-        # --- dynamic execution ---
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in DENIED_CALLS:
-                findings.append(_finding(path, node, "dynamic-exec", node.func.id))
+        # --- dynamic execution and reflection, by REFERENCE not by call ---
+        # Catching the call site is not enough: `e = eval` then `e(...)` is a
+        # call on a name the denylist has never heard of. Rejecting the name
+        # wherever it is mentioned closes the alias, the subscript form
+        # (`__builtins__["eval"]`) and the getattr form in one rule.
+        if isinstance(node, ast.Name) and node.id in DENIED_NAMES:
+            findings.append(_finding(path, node, "dynamic-exec", node.id))
 
-        # --- monkey-patching the frozen shim ---
-        # `nethack.np_press_key = my_fake` would redirect the boundary itself,
-        # which no amount of import policing would catch.
-        targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-            targets = [node.target]
-        for tgt in targets:
-            if (isinstance(tgt, ast.Attribute) and isinstance(tgt.value, ast.Name)
-                    and tgt.value.id in ("nethack", "_base")):
+        # --- reaching the boundary through an object instead of an import ---
+        # `_base` imports the shim; before it was bound privately, `_base.nethack`
+        # handed any composite the game with no beacon attached. Both spellings
+        # are rejected, as is `__dict__`, which is the same escape one level down.
+        if isinstance(node, ast.Attribute):
+            if node.attr in ("nethack", "_nethack"):
                 findings.append(_finding(
-                    path, node, "patches-boundary",
-                    f"{tgt.value.id}.{tgt.attr}",
+                    path, node, "bypasses-floor",
+                    f".{node.attr} -- the shim is reachable only from _base",
                 ))
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id == "setattr" and node.args:
-                first = node.args[0]
-                if isinstance(first, ast.Name) and first.id in ("nethack", "_base"):
+            elif node.attr == "__dict__":
+                findings.append(_finding(path, node, "patches-boundary", "__dict__"))
+            elif node.attr.startswith("_") and _root_name(node) in boundary:
+                findings.append(_finding(
+                    path, node, "bypasses-floor",
+                    f"{_root_name(node)}.{node.attr} -- private access",
+                ))
+
+        # --- rebinding the floor, in every assignment form ---
+        for tgt in _targets(node):
+            for sub in ast.walk(tgt):
+                if not isinstance(sub, (ast.Attribute, ast.Subscript)):
+                    continue
+                root = _root_name(sub)
+                if root in boundary:
+                    label = getattr(sub, "attr", "[...]")
                     findings.append(_finding(
-                        path, node, "patches-boundary", f"setattr({first.id}, ...)"
-                    ))
+                        path, node, "patches-boundary", f"{root}.{label}"))
     return findings
 
 
@@ -159,16 +266,27 @@ def check_tree(root: Path, *, frozen_reference: Path | None = None) -> dict:
         )
         return report
 
-    for path in sorted(root.glob("*.py")):
-        report["files"].append(path.name)
+    # RECURSIVE. A non-recursive glob was a total bypass: a subpackage
+    # (`netplay/evil/__init__.py`) importing socket and subprocess was never
+    # opened, so every rule above -- allowlist, boundary, dynamic exec --
+    # applied only to files the agent chose to put at the top level. `.git` is
+    # skipped because the round merge keeps history in the tree itself.
+    for path in sorted(root.rglob("*.py")):
+        if any(part == ".git" or part == "__pycache__" for part in path.parts):
+            continue
+        rel = path.relative_to(root).as_posix()
+        report["files"].append(rel)
         try:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            report["findings"].append(_finding(path, None, "unreadable", str(exc)))
+            report["findings"].append(
+                {"file": rel, "line": 0, "kind": "unreadable", "detail": str(exc)})
             continue
-        report["findings"].extend(
-            check_source(path, source, policy=path.name not in FROZEN_FILES)
-        )
+        # Only the top-level frozen files are policy-exempt. A nested file
+        # NAMED `_base.py` is agent code and gets the full treatment.
+        for f in check_source(path, source, policy=rel not in FROZEN_FILES):
+            f["file"] = rel
+            report["findings"].append(f)
 
     missing = FROZEN_FILES - set(report["files"])
     for name in sorted(missing):

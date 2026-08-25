@@ -109,6 +109,10 @@ _NETPLAY_FROZEN_FILES = ("src/netplay/__init__.py", "src/netplay/_base.py")
 # "frozen" mode they are rewritten like everything else, which is what makes
 # the [continual-code-frozen] control a control: same retired-composite
 # surface, no accumulation.
+# The branch canonical's HEAD rests on between rollouts. Named explicitly
+# rather than relying on git's default, which varies with `init.defaultBranch`.
+_NETPLAY_BASE_BRANCH = "netplay-canonical"
+
 _NETPLAY_SEED_FILES = (
     "src/netplay/explore.py",
     "src/netplay/descend.py",
@@ -215,7 +219,7 @@ _BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d3
 # different tool sets (this one retires the four server-side composites), so
 # there is no shared paragraph to patch. Regenerate after a deliberate edit:
 #   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.code.md
-_CODE_SKILL_SHA256 = "7a3966bb5ba636f82fd331a77259c73e4b9d45aafde1a25347f376acc5396ccf"
+_CODE_SKILL_SHA256 = "324d79a4214c0763836612bbdd64783b05c4328302899370e990604150154688"
 
 
 def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool,
@@ -428,6 +432,17 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     are written only when absent, so the agent's own code accumulates across
     episodes and rounds.
 
+    `pinned` -- held-out evaluation. NOTHING is materialised: whatever tree the
+    caller placed at `{skill_dir}/src/netplay` is what runs, untouched. This is
+    the only mode that evaluates the agent's OWN final code, and it exists
+    because neither of the other two can: `mutable` would let the evaluation
+    write to the artifact it is measuring, and `frozen` would overwrite the
+    agent's composites with our repo seeds and quietly measure those instead.
+    The teardown gate still runs (a broken frozen tree is worth knowing about)
+    but nothing is committed, because a held-out cell must not accumulate.
+    Pair it with a read-only bind; `eval_frozen.sh` also hashes the tree before
+    and after and fails the run if it changed.
+
     Two things this mode does NOT change, deliberately: `pyproject.toml` is
     never touched, so `pyprojectHash` stays stable and no rollout triggers the
     ~10-minute kernel-venv rebuild; and the skill directory path stays fixed,
@@ -596,14 +611,35 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         `frozen` mode and written only-if-absent in `mutable` mode -- that
         single difference is the whole treatment/control split of SPEC §7.2.
         """
-        mode = str(self.config.netplay_code_mode).strip().lower()
+        # `.strip('"\'')` is defence in depth, not decoration. The tier
+        # expander used to emit this value through `json.dumps`, which for a
+        # STRING yields `"mutable"` WITH quotes -- and the eval CLI passes a
+        # bare scalar through verbatim, so the harness received the quoted
+        # form and refused every code-tier cell at setup. The expander is
+        # fixed; this keeps an already-written config.toml from that era
+        # loadable instead of failing on a value that is obviously intended.
+        mode = str(self.config.netplay_code_mode).strip().strip('"\'').lower()
         if mode == "off":
             return
-        if mode not in ("frozen", "mutable"):
+        if mode not in ("frozen", "mutable", "pinned"):
             raise ValueError(
-                f"netplay_code_mode must be 'off', 'frozen' or 'mutable', "
-                f"got {self.config.netplay_code_mode!r}"
+                f"netplay_code_mode must be 'off', 'frozen', 'mutable' or "
+                f"'pinned', got {self.config.netplay_code_mode!r}"
             )
+        if mode == "pinned":
+            # Held-out evaluation. Writing ANYTHING here would replace part of
+            # the artifact under test, so this mode's whole contract is that it
+            # writes nothing -- including the frozen files, which are already
+            # in the tree the caller pinned.
+            if not await self._path_exists(runtime, f"{self._skill_dir}/src/netplay/_base.py"):
+                raise ValueError(
+                    "netplay_code_mode='pinned' but no tree is present at "
+                    f"{self._skill_dir}/src/netplay. Pinned mode materialises "
+                    "nothing by design -- the caller (eval_frozen.sh) must copy "
+                    "the frozen tree into place before the cell starts."
+                )
+            logger.info("netplay: pinned tree, materialising nothing")
+            return
 
         if mode == "mutable" and not self.config.sandbox:
             # The skills path is FIXED (it has to be, or the kernel-venv key
@@ -1227,17 +1263,32 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # rollout branches from whatever canonical left there. Committing even a
         # FAILED tree is deliberate: the branch is the evidence, and the merge
         # is where it gets refused.
+        if mode == "pinned":
+            # A held-out cell contributes nothing by construction. Committing
+            # here would create a branch off the artifact under test.
+            logger.info("netplay: pinned mode, not committing trace %s", trace_id)
+            return
+
         verdict = "pass" if not findings else f"fail:{len(findings)}"
         script = (
             f"set -e; cd {tree}; "
-            f"if [ ! -d .git ]; then git init -q . && "
+            f"if [ ! -d .git ]; then git init -q -b {_NETPLAY_BASE_BRANCH} . && "
             f"printf '__pycache__/\n*.pyc\n' > .gitignore; fi; "
             f"git config user.email netplay@localhost; "
             f"git config user.name 'netplay rollout'; "
+            # HEAD is returned to the base branch below. Leaving it on
+            # `agent-<id>` was a real defect: canonical's HEAD would still be
+            # the LAST rollout's branch when the round merge ran, so that
+            # tree was already canonical and never gated -- the merger saw
+            # "no commits over base" while a gate-failing generation sat in
+            # the tree. See the round-merge probe report.
+            f"git rev-parse --verify -q {_NETPLAY_BASE_BRANCH} >/dev/null 2>&1 "
+            f"|| git checkout -q -B {_NETPLAY_BASE_BRANCH}; "
             f"git checkout -q -B agent-{trace_id}; "
             f"git add -A; "
             f"git commit -q -m 'rollout {trace_id}: gate={verdict} calls={calls}' "
-            f"--allow-empty"
+            f"--allow-empty; "
+            f"git checkout -q {_NETPLAY_BASE_BRANCH}"
         )
         try:
             probe = await runtime.run(["sh", "-c", script], self._env_with_path())

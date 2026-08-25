@@ -98,13 +98,22 @@ def flags(tier: str, arm: str = "prime_agent", cfg: dict | None = None,
             "--harness.max_relaunches", json.dumps(contract["max_relaunches"]),
         ]
     for name, value in cfg[tier].items():
+        # STRINGS GO BARE. `json.dumps("mutable")` is `"mutable"` WITH quotes,
+        # and the eval CLI only json-decodes tokens starting with `{` or `[` --
+        # a bare scalar is passed through verbatim. So the quoted form reached
+        # PrimeAgentHarnessConfig as the 9-character string '"mutable"' and
+        # every code-tier cell died at setup. Bools and numbers still need
+        # json.dumps (`False` -> `false`), which is why this is not uniform.
+        # The provenance keys below were always emitted bare, which is why only
+        # the tier tables were affected.
+        emitted = value if isinstance(value, str) else json.dumps(value)
         if name in _HARNESS_SIDE:
             # Silently skipping would give the wrong doc; the launcher refuses
             # the combination instead (see launch_cell.sh).
             if arm in _PRIME_AGENT_ARMS:
-                out += [f"--harness.{name}", json.dumps(value)]
+                out += [f"--harness.{name}", emitted]
         else:
-            out += [f"--taskset.env_args.{name}", json.dumps(value)]
+            out += [f"--taskset.env_args.{name}", emitted]
     # Provenance, into the run's own config.toml.
     out += [
         "--taskset.env_args.tool_tier", tier,

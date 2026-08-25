@@ -84,11 +84,43 @@ def test_only_the_code_tiers_touch_the_new_keys():
 @pytest.mark.parametrize("arm", PRIME_ARMS)
 def test_netplay_code_mode_is_routed_harness_side(arm):
     pairs = _pairs(tool_tiers.flags("continual-code", arm))
-    assert pairs.get("--harness.netplay_code_mode") == '"mutable"'
+    assert pairs.get("--harness.netplay_code_mode") == "mutable"
     assert "--taskset.env_args.netplay_code_mode" not in pairs, (
         "netplay_code_mode is consumed by PrimeAgentHarnessConfig; sending it "
         "env-side would be a silent no-op"
     )
+
+
+@pytest.mark.parametrize("tier", CODE_TIERS + ("continual-code-heldout",))
+def test_the_emitted_mode_is_one_the_harness_accepts(tier):
+    """Assert the OUTCOME, not the token.
+
+    The previous version of this test asserted the emitted string was
+    `'"mutable"'` -- the json.dumps form, quotes included. That is exactly what
+    the bug produced, so the test pinned the defect instead of catching it: the
+    eval CLI passes a bare scalar through verbatim, so the harness received a
+    9-character string with quotes in it and refused every code-tier cell at
+    setup. Test what the harness ends up with.
+    """
+    from nethack_prime_agent import PrimeAgentHarnessConfig
+
+    value = _pairs(tool_tiers.flags(tier, "prime_agent"))["--harness.netplay_code_mode"]
+    cfg = PrimeAgentHarnessConfig(id="nethack-prime-agent", netplay_code_mode=value)
+    resolved = str(cfg.netplay_code_mode).strip().strip("\"'").lower()
+    assert resolved in ("off", "frozen", "mutable", "pinned"), (
+        f"{tier} emits {value!r}, which resolves to {resolved!r} -- not a mode "
+        "the materialiser accepts, so every cell on this tier dies at setup"
+    )
+
+
+def test_no_tier_value_is_emitted_json_quoted():
+    """The general form of the bug above: strings must go bare, bools must not."""
+    for tier in tool_tiers.tiers(CFG):
+        for k, v in _pairs(tool_tiers.flags(tier, "prime_agent")).items():
+            assert not (v.startswith('"') and v.endswith('"')), (
+                f"{tier} emits {k}={v!r} json-quoted; the CLI does not unquote "
+                "bare scalars, so the quotes reach the config as data"
+            )
 
 
 def test_netplay_code_mode_never_reaches_a_non_prime_arm():
