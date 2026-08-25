@@ -313,3 +313,68 @@ def test_every_mode_is_accounted_for():
     src = inspect.getsource(PrimeAgentHarness._materialise_netplay)
     for mode in ("off", "frozen", "mutable", "pinned"):
         assert f'"{mode}"' in src or f"'{mode}'" in src
+
+
+# ---------- parallel isolation (SPEC §5.2: per-rollout clone + bind) ----------
+
+def _seed_canonical(root):
+    """What run_e13.sh does once, serially, before any rollout."""
+    canonical = pathlib.Path(root) / "netplay-canonical"
+    canonical.mkdir(parents=True)
+    pkg = resources.files("nethack_prime_agent") / "skill" / "src" / "netplay"
+    for f in pathlib.Path(str(pkg)).glob("*.py"):
+        (canonical / f.name).write_bytes(f.read_bytes())
+    import subprocess
+    for a in (["init","-q","-b","netplay-canonical","."],["config","user.email","s@s"],
+              ["config","user.name","s"],["add","-A"],["commit","-q","-m","seed"],["tag","round-0"]):
+        subprocess.run(["git","-C",str(canonical),*a],capture_output=True)
+    return canonical
+
+
+def test_parallel_only_for_mutable_under_a_sandbox():
+    def parallel(**kw):
+        return PrimeAgentHarness(PrimeAgentHarnessConfig(id="x", **kw))._netplay_parallel()
+    assert parallel(netplay_code_mode="mutable", sandbox=True) is True
+    assert parallel(netplay_code_mode="mutable", sandbox=False) is False  # serial
+    assert parallel(netplay_code_mode="frozen", sandbox=True) is False
+    assert parallel(netplay_code_mode="pinned", sandbox=True) is False
+    assert parallel(netplay_code_mode="off", sandbox=True) is False
+
+
+def test_provisioning_clones_canonical_onto_a_private_branch(tmp_path):
+    _seed_canonical(tmp_path)
+    h = PrimeAgentHarness(PrimeAgentHarnessConfig(
+        id="x", install_dir=str(tmp_path), sandbox=True, netplay_code_mode="mutable"))
+    pkg = resources.files("nethack_prime_agent") / "skill"
+    work = asyncio.run(h._provision_netplay_worktree(_RealDirRuntime(tmp_path), "s7", pkg))
+    assert pathlib.Path(work) == pathlib.Path(tmp_path) / "netplay-work" / "s7"
+    assert (pathlib.Path(work) / ".git").is_dir()
+    import subprocess
+    head = subprocess.run(["git","-C",work,"rev-parse","--abbrev-ref","HEAD"],
+                          capture_output=True,text=True).stdout.strip()
+    assert head == "agent-s7", "the clone must be on this rollout's own branch"
+    assert "YOURS TO EDIT" in (pathlib.Path(work) / "explore.py").read_text()
+
+
+def test_provisioning_refuses_when_canonical_is_unseeded(tmp_path):
+    """A rollout must not seed canonical -- concurrent clones would race."""
+    h = PrimeAgentHarness(PrimeAgentHarnessConfig(
+        id="x", install_dir=str(tmp_path), sandbox=True, netplay_code_mode="mutable"))
+    pkg = resources.files("nethack_prime_agent") / "skill"
+    with pytest.raises(RuntimeError, match="canonical repo missing"):
+        asyncio.run(h._provision_netplay_worktree(_RealDirRuntime(tmp_path), "s0", pkg))
+
+
+def test_the_sandbox_prefix_binds_the_private_tree_over_the_fixed_path():
+    h = PrimeAgentHarness(PrimeAgentHarnessConfig(
+        id="x", install_dir="/tmp/vf-prime-agent", sandbox=True, netplay_code_mode="mutable"))
+    argv = h._sandbox_prefix("/work", netplay_src="/tmp/vf-prime-agent/netplay-work/s3")
+    joined = " ".join(argv)
+    # the private tree is bound over the fixed skill path...
+    assert "--bind /tmp/vf-prime-agent/netplay-work/s3 " \
+           "/tmp/vf-prime-agent/skills/nethack/src/netplay" in joined
+    # ...and AFTER the install_dir bind, so the narrower mount wins
+    assert joined.index("--bind /tmp/vf-prime-agent /tmp/vf-prime-agent") < \
+           joined.index("netplay-work/s3")
+    # no bind at all when none is passed (off/frozen/pinned/serial)
+    assert "netplay-work" not in " ".join(h._sandbox_prefix("/work"))
