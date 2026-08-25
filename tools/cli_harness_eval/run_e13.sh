@@ -51,6 +51,28 @@ RUN="${EXP_ID}-r${REPLICATE}"
 # would overwrite each other's skill package mid-run.
 INSTALL_DIR="${INSTALL_DIR:-/tmp/vf-prime-agent-${RUN}}"
 CH="${CH:-${INSTALL_DIR}/continual-harness}"
+
+# Skills-as-code arm wiring. NETPLAY_CANONICAL is the ONE git repo the agent's
+# code accumulates in -- the same fixed skills path the kernel imports from, so
+# canonical IS the live tree. It is left unset for every other arm, which keeps
+# the code-merge and code-freeze blocks below inert for them.
+#
+# MAX_CONCURRENT=1 is not a tuning knob here, it is correctness: the mutable
+# arm's rollouts share this one tree and this one repo, so they MUST commit one
+# at a time (see PrimeAgentHarness._materialise_netplay). Parallel per-rollout
+# isolation is deferred; until it exists, this serialises.
+case "$TIER" in
+  continual-code)
+    export NETPLAY_CANONICAL="${INSTALL_DIR}/skills/nethack/src/netplay"
+    export MAX_CONCURRENT=1
+    echo "[e13  ] netplay canonical=$NETPLAY_CANONICAL (serial: MAX_CONCURRENT=1)"
+    ;;
+  continual-code-frozen)
+    # The control accumulates nothing, so no canonical and no merge -- but its
+    # rollouts still write the shared tree, so serialise them too.
+    export MAX_CONCURRENT=1
+    ;;
+esac
 OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e13/${RUN}}"
 PROMPT_FILE="$REPO/configs/continual/${PROMPT_NAME}"
 [ -f "$PROMPT_FILE" ] || { echo "run_e13: no reflection prompt at $PROMPT_FILE" >&2; exit 2; }

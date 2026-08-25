@@ -84,6 +84,7 @@ def netplay(monkeypatch):
         ("pray", {}, "np_pray", {}),
         ("apply", {"item_letter": "a"}, "np_apply", {"item_letter": "a"}),
         ("search", {"times": 4}, "search", {"times": 4}),
+        ("kick", {"x": 5, "y": 6}, "np_kick", {"x": 5, "y": 6}),
     ],
 )
 @pytest.mark.asyncio
@@ -114,7 +115,7 @@ def test_the_floor_exports_exactly_the_documented_surface(netplay):
     """`__all__` is the contract SKILL.md describes; drift breaks the doc."""
     from netplay import _base
     assert set(_base.__all__) == {
-        "press", "screen", "rest", "pray", "apply", "search",
+        "press", "screen", "rest", "pray", "apply", "search", "kick",
         "status", "features", "monsters", "grid", "position", "tile",
         "messages", "prompt_open", "check", "call_count",
     }

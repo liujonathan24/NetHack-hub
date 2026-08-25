@@ -49,7 +49,7 @@ from typing import Any
 import nethack as _nethack
 
 __all__ = [
-    "press", "screen", "rest", "pray", "apply", "search",
+    "press", "screen", "rest", "pray", "apply", "search", "kick",
     "status", "features", "monsters", "grid", "position", "tile",
     "messages", "prompt_open",
     "check", "call_count",
@@ -122,6 +122,18 @@ async def apply(item_letter: str | None = None) -> str:
 async def search(times: int = 1) -> str:
     """Search adjacent tiles for hidden doors/passages, `times` tries (1-20)."""
     return await _call("search", times=times)
+
+
+async def kick(x: int, y: int) -> str:
+    """Kick the tile at (x, y) -- a locked door, a chest.
+
+    The one primitive that is not a single action. Kicking is Ctrl-D, which the
+    keystroke floor cannot send (`np_press_key` rejects control characters), so
+    the only route to it is `np_kick`, which walks adjacent to the target
+    first. That bundled walk is why kicking stays a primitive: unlike move_to
+    or melee, its core cannot be rebuilt from press + screen.
+    """
+    return await _call("np_kick", x=x, y=y)
 
 
 # ---------- frozen parsing helpers ----------

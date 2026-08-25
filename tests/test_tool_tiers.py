@@ -174,3 +174,28 @@ def test_the_hash_is_whole_file_so_the_equivalence_note_is_load_bearing():
         "the pre-change tool_tier_hash must stay recorded, or cells run before "
         "the code tiers cannot be matched to equivalent cells run after"
     )
+
+
+def test_the_doc_and_the_tool_surface_move_together():
+    """`netplay_code_mode` picks the SKILL.code.md document; `netplay_composites`
+    retires the reconstructable tools. Nothing in the harness couples them (they
+    are read in different processes), so a tier that sets one without the other
+    would tell the agent about a surface it does not have. Enforce the coupling
+    where it can be enforced: the tier table.
+    """
+    for tier, flags in CFG.items():
+        if tier == "contract":
+            continue
+        mode = str(flags.get("netplay_code_mode", "off")).lower()
+        composites = flags.get("netplay_composites", True)
+        if mode != "off":
+            assert composites is False, (
+                f"[{tier}] serves the code document (mode={mode}) but leaves the "
+                "reconstructable composites published; the agent would be told "
+                "its policies are its own while the server versions still answer"
+            )
+        if composites is False:
+            assert mode != "off", (
+                f"[{tier}] retires the composites but serves the baseline "
+                "document, which still lists them as callable"
+            )
