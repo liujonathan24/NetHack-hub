@@ -140,6 +140,20 @@ play_round() { # <round>
       "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
+  # Code write-back, in PARALLEL with the store write-back below and not
+  # instead of it: the two merge different artifacts. The store keeps the prose
+  # (memories, and the create_skill entries that ROUTE to netplay.<fn>); this
+  # keeps the function bodies. Both run at every round boundary.
+  #
+  # NETPLAY_CANONICAL is unset for every arm that is not a code arm, so this is
+  # inert for [base], [human] and [continual] -- no new command, no new file.
+  if [ -n "${NETPLAY_CANONICAL:-}" ]; then
+    "$PY_BIN" "$REPO/tools/cli_harness_eval/merge_netplay_code.py" \
+      --canonical "$NETPLAY_CANONICAL" \
+      --frozen-reference "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/src/netplay" \
+      --round "round-${r}" \
+      --report "$OUT_ROOT/round${r}/netplay_merge_report.json" | sed 's/^/[nmrg] /'
+  fi
   if [ "$MODE" = "copy-merge" ]; then
     # Single-threaded reconciliation of the private copies. Without this the
     # players' lessons stay in per-rollout directories and never compound.
@@ -183,6 +197,15 @@ done
 FINAL="$OUT_ROOT/final"; mkdir -p "$FINAL"
 cp "$CH/harness_state.json" "$FINAL/harness_state.json" 2>/dev/null || echo '{}' > "$FINAL/harness_state.json"
 cp "$SPEC" "$FINAL/experiment.toml"; cp "$PROMPT_FILE" "$FINAL/reflection_prompt.md"
+# The code tree is frozen the same way and for the same reason: the held-out
+# evaluation must run against a FIXED sha, not a moving tree. `netplay_commit`
+# is recorded beside it so a cell is replayable from its own artifact, exactly
+# as `tool_tier_commit` already makes the tool surface replayable.
+if [ -n "${NETPLAY_CANONICAL:-}" ] && [ -d "$NETPLAY_CANONICAL/.git" ]; then
+  cp -a "$NETPLAY_CANONICAL" "$FINAL/netplay"
+  git -C "$NETPLAY_CANONICAL" rev-parse --short HEAD > "$FINAL/netplay_commit" 2>/dev/null || true
+  echo "[freeze] netplay tree at $(cat "$FINAL/netplay_commit" 2>/dev/null || echo unknown)"
+fi
 cp "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md" "$FINAL/SKILL.md" 2>/dev/null || true
 "$PY_BIN" - "$FINAL" "$RUN" "$SPEC_SHA" "$PROMPT_SHA" <<'PYF'
 import json, pathlib, sys, hashlib

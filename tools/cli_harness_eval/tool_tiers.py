@@ -37,7 +37,7 @@ TIER_FILE = REPO / "tools" / "cli_harness_eval" / "configs" / "tool_tiers.toml"
 # actually declares them. `HarnessConfig` is `extra="forbid"`, so sending
 # `--harness.skill_doc_coords` to the claude_code or control arm is a hard
 # ValidationError; the previous block was not arm-guarded.
-_HARNESS_SIDE = {"skill_doc_coords"}
+_HARNESS_SIDE = {"skill_doc_coords", "netplay_code_mode"}
 _PRIME_AGENT_ARMS = {"prime_agent", "prime_agent_b80"}
 
 

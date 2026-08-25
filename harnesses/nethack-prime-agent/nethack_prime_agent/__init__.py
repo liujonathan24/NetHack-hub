@@ -47,13 +47,20 @@ import re
 import secrets
 import shlex
 from importlib import resources
+from pathlib import Path
 
 from pydantic import Field
 
 from verifiers.v1.clients import ModelContext
 from verifiers.v1.harness import Harness, HarnessConfig
 from verifiers.v1.runtimes import ProgramResult, Runtime
+
 from verifiers.v1.trace import Trace
+
+# Submodule import, not `from nethack_prime_agent import ...`: this IS that
+# package's __init__, so the absolute form would re-enter a half-initialised
+# module. `netplay_gate` imports nothing from the package, so this is safe.
+from . import netplay_gate
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +69,12 @@ __all__ = ["PrimeAgentHarness", "PrimeAgentHarnessConfig"]
 PROVIDER = "intercept"
 KEY_VAR = "PRIME_AGENT_INTERCEPT_KEY"
 MCP_TOKEN_VAR = "NETHACK_MCP_TOKEN"
+
+# Where `netplay/_base.py` writes its correlation beacons. Client-side
+# bookkeeping only: the published MCP tool schemas are frozen and must never be
+# changed for logging, so the correlation id rides our own record. Read back at
+# teardown and reconciled against the server's own call count.
+CALL_LOG_VAR = "NETPLAY_CALL_LOG"
 
 # The prompt a relaunch gets instead of the original task prompt. The MCP tool
 # server (and the NetHack game it owns) is per-ROLLOUT, not per-CLI-process, so
@@ -81,6 +94,27 @@ _RESUME_PROMPT = (
 # Files copied out of this distribution into the runtime to form the skill
 # package (`skills.md#python-backed-skills` layout).
 _SKILL_FILES = ("SKILL.md", "pyproject.toml", "src/nethack/__init__.py")
+
+# The agent-editable `netplay` layer, materialised only when
+# `netplay_code_mode` is not "off" (see the field's docstring for why "off" is
+# the default and what each mode is for).
+#
+# FROZEN: rewritten on every rollout, so agent tampering with the MCP boundary
+# or the primitive floor self-heals at the start of the next episode -- the
+# structural rail that holds even when every validation gate is bypassed.
+_NETPLAY_FROZEN_FILES = ("src/netplay/__init__.py", "src/netplay/_base.py")
+
+# MUTABLE: the seed generation. In "mutable" mode these are written only when
+# ABSENT, so what the agent wrote last episode survives into this one. In
+# "frozen" mode they are rewritten like everything else, which is what makes
+# the [continual-code-frozen] control a control: same retired-composite
+# surface, no accumulation.
+_NETPLAY_SEED_FILES = (
+    "src/netplay/explore.py",
+    "src/netplay/descend.py",
+    "src/netplay/fight.py",
+    "src/netplay/survive.py",
+)
 
 # The no-batching instruction, verbatim. The honesty pass (9b8d5a4) rewrote
 # SKILL.md and shortened this line without updating the constant, so
@@ -174,15 +208,43 @@ def _restore_baseline_coord_note(data: bytes) -> bytes:
 #   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md
 _BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
 
+# The skills-as-code tier's document, frozen and hash-pinned for the same reason
+# the baseline is: it defines the surface the [continual-code] arm was run
+# against, and an accidental edit would silently redefine the arm rather than
+# fail it. It is a WHOLE document, not a patch of SKILL.md -- the two describe
+# different tool sets (this one retires the four server-side composites), so
+# there is no shared paragraph to patch. Regenerate after a deliberate edit:
+#   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.code.md
+_CODE_SKILL_SHA256 = "7a3966bb5ba636f82fd331a77259c73e4b9d45aafde1a25347f376acc5396ccf"
 
-def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> bytes:
+
+def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool,
+               netplay_code_mode: str = "off") -> bytes:
     """The SKILL.md bytes this tier serves.
 
     `skill_doc_coords=False` (the default, i.e. [base]) serves the frozen
     baseline file WHOLESALE rather than patching the live one. That is the only
     way byte-identity with E10 survives future edits to SKILL.md: a patch pins
     one paragraph, a fixture pins the document.
+
+    `netplay_code_mode != "off"` serves `SKILL.code.md` instead, and takes
+    precedence over `skill_doc_coords`: the code tiers retire four of the tools
+    both other documents describe, so serving either would advertise calls that
+    raise. Like the baseline it is a frozen, hash-pinned whole document.
     """
+    if str(netplay_code_mode).strip().lower() != "off":
+        data = (package / "SKILL.code.md").read_bytes()
+        got = hashlib.sha256(data).hexdigest()
+        if got != _CODE_SKILL_SHA256:
+            raise RuntimeError(
+                "SKILL.code.md has been edited: expected sha256 "
+                f"{_CODE_SKILL_SHA256}, got {got}. This file defines the surface "
+                "the [continual-code] arm runs against; changing it silently "
+                "redefines the arm. Update _CODE_SKILL_SHA256 deliberately."
+            )
+        if allow_batching:
+            data = _strip_no_batch_rule(data)
+        return data
     if not skill_doc_coords:
         data = (package / "SKILL.baseline.md").read_bytes()
         got = hashlib.sha256(data).hexdigest()
@@ -346,6 +408,36 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     (nothing is bound read-only) -- it is then a declaration of intent that the
     launcher's before/after hash of the store has to police."""
 
+    netplay_code_mode: str = "off"
+    """Whether the agent-editable `netplay` code layer is materialised, and
+    whether the agent's edits to it survive the episode.
+
+    `off` (default) -- no `src/netplay` at all. The skill tree is byte-identical
+    to what every arm shipped before this feature existed, which is what keeps
+    `base` a valid denominator. Every existing arm runs in this mode.
+
+    `frozen` -- the whole tree is materialised and REWRITTEN each rollout, seed
+    composites included. The agent can edit `netplay/*` within an episode and
+    the edits are reverted before the next one. This is the [continual-code-frozen]
+    control from SPEC §7.2, and without it a gain in the code arm cannot be
+    attributed: it would be indistinguishable from "our seed implementations
+    beat the vendored `np_*` ones".
+
+    `mutable` -- the treatment. `_base.py` and `__init__.py` are still rewritten
+    every rollout (the boundary is not negotiable), but the four seed composites
+    are written only when absent, so the agent's own code accumulates across
+    episodes and rounds.
+
+    Two things this mode does NOT change, deliberately: `pyproject.toml` is
+    never touched, so `pyprojectHash` stays stable and no rollout triggers the
+    ~10-minute kernel-venv rebuild; and the skill directory path stays fixed,
+    so the venv identity key is unaffected.
+
+    `mutable` shares one tree across concurrently running seeds unless the
+    sandbox gives each rollout its own bind -- see the launch-time refusal in
+    `setup`, which is the same single-writer discipline
+    `continual_harness_writable` documents for the JSON store."""
+
     reasoning: bool | None = Field(default=None)
     """Declare the model as reasoning-capable in `models.json`. `None` derives it
     from `ctx.sampling.reasoning_effort` the way the `pi` harness does."""
@@ -482,6 +574,66 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
     def _skill_dir(self) -> str:
         return f"{self.config.install_dir}/skills/nethack"
 
+    async def _path_exists(self, runtime: Runtime, path: str) -> bool:
+        """Whether `path` exists in the runtime.
+
+        `Runtime` has no `exists`; `read` on a missing file raises, and which
+        exception depends on the runtime implementation (the subprocess one
+        surfaces the OS error, remote ones wrap it). So this catches broadly on
+        purpose -- an unreadable file and an absent one both mean "write the
+        seed", and guessing wrong costs one overwrite of a file we shipped.
+        """
+        try:
+            await runtime.read(path)
+        except Exception:
+            return False
+        return True
+
+    async def _materialise_netplay(self, runtime: Runtime, package) -> None:
+        """Write the agent-editable `netplay` layer, per `netplay_code_mode`.
+
+        Frozen files are always overwritten. Seed composites are overwritten in
+        `frozen` mode and written only-if-absent in `mutable` mode -- that
+        single difference is the whole treatment/control split of SPEC §7.2.
+        """
+        mode = str(self.config.netplay_code_mode).strip().lower()
+        if mode == "off":
+            return
+        if mode not in ("frozen", "mutable"):
+            raise ValueError(
+                f"netplay_code_mode must be 'off', 'frozen' or 'mutable', "
+                f"got {self.config.netplay_code_mode!r}"
+            )
+
+        if mode == "mutable" and not self.config.sandbox:
+            # The skills path is FIXED (it has to be, or the kernel-venv key
+            # changes per seed), so concurrent rollouts share one `src/netplay`
+            # unless the sandbox gives each its own bind. Unsandboxed, five
+            # seeds would interleave writes into one tree and the round would
+            # merge a chimera. Refuse rather than corrupt: this is the same
+            # single-writer discipline `continual_harness_writable` documents,
+            # and it fails at setup rather than at merge time.
+            raise ValueError(
+                "netplay_code_mode='mutable' requires harness.sandbox=true: "
+                "the per-rollout bind is what keeps concurrent seeds from "
+                "sharing one mutable code tree. Either enable the sandbox, or "
+                "run this cell one seed at a time with netplay_code_mode="
+                "'frozen'."
+            )
+
+        for name in _NETPLAY_FROZEN_FILES:
+            await runtime.write(f"{self._skill_dir}/{name}",
+                                (package / name).read_bytes())
+
+        for name in _NETPLAY_SEED_FILES:
+            target = f"{self._skill_dir}/{name}"
+            if mode == "mutable" and await self._path_exists(runtime, target):
+                # The agent's own generation. Leave it alone -- this is the
+                # only line in the harness that lets code accumulate.
+                logger.info("netplay: keeping agent-authored %s", name)
+                continue
+            await runtime.write(target, (package / name).read_bytes())
+
     async def setup(self, runtime: Runtime) -> None:
         binary = self.config.binary
         probe = await runtime.run(
@@ -529,10 +681,13 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                     package,
                     skill_doc_coords=self.config.skill_doc_coords,
                     allow_batching=self.config.allow_batching,
+                    netplay_code_mode=self.config.netplay_code_mode,
                 )
             else:
                 data = (package / name).read_bytes()
             await runtime.write(f"{self._skill_dir}/{name}", data)
+
+        await self._materialise_netplay(runtime, package)
 
         if self.config.sandbox:
             # Same "fail loud, not silently unconfined" philosophy as the
@@ -870,6 +1025,14 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                 KEY_VAR: secret,
                 MCP_TOKEN_VAR: mcp_token,
                 "PRIME_AGENT_CODING_AGENT_DIR": agent_dir,
+                # Per-rollout, under the per-rollout agent dir, so five
+                # concurrent seeds never share a log. Absent when the layer is
+                # off, and `_base` degrades to not logging rather than raising.
+                **(
+                    {CALL_LOG_VAR: f"{agent_dir}/netplay_calls.jsonl"}
+                    if str(self.config.netplay_code_mode).strip().lower() != "off"
+                    else {}
+                ),
                 # DECLARED, not inherited. There is no CLI flag and no settings
                 # key for recursion depth -- this env var is the only record. The
                 # default is 1 (root may spawn children, children may not
@@ -975,7 +1138,116 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             # Recorded every rollout, including 0, so a run that never needed
             # to resume is as visible in the aggregate as one that needed all 5.
             trace.record_metric("prime_agent_relaunches", float(relaunches))
+        await self._netplay_teardown(runtime, trace, agent_dir)
         return result
+
+    async def _netplay_teardown(self, runtime: Runtime, trace, agent_dir: str) -> None:
+        """Validate and commit the agent's code tree after the CLI exits.
+
+        Three things happen here, in this order, and the order matters:
+
+        1. **The gate runs unconditionally.** SKILL.md asks the agent to call
+           `netplay.check()` after every edit; agents skip advice. This is the
+           gate that actually holds, and a tree that fails it is recorded as
+           failed so the round merge can refuse the branch (SPEC 6.1 rail 2).
+        2. **The call log is counted**, for reconciliation against the tool
+           server's own record of this rollout. A policy that produced
+           observations without matching server-side calls fabricated them.
+        3. **The tree is committed** on a branch named for this rollout, which
+           is what makes the round-boundary three-way merge possible at all and
+           what makes "what did seed 7 add?" answerable as `git log`.
+
+        Nothing here raises. A rollout that already produced a game result must
+        not be turned into a harness error by its bookkeeping -- the findings
+        are recorded on the trace and the merge decides what to do with them.
+        """
+        mode = str(self.config.netplay_code_mode).strip().lower()
+        if mode == "off":
+            return
+
+        tree = f"{self._skill_dir}/src/netplay"
+        trace_id = str(getattr(trace, "id", "unknown")).replace("/", "-")
+
+        # --- 1. the gate ---
+        findings: list[dict] = []
+        try:
+            listing = await runtime.run(
+                ["sh", "-c", f"ls -1 {tree}/*.py 2>/dev/null || true"],
+                self._env_with_path(),
+            )
+            names = [ln.strip() for ln in (listing.stdout or "").splitlines() if ln.strip()]
+            for remote_path in names:
+                name = remote_path.rsplit("/", 1)[-1]
+                try:
+                    source = (await runtime.read(remote_path)).decode("utf-8")
+                except Exception as exc:  # noqa: BLE001
+                    findings.append({"file": name, "line": 0, "kind": "unreadable",
+                                     "detail": str(exc)})
+                    continue
+                findings.extend(netplay_gate.check_source(
+                    Path(name), source,
+                    policy=name not in netplay_gate.FROZEN_FILES,
+                ))
+            for missing in sorted(netplay_gate.FROZEN_FILES - {n.rsplit("/", 1)[-1] for n in names}):
+                findings.append({"file": missing, "line": 0, "kind": "missing",
+                                 "detail": "frozen file deleted from the tree"})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("netplay gate could not run for trace %s: %s", trace_id, exc)
+            findings.append({"file": "<gate>", "line": 0, "kind": "gate-error",
+                             "detail": str(exc)})
+
+        if findings:
+            logger.warning(
+                "netplay gate FAILED for trace %s (%d finding(s)): %s",
+                trace_id, len(findings),
+                "; ".join(f"{f['file']}:{f['line']} {f['kind']}={f['detail']}"
+                          for f in findings[:8]),
+            )
+        else:
+            logger.info("netplay gate passed for trace %s", trace_id)
+
+        # --- 2. the client-side call count ---
+        calls = 0
+        try:
+            raw = await runtime.read(f"{agent_dir}/netplay_calls.jsonl")
+            calls = sum(
+                1 for line in raw.decode("utf-8").splitlines()
+                if '"phase":"call"' in line.replace(" ", "")
+            )
+        except Exception:  # noqa: BLE001 -- an absent log means zero calls
+            pass
+
+        if trace is not None and hasattr(trace, "record_metric"):
+            trace.record_metric("netplay_gate_ok", 0.0 if findings else 1.0)
+            trace.record_metric("netplay_gate_findings", float(len(findings)))
+            trace.record_metric("netplay_client_calls", float(calls))
+
+        # --- 3. commit this rollout's generation ---
+        # `git -C` on a tree that is not yet a repo initialises it; every later
+        # rollout branches from whatever canonical left there. Committing even a
+        # FAILED tree is deliberate: the branch is the evidence, and the merge
+        # is where it gets refused.
+        verdict = "pass" if not findings else f"fail:{len(findings)}"
+        script = (
+            f"set -e; cd {tree}; "
+            f"if [ ! -d .git ]; then git init -q . && "
+            f"printf '__pycache__/\n*.pyc\n' > .gitignore; fi; "
+            f"git config user.email netplay@localhost; "
+            f"git config user.name 'netplay rollout'; "
+            f"git checkout -q -B agent-{trace_id}; "
+            f"git add -A; "
+            f"git commit -q -m 'rollout {trace_id}: gate={verdict} calls={calls}' "
+            f"--allow-empty"
+        )
+        try:
+            probe = await runtime.run(["sh", "-c", script], self._env_with_path())
+            if probe.exit_code != 0:
+                logger.warning(
+                    "netplay commit failed for trace %s: %s",
+                    trace_id, (probe.stderr or probe.stdout or "").strip()[-300:],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("netplay commit could not run for trace %s: %s", trace_id, exc)
 
     def _episode_live(self, trace) -> bool:
         """Whether the game is still worth relaunching into.
