@@ -96,7 +96,13 @@ def zombie_checks(rows: list[dict], window: int = 12) -> list[str]:
 def scan(run_dir: pathlib.Path, calls_max: int, stall_min: float):
     now = time.time()
     out = []
-    for f in sorted(run_dir.glob("round*/corpus__prime_agent/turns/*.ndjson")):
+    # Layout-agnostic. This used to hardcode E13's `round*/corpus__prime_agent/`
+    # shape, so pointing it at a plain cell tree (the base/human arms, which are
+    # `<tier>_r<n>__prime_agent/`) matched ZERO files and reported a clean bill
+    # of health for rollouts it had never looked at. A detector that finds
+    # nothing must say so, not imply everything is fine -- see the empty-scan
+    # warning in main().
+    for f in sorted(run_dir.glob("**/turns/*.ndjson")):
         m = TURN_RE.match(f.name)
         if not m:
             continue
@@ -156,6 +162,13 @@ def main() -> int:
     ap.add_argument("--kill-runaway", action="store_true",
                     help="also terminate rollouts flagged only for length or stall")
     a = ap.parse_args()
+    # An empty scan is ambiguous -- no rollouts, or a path that matches nothing --
+    # and the two look identical from the exit code. Say which.
+    n_turns = len(list(a.run_dir.glob("**/turns/*.ndjson")))
+    if n_turns == 0:
+        print(f"[runaway] WARNING: no turn files under {a.run_dir} -- nothing was "
+              f"checked. This is not an all-clear.")
+        return 0
     hits = scan(a.run_dir, a.calls, a.stall_min)
     for h in hits:
         tag = "ZOMBIE" if h.get("zombie") else "runaway"

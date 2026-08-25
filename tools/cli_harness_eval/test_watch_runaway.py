@@ -68,3 +68,23 @@ def test_every_recent_tool_result_failing():
 def test_a_short_rollout_is_never_flagged():
     """Startup has few turns and no history; it must not look like a zombie."""
     assert wr.zombie_checks([turn(0), turn(1)]) == []
+
+
+def test_scan_finds_cells_in_any_layout(tmp_path):
+    """The glob must not assume E13's round*/corpus__prime_agent/ shape.
+
+    It did, so pointing the detector at the base/human arm tree
+    (<tier>_r<n>__prime_agent/) matched zero files and returned a clean exit
+    code for rollouts it had never opened. A silent all-clear is worse than no
+    check, because it is indistinguishable from a real one.
+    """
+    import json
+    for layout in ("round1/corpus__prime_agent", "base_r1__prime_agent"):
+        cell = tmp_path / layout
+        (cell / "turns").mkdir(parents=True)
+        (cell / "traces.jsonl").write_text("")
+        (cell / "turns" / "0_100_1.ndjson").write_text(
+            "\n".join(json.dumps(turn(i)) for i in range(5)))
+    found = sorted(tmp_path.glob("**/turns/*.ndjson"))
+    assert len(found) == 2, "both layouts must be discoverable"
+    wr.scan(tmp_path, 700, 25.0)   # must not raise on either shape
