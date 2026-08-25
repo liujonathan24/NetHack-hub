@@ -466,6 +466,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # level returns the gate line at zero engine cost; the second proceeds
         # unconditionally. docs/EXPERIMENT_E8.md.
         descent_gate: str = "off",
+        # E14 crisis directive: harness-side reactive nudges. "off" (default)
+        # | "on". Two naive heuristics push a bracketed directive line into
+        # the next observation at zero engine cost (the descent gate's norm-
+        # line delivery; published tool schemas untouched): HP-CRISIS
+        # (edge-triggered: HP < max/3 with a hostile adjacent) and PACING
+        # (once per dungeon level: XL below the human arrival norm). Pure
+        # decision/format logic in prompt/crisis_directive.py.
+        crisis_directive: str = "off",
         # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
         # "descend_pacing"). Prompt-only; published tool schemas untouched.
         mechanic_hints: str = "",
@@ -517,6 +525,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             describe_args = describe_args.strip().lower() not in ("false","0","no","off","")
         self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
+        self.crisis_directive = str(crisis_directive or "off").strip().lower()
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
         # E9b: append the reflection prompt to every turn. Off (default) leaves
         # every arm byte-identical. Any truthy value enables it.
@@ -2002,6 +2011,66 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_dropped_extra_tool_calls"] = 0
         if result.feedback:
             prefix_parts.append(f"[{result.feedback}]")
+        # E14 crisis directive: two naive harness-side heuristics, delivered
+        # exactly like the E8a descent gate's norm line -- a bracketed line in
+        # the rendered observation, zero engine cost, published tool schemas
+        # untouched. Default "off" skips this entirely: no state keys are
+        # written and every existing arm renders byte-identically. The pure
+        # decision/format logic lives in prompt/crisis_directive.py so it is
+        # unit-testable without an engine (tests/test_crisis_directive.py).
+        if self.crisis_directive == "on" and not state.get("terminated"):
+            from nethack_harness.prompt.crisis_directive import (
+                hp_crisis_active, hp_crisis_line, pacing_lagging, pacing_line,
+            )
+            try:
+                _st = (state["structured_obs"].status or {})
+                _hp = int(_st.get("hitpoints") or 0)
+                _hpmax = int(_st.get("max_hitpoints") or 0)
+                _dlvl = int(_st.get("depth") or 1)
+                _xl = int(_st.get("experience_level") or 1)
+            except Exception:
+                _hp, _hpmax, _dlvl, _xl = 0, 0, 1, 1
+            _fired = []
+            # (a) HP-CRISIS, EDGE-TRIGGERED: fires on ENTERING the crisis and
+            # re-arms only after the condition has cleared -- a per-turn
+            # repeat would be noise on exactly the turns the agent needs
+            # signal. Adjacent-hostile reuses features.visible_monsters (the
+            # detector netplay_true's HP-drop interrupt renders its ADJACENT
+            # block from): `steps` is Chebyshev distance, so steps==1 and not
+            # a pet is "hostile in melee range". Naive on purpose: peacefuls
+            # are not distinguished, matching the ADJACENT render.
+            _adj_hostile = False
+            try:
+                from nethack_harness.prompt.features import visible_monsters
+                _adj_hostile = any(
+                    m.steps == 1 and not m.is_pet
+                    for m in visible_monsters(state["raw_obs"]))
+            except Exception:
+                _adj_hostile = False  # the directive must never break a turn
+            _in_crisis = hp_crisis_active(_hp, _hpmax, _adj_hostile)
+            if _in_crisis and not state.get("_hp_crisis_prev"):
+                prefix_parts.append(hp_crisis_line(_hp, _hpmax))
+                _fired.append("hp")
+            state["_hp_crisis_prev"] = _in_crisis
+            # (b) PACING, at most once per dungeon level (ack-set, the
+            # _descent_gate_ack pattern): on first sight of a depth, warn iff
+            # XL lags the human-winner arrival norm for the next depth. The
+            # depth is acked even when leveled enough -- "on arriving" means
+            # a later XL drain on the same floor must not re-fire it.
+            _ack = state.setdefault("_pacing_directive_ack", set())
+            if _dlvl not in _ack:
+                _ack.add(_dlvl)
+                if pacing_lagging(_xl, _dlvl):
+                    from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+                    prefix_parts.append(
+                        pacing_line(_xl, _dlvl, norm_xl_for_leaving(_dlvl)))
+                    _fired.append("pacing")
+            # Telemetry: stamp the turn trace ("hp" | "pacing" | "hp+pacing");
+            # _write_trace_entry copies it onto the NDJSON record. The
+            # directive text itself already reaches rendered_user_message via
+            # prefix_parts, so both the marker and the line are greppable.
+            if _fired:
+                tt["crisis_directive"] = "+".join(_fired)
         content = compose_user_content(obs_text, prefix_parts)
         # Trace breadcrumbs for the caller (`_apply_tool_call`), which owns the
         # single per-turn NDJSON write. `action_indices` is kept for the legacy

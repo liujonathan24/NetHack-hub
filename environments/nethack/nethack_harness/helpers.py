@@ -564,6 +564,15 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
         # what the teacher changed this turn.
         if state.get("_ch_last_edits"):
             entry["ch_edits"] = state["_ch_last_edits"]
+        # E14 crisis directive: which heuristic fired this turn ("hp" |
+        # "pacing" | "hp+pacing"), stamped on the turn trace by
+        # _apply_tool_call_inner. Gated on `applied` so the end-of-rollout
+        # flush (which reuses the last turn's trace dict) never re-stamps a
+        # stale marker. Absent on every other turn and on every arm running
+        # crisis_directive="off", so existing traces are byte-identical.
+        _cd = (state.get("_turn_trace") or {}).get("crisis_directive")
+        if applied and _cd:
+            entry["crisis_directive"] = _cd
         # Route through the schema helper (NOT a bare json.dumps) so every
         # record carries `schema_version`. The bare dumps is why
         # `TS.record_version()` read 0 on freshly written traces.

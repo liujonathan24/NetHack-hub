@@ -86,6 +86,82 @@ netplay_telemetry = true
 melee_hints = true
 skill_doc_coords = true
 
+# ---------------------------------------------------------------------------
+# E15 FAILURE-MODE PROBE TIERS (2026-08-25). Each is [base] -- all three fix
+# flags off, frozen harness -- plus exactly ONE differing factor, so the E14
+# uncapped base cells (outputs/e14_uncapped/base_r{1,2,3}) are the control arm
+# for every one of them. A [<tier>.contract] sub-table overrides the global
+# contract for that tier only (variant / skill_set / tune knobs); everything
+# not named is inherited, including tune.reveal_map = 1.0.
+
+[p1_gate]      # P1: descent gate, suggest-first (NLD human-norm line at each descend)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+descent_gate = "norm"
+
+[p2_crisis]    # P2: crisis directive (edge-triggered HP line; once-per-level pacing line)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+crisis_directive = "on"
+
+[p3_rollback]  # P3: rollback(n) published; per-turn engine snapshots only in this arm
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[p3_rollback.contract]
+skill_set = "np_core,request_map,search,rollback"
+
+[c1_doors]     # C1: no locked doors (engine generation knob; mklev.c)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c1_doors.contract.tune]
+locked_door = 0.0
+
+[c2_d025]      # C2: room-density dose-response (doses match the V1 E8d sweep)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c2_d025.contract.tune]
+room_density = 0.25
+
+[c2_d010]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c2_d010.contract.tune]
+room_density = 0.10
+
+[c2_d0025]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c2_d0025.contract.tune]
+room_density = 0.025
+
+[v1_b1]        # V1: fresh state every turn (canonical renderer)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v1_b1.contract]
+variant = "B1"
+
+[v2_bjson]     # V2: map + JSON-structured state per turn
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v2_bjson.contract]
+variant = "B_JSON"
+
+[v2_json]      # V2: structured map model
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v2_json.contract]
+variant = "JSON"
+
 [continual]
 # STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
 # store the agent writes for itself, so its floor must be the same floor the

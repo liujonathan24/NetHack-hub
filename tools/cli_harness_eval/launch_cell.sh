@@ -412,7 +412,10 @@ if [ -n "${TOOL_TIER:-}" ]; then
     echo "  set PY_BIN to a 3.11+ interpreter." >&2
     exit 2
   fi
-  _TIER_CONTRACT="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" contract)" || exit 2
+  # Tier-aware: an experiment tier's [<tier>.contract] overrides (variant,
+  # skill_set, tune knobs) are part of ITS contract -- the checks below must
+  # enforce the tier as declared, not the global baseline row.
+  _TIER_CONTRACT="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" contract "${TOOL_TIER}")" || exit 2
   _TIER_VARIANT="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["variant"])')"
   _TIER_CALLS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
   _TIER_SEEDS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["seeds"]))')"
