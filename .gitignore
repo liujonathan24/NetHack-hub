@@ -76,3 +76,7 @@ vgcore.*
 outputs/e13/
 outputs/e13_preflight/
 outputs/e14_baseline/
+outputs/e13_heldout/
+outputs/e14_uncapped/
+outputs/e15_heldout/
+outputs/e15_probes/
