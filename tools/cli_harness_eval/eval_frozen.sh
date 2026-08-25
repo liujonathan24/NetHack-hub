@@ -35,11 +35,13 @@ mkdir -p "$CH"; cp "$FINAL/harness_state.json" "$CH/harness_state.json"
 BEFORE="$(sha256sum "$CH/harness_state.json" | cut -c1-16)"
 echo "[eval ] $RUN seeds=$SEEDS store=$BEFORE (read-only)"
 
-prime-agent shutdown >/dev/null 2>&1 || true
-pkill -9 -f 'prime-agent' 2>/dev/null || true
-pkill -9 -f 'nethack_v1'  2>/dev/null || true
-rm -rf /tmp/prime-agent-0 2>/dev/null || true
-sleep 3
+# SCOPED teardown. This used to be a global `pkill -9 -f prime-agent`, which
+# kills every experiment on the box, not just this one -- and a held-out
+# evaluation is precisely the thing you run at the END, while other cells are
+# still going. reset_daemon.sh matches PRIME_AGENT_CODING_AGENT_DIR under this
+# evaluation's own install_dir and takes a flock around the reset+boot window,
+# so a concurrent run keeps its players.
+"$REPO/tools/cli_harness_eval/reset_daemon.sh" "$INSTALL_DIR"
 
 mkdir -p "$OUT"; cp "$FINAL/FROZEN.json" "$OUT/evaluated_snapshot.json"
 env TOOL_TIER=continual SEEDS="$SEEDS" INSTALL_DIR="$INSTALL_DIR" \
