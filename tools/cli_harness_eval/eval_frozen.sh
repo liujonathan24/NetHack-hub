@@ -26,6 +26,17 @@ SEEDS="$("$PY_BIN" -c 'import json,sys,tomllib;print(json.dumps(tomllib.load(ope
 N="$(printf '%s' "$SEEDS" | "$PY_BIN" -c 'import json,sys;print(len(json.load(sys.stdin)))')"
 OUT="${2:-$REPO/outputs/e13/heldout/${RUN}}"
 
+# The call budget comes from the tier contract, never a literal. launch_cell
+# refuses a MAX_CALLS that disagrees with the contract, so the hardcoded 200 that
+# used to be here now aborts the evaluation outright ("MAX_CALLS=200 contradicts
+# the tier contract (0)") -- at the very end of an experiment, which is the worst
+# possible moment to discover it. 0 = play to completion.
+TIER_CALLS="$("$PY_BIN" "$REPO/tools/cli_harness_eval/tool_tiers.py" contract \
+  | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
+case "$TIER_CALLS" in
+  ''|*[!0-9]*) echo "eval_frozen: could not read max_calls from the tier contract" >&2; exit 2;;
+esac
+
 # The frozen store has to live under install_dir to be visible inside the
 # sandbox, so it is COPIED there rather than mounted from outputs/. The copy is
 # what the cell reads; the snapshot in outputs/ stays pristine.
@@ -47,7 +58,7 @@ mkdir -p "$OUT"; cp "$FINAL/FROZEN.json" "$OUT/evaluated_snapshot.json"
 env TOOL_TIER=continual SEEDS="$SEEDS" INSTALL_DIR="$INSTALL_DIR" \
     CONTINUAL_HARNESS="$CH" CONTINUAL_RUN_ID="heldout-${RUN}" \
     CONTINUAL_HARNESS_MODE=shared-ro \
-    "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$OUT" 200 "$N"
+    "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$OUT" "$TIER_CALLS" "$N"
 rc=$?
 
 AFTER="$(sha256sum "$CH/harness_state.json" | cut -c1-16)"
