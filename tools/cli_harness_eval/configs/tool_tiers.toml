@@ -28,7 +28,19 @@
 skill_set = "np_core,request_map,search"
 auto_dismiss = "false"
 variant = "BBOX_MIN"
-max_calls = 200
+# 0 = UNCAPPED: every rollout plays until the character dies, ascends, or NLE
+# truncates. Previously 200, which turned out to censor the thing we measure:
+# in E13-v2 round 2, three of five rollouts were still ALIVE when the budget ran
+# out (at dlvl 6, 8 and 9 and still descending), so `max_dlvl_reached` was a
+# lower bound, not a score -- and because round 1 had only one such rollout and
+# round 2 had three, the bias fell unevenly across the very rounds being
+# compared. Deaths halved 4 -> 2 while mean depth looked flat; on the games that
+# actually finished it was 8.00 -> 10.00.
+#
+# Backstops that remain, so this cannot run away: NLE's own
+# max_episode_steps=100_000 in-game steps, and [timeout] rollout=7200s per
+# rollout in the arm config.
+max_calls = 0
 seeds = [0, 1, 2, 3, 4]
 model = "z-ai/glm-5.2"
 character = "Val-hum-neu-fem"

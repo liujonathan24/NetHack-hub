@@ -706,6 +706,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["scout_delta"] = 0
         state["scout_reward_total"] = 0.0
         state["max_dlvl_reached"] = 1
+        state["max_xp_level"] = 1
         state["descent_count"] = 0
         state["raw_obs"] = obs
         state["structured_obs"] = shape_observation(obs, character)
@@ -1690,6 +1691,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Tracks deepest (DL, XL) achieved as an empirical-ish P(ascend).
         from nethack_harness.prompt.balrog import progression_score
         s = state["structured_obs"].status
+        # Track the DEEPEST experience level, the same way max_dlvl_reached
+        # tracks the deepest dungeon level. BALROG scores the (Dlvl, XL) pair,
+        # and reading XL off the final observation would report whatever the
+        # character happened to be when it died rather than its high-water mark.
+        state["max_xp_level"] = max(
+            int(state.get("max_xp_level") or 1), int(s.get("experience_level", 1) or 1)
+        )
         state["balrog_progression"] = progression_score(
             state["max_dlvl_reached"], s.get("experience_level", 1)
         )

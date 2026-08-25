@@ -44,6 +44,19 @@ CORPUS_SEEDS="$(read_spec corpus_seeds)"
 PLAYERS_EDIT="$(read_spec players_may_edit)"
 PROMPT_NAME="$(read_spec prompt)"; TIER="$(read_spec tier)"
 SPEC_SHA="$(sha256sum "$SPEC" | cut -c1-16)"
+# What the orchestrator is TOLD is the prompt file plus whatever the script
+# splices in. Now that the script appends a round-over-round report, two runs can
+# share a prompt sha and still be handed different evidence -- so pin the script.
+ORCH_SHA="$(sha256sum "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" | cut -c1-16)"
+# The call budget is the tier contract's, never a literal here: launch_cell
+# refuses a MAX_CALLS that contradicts the contract, so a hardcoded number turns
+# a contract change into a launch failure at best and a silent mismatch at
+# worst. 0 = play to completion.
+TIER_CALLS="$("$PY_BIN" "$REPO/tools/cli_harness_eval/tool_tiers.py" contract \
+  | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
+case "$TIER_CALLS" in
+  ''|*[!0-9]*) echo "run_e13: could not read max_calls from the tier contract" >&2; exit 2;;
+esac
 RUN="${EXP_ID}-r${REPLICATE}"
 
 # Per-experiment install_dir. FIXED per experiment, not globally: the kernel venv
@@ -108,6 +121,7 @@ cat > "$MANIFEST" <<JSON
   "experiment": "${EXP_ID}", "replicate": ${REPLICATE}, "run": "${RUN}",
   "spec": "${SPEC}", "spec_sha256_16": "${SPEC_SHA}",
   "reflection_prompt": "${PROMPT_NAME}", "prompt_sha256_16": "${PROMPT_SHA}",
+  "orchestrator_sha256_16": "${ORCH_SHA}",
   "rounds": ${ROUNDS}, "corpus_seeds": ${CORPUS_SEEDS},
   "eval_seeds": $(read_spec eval_seeds),
   "players_may_edit": ${PLAYERS_EDIT}, "store_mode": "${MODE}",
@@ -137,7 +151,7 @@ play_round() { # <round>
       CONTINUAL_PROMPT_SHA="$PROMPT_SHA" CONTINUAL_SPEC_SHA="$SPEC_SHA" \
       CONTINUAL_HARNESS_MODE="$MODE" \
       ${PLAYERS_EDIT:+CONTINUAL_SELF_EDIT="$PLAYERS_EDIT"} \
-      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
+      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" "$TIER_CALLS" "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
   if [ "$MODE" = "copy-merge" ]; then
@@ -173,6 +187,7 @@ for r in $(seq 1 "$ROUNDS"); do
   reset_daemon   # the orchestrator is a prime-agent process too
   "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" \
     "$OUT_ROOT/round${r}/corpus__prime_agent" "$CH" "$OUT_ROOT/round${r}" "$PROMPT_FILE" \
+    "$OUT_ROOT" \
     || echo "[FAIL ] orchestrator round $r rc=$?" >&2
 done
 
