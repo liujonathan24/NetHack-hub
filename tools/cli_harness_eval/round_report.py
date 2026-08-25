@@ -238,7 +238,21 @@ def build(run_dir: pathlib.Path) -> dict:
                             "content": r["content"]} for r in changed],
         })
 
-    return {"run": run_dir.name, "rounds": per_round,
+    # The reflection pass's OWN past reasoning. Without this it re-derives its
+    # rules from scratch every round and cannot notice that it already tried
+    # something -- it has no memory of its own arguments, only of their output.
+    rationales = []
+    for rd in rounds:
+        f = rd / "orchestrator_rationale.json"
+        if not f.exists():
+            continue
+        try:
+            edits = json.loads(f.read_text())
+        except Exception:
+            continue
+        rationales.append({"round": rd.name, "edits": edits})
+
+    return {"run": run_dir.name, "rounds": per_round, "rationales": rationales,
             "per_seed": {rn: list(rows.values()) for rn, rows in rows_by_round.items()},
             "entries": entries, "regressions": regressions}
 
@@ -275,6 +289,21 @@ def render(rep: dict) -> str:
         for o in e["outcome_when_changed"]:
             L.append(f"      -> {o['round']} moved: dlvl {o['d_dlvl']:+.2f}  "
                      f"XL {o['d_xl']:+.2f}  BALmax {o['d_balrog']:+.2f} (vs prev round)")
+    if rep.get("rationales"):
+        L += ["", "YOUR OWN REASONING IN PREVIOUS ROUNDS -- what you changed, and why "
+                  "you thought it would help. Read it against the scoreboard above: a "
+                  "rule you argued for that was followed by a drop is the strongest "
+                  "evidence you have."]
+        for r in rep["rationales"]:
+            L.append(f"  {r['round']}:")
+            for e in r["edits"]:
+                ev = e.get("evidence")
+                ev = ev if isinstance(ev, str) else json.dumps(ev) if ev else ""
+                L.append(f"    [{e.get('action','edit')}] {e.get('title') or e.get('id','')}")
+                if ev:
+                    L.append(f"        evidence you cited: {ev[:220]}")
+                if e.get("expected_effect"):
+                    L.append(f"        effect you expected: {str(e['expected_effect'])[:220]}")
     if rep["regressions"]:
         L += ["", "ROUNDS THAT GOT MATERIALLY WORSE, AND WHAT HAD JUST CHANGED:"]
         for r in rep["regressions"]:

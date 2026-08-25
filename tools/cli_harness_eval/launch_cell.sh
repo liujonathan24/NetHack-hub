@@ -160,7 +160,22 @@ if [ "$ARM" = "control" ]; then
 else
   # `[taskset]` is a typed sub-model, so plain dotted overrides coerce
   # correctly (max_skill_calls lands as a real int).
+  # MAX_CALLS=0 means PLAY TO COMPLETION -- the rollout ends when the character
+  # dies, ascends, or NLE truncates, not when a budget runs out.
+  #
+  # Disabling the referee alone is NOT enough. `max_turns` is a second, quieter
+  # cap: nethack.py:2026 ORs `max_turns_reached` into `is_completed`, and the
+  # arm TOML pins it at 200. Overriding only `max_skill_calls` leaves that in
+  # force, so the rollout still stops at 200 -- with stop_condition
+  # `max_turns_reached` instead of `call_budget_exhausted`, which looks like a
+  # different phenomenon rather than the same cap wearing a hat.
   OVERRIDES=(--taskset.max_skill_calls "${MAX_CALLS}" --taskset.trace_dir "${TRACE_DIR}")
+  if [ "${MAX_CALLS}" -le 0 ] 2>/dev/null; then
+    OVERRIDES+=(--taskset.max_turns 0)
+    echo "[launch_cell] MAX_CALLS=0 -> uncapped: no call budget, no LM-turn cap." >&2
+    echo "[launch_cell]   backstops remain: max_episode_steps=100k NLE steps," >&2
+    echo "[launch_cell]   [timeout] rollout=7200s wall clock." >&2
+  fi
 fi
 
 # MODEL overrides the model pinned in the arm's TOML. The arms MUST agree on it
@@ -436,7 +451,8 @@ if [ -n "${TOOL_TIER:-}" ]; then
     OVERRIDES+=(--taskset.env_args.tier_short_budget "true")
   elif [ "${MAX_CALLS}" != "${_TIER_CALLS}" ]; then
     echo "launch_cell: MAX_CALLS=${MAX_CALLS} contradicts the tier contract (${_TIER_CALLS})." >&2
-    echo "  The reference numbers in tool_tiers.toml describe ${_TIER_CALLS} calls." >&2
+    echo "  The reference numbers in tool_tiers.toml describe ${_TIER_CALLS} calls" >&2
+    echo "  (0 = uncapped: play until death, ascension or NLE truncation)." >&2
     exit 2
   fi
   VARIANT="${_TIER_VARIANT}"

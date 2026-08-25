@@ -48,6 +48,15 @@ SPEC_SHA="$(sha256sum "$SPEC" | cut -c1-16)"
 # splices in. Now that the script appends a round-over-round report, two runs can
 # share a prompt sha and still be handed different evidence -- so pin the script.
 ORCH_SHA="$(sha256sum "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" | cut -c1-16)"
+# The call budget is the tier contract's, never a literal here: launch_cell
+# refuses a MAX_CALLS that contradicts the contract, so a hardcoded number turns
+# a contract change into a launch failure at best and a silent mismatch at
+# worst. 0 = play to completion.
+TIER_CALLS="$("$PY_BIN" "$REPO/tools/cli_harness_eval/tool_tiers.py" contract \
+  | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
+case "$TIER_CALLS" in
+  ''|*[!0-9]*) echo "run_e13: could not read max_calls from the tier contract" >&2; exit 2;;
+esac
 RUN="${EXP_ID}-r${REPLICATE}"
 
 # Per-experiment install_dir. FIXED per experiment, not globally: the kernel venv
@@ -142,7 +151,7 @@ play_round() { # <round>
       CONTINUAL_PROMPT_SHA="$PROMPT_SHA" CONTINUAL_SPEC_SHA="$SPEC_SHA" \
       CONTINUAL_HARNESS_MODE="$MODE" \
       ${PLAYERS_EDIT:+CONTINUAL_SELF_EDIT="$PLAYERS_EDIT"} \
-      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
+      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" "$TIER_CALLS" "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
   if [ "$MODE" = "copy-merge" ]; then
