@@ -90,34 +90,48 @@ def _interrupted(obs: str) -> bool:
     return bool(_base.messages(obs))
 
 
-async def move_to(x: int, y: int, max_steps: int = 60) -> str:
-    """Walk to (x, y) in the MAP frame. Plan once, walk, stop on interruption.
+async def move_to(x: int, y: int, max_steps: int = 60,
+                  max_replans: int = 8) -> str:
+    """Walk to (x, y) in the MAP frame. Plan, walk, re-plan on drift, stop on
+    interruption.
 
-    Returns the last observation. Read it -- arriving and being stopped en
-    route look the same from the return type alone; compare `_base.position()`
-    against the target if you need to know which happened.
+    Returns the last observation. Read it -- arriving and being stopped en route
+    look the same from the return type alone; compare `_base.position()` against
+    the target if you need to know which happened.
+
+    `max_replans` is a HARD bound on re-planning. The first version of this
+    recursed on every drifted step, which -- if the target was never reachable
+    or the position kept drifting -- looped without end (a seed bug that pressed
+    200k keys in one game). Re-planning is now a bounded loop, and the frozen
+    floor raises `EpisodeOver` past the call budget regardless.
     """
     obs = await _base.screen()
-    here = _base.position(obs)
-    if here == (x, y):
-        return obs
-    path = route(obs, (x, y))
-    if path is None:
-        return (f"netplay.move_to: no known route to ({x}, {y}). Explore "
-                f"toward it first, or open a door on the way.\n{obs}")
-
-    for step in path[:max_steps]:
-        cur = _base.position(obs) or here
-        key = step_key(step[0] - cur[0], step[1] - cur[1])
-        if key is None:
-            # Position drifted from the plan (a swap with a pet, a trapdoor).
-            # Re-plan rather than pressing a key for a step we are not making.
-            return await move_to(x, y, max_steps=max_steps)
-        obs = await _base.press(key)
-        if _interrupted(obs):
+    for _ in range(max_replans):
+        here = _base.position(obs)
+        if here == (x, y):
             return obs
-        here = step
-    return obs
+        path = route(obs, (x, y))
+        if path is None:
+            return (f"netplay.move_to: no known route to ({x}, {y}). Explore "
+                    f"toward it first, or open a door on the way.\n{obs}")
+        drifted = False
+        for step in path[:max_steps]:
+            cur = _base.position(obs) or here
+            key = step_key(step[0] - cur[0], step[1] - cur[1])
+            if key is None:
+                # Position drifted from the plan (a pet swap, a trapdoor).
+                # Break out to re-plan -- ONCE per outer iteration, so the
+                # re-plan budget actually bounds the work.
+                drifted = True
+                break
+            obs = await _base.press(key)
+            if _interrupted(obs):
+                return obs
+            here = step
+        if not drifted:
+            return obs
+    return (f"netplay.move_to: gave up reaching ({x}, {y}) after {max_replans} "
+            f"re-plans -- position keeps drifting.\n{obs}")
 
 
 def frontiers(obs: str) -> list[tuple[int, int]]:
