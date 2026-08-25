@@ -221,9 +221,25 @@ for r in $(seq 1 "$ROUNDS"); do
   fi
   play_round "$r"
   reset_daemon   # the orchestrator is a prime-agent process too
+
+  # STORE orchestrator (memory harness): reflects on traces -> writes the store.
+  # Runs for every continual arm; its store is what continual-code layers ON TOP
+  # of the code channel (both accumulate, they are not exclusive).
   "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" \
     "$OUT_ROOT/round${r}/corpus__prime_agent" "$CH" "$OUT_ROOT/round${r}" "$PROMPT_FILE" \
-    || echo "[FAIL ] orchestrator round $r rc=$?" >&2
+    || echo "[FAIL ] store orchestrator round $r rc=$?" >&2
+
+  # CODE orchestrator: reflects on traces + the code lineage -> EDITS netplay.
+  # Only for the code arm (NETPLAY_CANONICAL set). Runs AFTER the store one and
+  # AFTER any player-edit merge, so it sees the round's final code and traces.
+  if [ -n "${NETPLAY_CANONICAL:-}" ] && [ -d "${NETPLAY_CANONICAL}/.git" ]; then
+    reset_daemon
+    CODE_PROMPT="${CODE_PROMPT_FILE:-$REPO/configs/continual/code_default.md}"
+    "$REPO/tools/cli_harness_eval/code_orchestrate.sh" \
+      "$OUT_ROOT/round${r}/corpus__prime_agent" "$NETPLAY_CANONICAL" "$OUT_ROOT" "$r" \
+      "$CODE_PROMPT" \
+      || echo "[FAIL ] code orchestrator round $r rc=$?" >&2
+  fi
 done
 
 # --- freeze ------------------------------------------------------------------
