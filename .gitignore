@@ -63,3 +63,9 @@ dat/
 # unpushable (GitHub hard-fails over 100MB).
 core.*
 vgcore.*
+
+# E13 run data: reproducible, large, and mutated by every run. The committed
+# data branch is where results go, not the code branch.
+outputs/e13/
+outputs/e13_preflight/
+outputs/e14_baseline/

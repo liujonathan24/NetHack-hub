@@ -236,7 +236,15 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     based cluster may not carry either."""
 
     thinking: str = ""
-    """`--thinking` level. Empty leaves Prime Agent's default (`xhigh`)."""
+    """`--thinking` level.
+
+    CORRECTED 2026-08-24: this said "Empty leaves Prime Agent's default
+    (`xhigh`)". The shipped 0.3.3 bundle says otherwise --
+    `DEFAULT_THINKING_LEVEL = "medium"` -- so every cell that left this empty has
+    been running at MEDIUM reasoning effort while the docstring (and
+    docs/settings.md) claimed xhigh. Reasoning effort is not a free variable in a
+    controlled comparison: pin it per arm rather than inheriting an undeclared
+    default that a scaffold upgrade can move."""
 
     websearch: bool = False
     """Load Prime Agent's bundled `websearch` skill. Off by default: the control
@@ -277,6 +285,49 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     asks for one, or from an orchestrator process pointed at the same directory
     between cells. That is a feature for an experiment: every write is deliberate
     and attributable, not a background process editing the arm mid-cell."""
+
+    rlm_max_depth: int = 1
+    """Recursion depth for `rlm(...)` sub-agents, written into the launch env.
+
+    1 = the root player may spawn children; children may not spawn
+    grandchildren. That is the scaffold default, but there is no CLI flag and no
+    settings key for it, so inheriting it leaves no record of what the arm
+    actually ran with."""
+
+    auto_refine: bool = False
+    """Prime Agent's automatic trajectory review (`autoRefine`).
+
+    Default OFF and always written into settings.json explicitly, because the
+    scaffold's own default is ON and only inert by accident under `--no-session`
+    (see the settings block in `launch`). Turning it on is a deliberate arm
+    choice with two consequences worth stating: it costs two extra model calls
+    per fire on the interception endpoint, unattributed to the rollout; and its
+    edits are LOCAL-scope, landing in the session artifact dir rather than the
+    shared continual store, so they are discarded unless something harvests
+    them."""
+
+    continual_harness_mode: str = "shared-ro"
+    """How the shared continual-harness store reaches a rollout.
+
+    `shared-ro` (default) symlinks every rollout's harness directory at ONE
+    store. Correct when a single writer (an orchestrator, between cells) owns
+    it, and the store is re-bound read-only so players cannot edit it.
+
+    `copy-merge` is for the arm where the PLAYERS write. Each rollout gets a
+    private COPY of the canonical store, seeded at launch so it reads everything
+    learned so far, and the runner merges the copies back afterwards.
+
+    Why copying rather than sharing a writable store, measured: `rlm.harness`
+    persists with a non-atomic whole-file rewrite -- `open("w")` + `json.dump`,
+    no lock, no tmp+rename -- and its loader treats an unreadable state file as
+    EMPTY rather than erroring. Five concurrent writers each adding six entries
+    to one store kept 12 of 30; one of the five contributed nothing at all, and
+    nothing reported the loss. A player landing mid-write would silently boot
+    with no accumulated knowledge.
+
+    Copying also buys attribution: each rollout's contribution is a separate
+    file, so "what did seed 7 add?" is answerable and same-id conflicts become a
+    deliberate merge decision instead of last-write-wins."""
 
     continual_harness_writable: bool = False
     """Let the PLAYER write to the shared continual-harness store.
@@ -621,15 +672,17 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "--bind",
             self.config.install_dir,
             self.config.install_dir,
-            # E13: the shared continual-harness store, re-bound READ-ONLY on top
-            # of the read-write `install_dir` bind above (bwrap applies binds in
-            # order, so the later, narrower one wins for that subtree). This is
-            # what keeps the learning channel single-writer -- see
-            # `continual_harness_writable`.
+            # E13: in `shared-ro` the store is re-bound READ-ONLY on top of the
+            # read-write `install_dir` bind (bwrap applies binds in order, so the
+            # later, narrower one wins) -- that is what keeps a single-writer arm
+            # single-writer. In `copy-merge` the rollout writes its OWN private
+            # copy under install_dir and canonical is never touched by a player,
+            # so no re-bind applies.
             *(
                 ["--ro-bind", self.config.continual_harness_dir,
                  self.config.continual_harness_dir]
                 if self.config.continual_harness_dir
+                and str(self.config.continual_harness_mode).strip().lower() != "copy-merge"
                 and not self.config.continual_harness_writable
                 else []
             ),
@@ -724,6 +777,19 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         }
         settings = {
             "onboardingShown": True,
+            # PINNED, not inherited. `autoRefine` defaults to enabled (turnInterval
+            # 25, 20-minute cooldown) and is undocumented in settings.md. It is
+            # inert here only by ACCIDENT -- `_autoRefineAllowedForSession()`
+            # needs a local session dir and `--no-session` denies one -- but the
+            # moment a player calls `rlm(...)`, the host mints an ephemeral RLM
+            # session dir on the PARENT, the gate opens mid-run, and auto-refine
+            # starts spending two out-of-band `completeSimple` calls per fire on
+            # the eval's own interception endpoint. Those are real completions
+            # that never enter the session transcript, so they land in the run's
+            # provider cost unattributed, and their edits are LOCAL-scope and
+            # discarded. An arm must not change behaviour because the model
+            # happened to spawn a sub-agent.
+            "autoRefine": {"enabled": self.config.auto_refine},
             "quietStartup": True,
             # Belt and braces: `--provider/--model` already pin the route, but a
             # fallback that silently picked a built-in provider would run the
@@ -747,21 +813,15 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # reading (or migrating into) the operator's real credential store.
         await runtime.write(f"{agent_dir}/auth.json", b"{}\n")
 
-        # E13: point this rollout's GLOBAL continual-harness directory at the
-        # shared store, so lessons written by an earlier game are in this game's
-        # system prompt. `getGlobalHarnessStateDir()` is `join(agentDir,
-        # "harness")` with no env override of its own, and the kernel is handed
-        # the same path as `RLM_GLOBAL_HARNESS_STATE_DIR`, so a symlink at that
-        # one name redirects both the host (refine) and the kernel
-        # (`rlm.harness.*`) without touching anything else in `agent_dir`.
+        # E13: give this rollout its GLOBAL continual-harness directory, so
+        # lessons written by an earlier game are in this game's system prompt.
+        # `getGlobalHarnessStateDir()` is `join(agentDir, "harness")` with no env
+        # override of its own, and the kernel is handed the same path as
+        # `RLM_GLOBAL_HARNESS_STATE_DIR`, so whatever sits at that one name
+        # serves both the host (refine) and the kernel (`rlm.harness.*`).
         if self.config.continual_harness_dir:
             ch = self.config.continual_harness_dir
             if self.config.sandbox and not _within(ch, self.config.install_dir):
-                # The sandbox binds `install_dir`, the workdir and a short
-                # allowlist -- nothing else exists inside it. A store outside
-                # those would leave the symlink dangling and every rollout would
-                # silently start from an empty harness, which reads exactly like
-                # "the agent learned nothing".
                 raise ValueError(
                     f"harness.continual_harness_dir ({ch!r}) is outside "
                     f"install_dir ({self.config.install_dir!r}) while "
@@ -770,33 +830,52 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                     "agent. Put the store under install_dir, or set "
                     "harness.sandbox = false."
                 )
-            # `ln -sfn` so a re-run replaces a previous link instead of creating
-            # `harness/<basename>` inside it; `rm -rf` first because a REAL
-            # directory left by an earlier no-symlink run would swallow the link
-            # the same way.
-            probe = await runtime.run(
-                [
-                    "sh",
-                    "-c",
-                    f"mkdir -p {shlex.quote(ch)} && rm -rf {shlex.quote(agent_dir + '/harness')} "
-                    f"&& ln -sfn {shlex.quote(ch)} {shlex.quote(agent_dir + '/harness')}",
-                ],
-                self._env_with_path(),
-            )
+            mode = str(self.config.continual_harness_mode or "shared-ro").strip().lower()
+            if mode not in ("shared-ro", "copy-merge"):
+                raise ValueError(
+                    f"harness.continual_harness_mode={mode!r}; expected "
+                    "'shared-ro' or 'copy-merge'."
+                )
+            link = f"{agent_dir}/harness"
+            if mode == "copy-merge":
+                # A private copy, seeded from canonical. `cp -a .../.` copies the
+                # CONTENTS so an absent canonical store still yields an empty
+                # private one rather than a nested directory -- and an empty
+                # canonical is a rc=0 no-op, so no `|| true` is needed to
+                # tolerate round 1. It must NOT be suppressed: `... || true`
+                # forced the whole script to exit 0, which made the exit-code
+                # check below dead in this mode and let a failed copy hand the
+                # rollout an empty store -- exactly the "the agent learned
+                # nothing" reading the check exists to prevent.
+                script = (
+                    f"mkdir -p {shlex.quote(ch)} {shlex.quote(link)} && "
+                    f"cp -a {shlex.quote(ch)}/. {shlex.quote(link)}/"
+                )
+            else:
+                script = (
+                    f"mkdir -p {shlex.quote(ch)} && rm -rf {shlex.quote(link)} && "
+                    f"ln -sfn {shlex.quote(ch)} {shlex.quote(link)}"
+                )
+            probe = await runtime.run(["sh", "-c", script], self._env_with_path())
             if probe.exit_code != 0:
                 raise RuntimeError(
-                    "could not link the shared continual-harness store "
-                    f"({ch!r} -> {agent_dir}/harness): "
+                    f"could not provision the continual-harness store ({mode}) at "
+                    f"{link}: "
                     f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}. "
                     "Running on would silently give this rollout an empty store."
                 )
-
 
         env = self._env_with_path(
             {
                 KEY_VAR: secret,
                 MCP_TOKEN_VAR: mcp_token,
                 "PRIME_AGENT_CODING_AGENT_DIR": agent_dir,
+                # DECLARED, not inherited. There is no CLI flag and no settings
+                # key for recursion depth -- this env var is the only record. The
+                # default is 1 (root may spawn children, children may not
+                # recurse), which is what we want; writing it down means a
+                # scaffold upgrade cannot move it silently.
+                "RLM_MAX_DEPTH": str(self.config.rlm_max_depth),
                 # No update checks, no telemetry, no package-update fetches.
                 "PI_OFFLINE": "1",
                 "PI_SKIP_VERSION_CHECK": "1",
