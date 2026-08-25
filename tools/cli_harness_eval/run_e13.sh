@@ -206,14 +206,28 @@ if [ -n "${NETPLAY_CANONICAL:-}" ] && [ -d "$NETPLAY_CANONICAL/.git" ]; then
   git -C "$NETPLAY_CANONICAL" rev-parse --short HEAD > "$FINAL/netplay_commit" 2>/dev/null || true
   echo "[freeze] netplay tree at $(cat "$FINAL/netplay_commit" 2>/dev/null || echo unknown)"
 fi
-cp "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md" "$FINAL/SKILL.md" 2>/dev/null || true
-"$PY_BIN" - "$FINAL" "$RUN" "$SPEC_SHA" "$PROMPT_SHA" <<'PYF'
+# The document this arm actually served. A code arm serves SKILL.code.md, so
+# copying SKILL.md unconditionally would freeze a doc the agent never saw --
+# and it is the doc that tells the agent its code is editable at all.
+case "$TIER" in
+  continual-code*) _SKILL_SRC="SKILL.code.md" ;;
+  *)               _SKILL_SRC="SKILL.md" ;;
+esac
+cp "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/$_SKILL_SRC" \
+   "$FINAL/SKILL.md" 2>/dev/null || true
+"$PY_BIN" - "$FINAL" "$RUN" "$SPEC_SHA" "$PROMPT_SHA" "$TIER" <<'PYF'
 import json, pathlib, sys, hashlib
-final, run, spec_sha, prompt_sha = pathlib.Path(sys.argv[1]), *sys.argv[2:]
+final, run, spec_sha, prompt_sha, tier = pathlib.Path(sys.argv[1]), *sys.argv[2:]
 state = json.loads((final / "harness_state.json").read_text())
 counts = {k: len(v) for k, v in state.get("entries", {}).items()}
 (final / "FROZEN.json").write_text(json.dumps({
     "run": run, "spec_sha256_16": spec_sha, "prompt_sha256_16": prompt_sha,
+    # The tier is recorded so eval_frozen.sh does not have to guess it. Before
+    # this, that script hardcoded `continual`, which would have evaluated a code
+    # arm with the agent's code absent and reported the number as the arm's.
+    "tier": tier,
+    "netplay_commit": (final / "netplay_commit").read_text().strip()
+                      if (final / "netplay_commit").exists() else None,
     "entry_counts": counts,
     "harness_state_sha256": hashlib.sha256((final / "harness_state.json").read_bytes()).hexdigest(),
     "note": "Evaluate with tools/cli_harness_eval/eval_frozen.sh; the store is "

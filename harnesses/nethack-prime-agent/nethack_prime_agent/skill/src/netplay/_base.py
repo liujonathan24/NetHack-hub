@@ -42,7 +42,11 @@ import re
 import time
 from typing import Any
 
-import nethack
+# Bound PRIVATELY. `import nethack` would make `_base.nethack` a public handle
+# on the MCP shim, and any composite could then reach the game through it
+# without passing a beacon -- defeating the reconciliation this module exists
+# to make possible. The gate also rejects attribute access to it by name.
+import nethack as _nethack
 
 __all__ = [
     "press", "screen", "rest", "pray", "apply", "search",
@@ -74,7 +78,7 @@ async def _call(tool: str, **kwargs: Any) -> str:
     _calls += 1
     _log({"cid": cid, "tool": tool, "args": kwargs, "phase": "call",
           "t": time.time()})
-    result = await getattr(nethack, tool)(**kwargs)
+    result = await getattr(_nethack, tool)(**kwargs)
     text = result if isinstance(result, str) else str(result)
     _log({"cid": cid, "tool": tool, "phase": "result", "t": time.time(),
           "len": len(text)})

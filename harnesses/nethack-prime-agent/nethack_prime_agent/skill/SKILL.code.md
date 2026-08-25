@@ -7,14 +7,19 @@ description: Play NetHack. Every move, attack and descent goes through this skil
 
 Two layers, and the difference between them matters.
 
-**`nethack`** is the game boundary. It is frozen. Six primitives, listed below,
-and nothing else — the higher-level skills you may have seen elsewhere
-(`np_move_to`, `np_melee_attack`, `np_explore_level`, `np_kick`) are **not
-available in this configuration**. Calling one raises.
+**`nethack`** is the game boundary — six primitives, listed below. That is the
+complete set of tools: there is nothing else to call, and nothing else to find.
+You cannot edit them.
 
 **`netplay`** is your own code. It is ordinary Python on this kernel's
-`sys.path`, it composes the six primitives into real policies, and **you can
-edit it**. What you leave there persists into the next episode.
+`sys.path`, it composes those six primitives into the policies you actually
+play with — `explore`, `descend`, `attack`, `pray_safely` and the rest — and
+**you can edit every one of them**. What you leave there persists into the next
+episode.
+
+So: the primitives are fixed and the skills built on them are yours. If a
+policy plays badly, the fix is to rewrite the policy, not to look for a better
+tool.
 
 Every tool is **async** — always `await`. The return value is the rendered
 observation (`=== MAP ===`, `=== STATUS ===`, `=== INVENTORY ===`). Print it and
