@@ -153,7 +153,13 @@ def _restore_baseline_coord_note(data: bytes) -> bytes:
 # bytes the prime_agent arm served for every rollout in outputs/e10_baseline/.
 # Pinned by hash so an accidental edit to the fixture fails the run rather than
 # silently redefining what "baseline" means.
-_BASELINE_SKILL_SHA256 = "8585082860c747238468c4c91330524104b21844568bc4603bd3f471fbfa4864"
+# BASELINE v2 (2026-08-24). v1 was `aee5c43^` verbatim, sha256 8585082860c7...,
+# the document every rollout in outputs/e10_baseline/ was served. v2 removes the
+# call-budget language (see docs/PROMPT_BUDGET_REMOVAL.md), which means it is a
+# NEW baseline, not a correction: E10's numbers describe v1 and remain valid for
+# it. Regenerate after editing the doc:
+#   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md
+_BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
 
 
 def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> bytes:

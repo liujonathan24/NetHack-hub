@@ -79,8 +79,8 @@ FULL_GAME_SPEC = GameSpec(
     # model sitting next to a glyph key that says "`<` stairs UP (NOT down)" it
     # reads as an instruction to go UP, which is the opposite of the task.
     description=(
-        "Descend as deep into the dungeon as you can and survive; ultimately "
-        "win the game (retrieve the Amulet of Yendor and escape)."
+        "Win the game: retrieve the Amulet of Yendor and escape. Descending "
+        "is how you progress; surviving is what lets you keep progressing."
     ),
     success_criterion="ascended",
 )

@@ -495,8 +495,13 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
                 state.budget_exhausted = True
                 state.terminated = True
                 return (
-                    f"[Call budget exhausted: {budget} skill calls used. "
-                    "The episode is over.]"
+                    # The only place the call budget's SIZE ever reached a
+                    # model. Post-hoc, so it cannot shape play -- but an
+                    # orchestrator reading traces saw "200 skill calls used" and
+                    # wrote budget advice into the continual store as a learned
+                    # lesson. The episode ending is the fact; its arithmetic is
+                    # ours.
+                    "[The episode is over.]"
                 )
             state.skill_calls += 1
             if name == "move":

@@ -235,9 +235,8 @@ def test_the_baseline_skill_doc_is_byte_identical_to_what_e10_served():
     # `git show aee5c43^:harnesses/.../skill/SKILL.md` -- the exact bytes every
     # rollout in outputs/e10_baseline/ was served.
     assert hashlib.sha256(served).hexdigest() == (
-        "8585082860c747238468c4c91330524104b21844568bc4603bd3f471fbfa4864"
+        "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
     )
-    assert len(served) == 4829
 
 
 def test_the_human_tier_serves_the_annotated_doc():
@@ -400,3 +399,129 @@ def test_load_environment_wires_env_args_into_the_flag_registry():
         "load_environment no longer passes the cell's env_args to the flag "
         "registry -- every flag would be stuck at its default"
     )
+
+
+# -- no model-facing string may disclose the call budget ---------------------
+
+
+def test_no_served_prompt_or_skill_doc_mentions_the_call_budget():
+    """The agent is meant to be playing NetHack, not playing a budgeted eval.
+
+    Two strings were shaping play. `SKILL.md` told it "There is a hard budget of
+    skill calls... Spend calls on progress, not probing", which is strategic
+    instruction to economise; the prompt tail told it the episode ends when "you
+    run out of calls". Downstream evidence that this mattered: a reflection pass
+    over one game wrote `Budget is limited - spend on descent, not looting` into
+    the continual store as a LEARNED LESSON, where it would have been served to
+    every later player.
+
+    This asserts on the served text, not on source comments -- explaining why the
+    budget is hidden is fine; telling the model about it is not.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    banned = re.compile(r"budget|run out of calls|call limit|spend calls", re.I)
+
+    docs = [
+        root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md",
+        root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md",
+    ]
+    for doc in docs:
+        offending = [ln for ln in doc.read_text().splitlines() if banned.search(ln)]
+        assert not offending, f"{doc.name} discloses the call budget: {offending}"
+
+    # The prompt tails, taken from the module rather than re-typed here.
+    from nethack_harness.prompt import rendering
+
+    for name in ("_PROMPT_TAIL", "_PROMPT_TAIL_MINIMAL"):
+        text = getattr(rendering, name)
+        assert not banned.search(text), f"{name} discloses the call budget: {text!r}"
+        # The clause this replaced exists for a reason -- without it 15-25% of
+        # rollouts ended early with the model declaring itself finished. Keep the
+        # anti-give-up half.
+        # Normalise: the clause is line-wrapped differently in the two tails.
+        assert "never because you stopped" in " ".join(text.split()), name
+
+
+def test_the_end_of_episode_message_does_not_state_the_budget_size():
+    """The only place the NUMBER ever reached a model. Post-hoc, so it cannot
+    shape play within a game -- but a reflection pass reads it out of the trace
+    and turns it into advice."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    src = (root / "environments/nethack/nethack_v1.py").read_text()
+    i = src.index("budget_exhausted = True")
+    window = src[i : i + 600]
+    returned = [ln for ln in window.splitlines() if '"[' in ln or 'f"[' in ln]
+    assert returned, "could not find the returned end-of-episode message"
+    for ln in returned:
+        assert "{budget}" not in ln and "skill calls used" not in ln, ln
+
+
+def test_tool_discovery_is_withheld_not_merely_discouraged():
+    """SKILL.md is the authoritative reference and the server's JSON schemas are
+    empty, so a `list_tools()` round-trip returns LESS than the document the
+    agent already has, while costing a turn.
+
+    Telling the model not to call it left the call available and put the idea in
+    its head. This asserts the call is gone and the docs no longer name it --
+    while the instance's internal discovery, which is how `await
+    nethack.<tool>()` resolves at all, still works.
+    """
+    import pathlib
+    import re
+    import sys
+    import types
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    pkg = root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill/src"
+
+    # Stub `rlm`: the real one lives in Prime Agent's kernel venv.
+    stub = types.ModuleType("rlm")
+
+    class _McpIntegration:
+        def __getattr__(self, n):
+            return lambda *a, **k: n
+
+        def list_tools(self):
+            return ["np_move_to", "search"]
+
+    stub.McpIntegration = _McpIntegration
+    sys.modules.setdefault("rlm", stub)
+    sys.path.insert(0, str(pkg))
+    try:
+        sys.modules.pop("nethack", None)
+        import nethack
+
+        with pytest.raises(AttributeError, match="not available"):
+            nethack.list_tools
+
+        # The game must still work: tools resolve, and the instance still
+        # discovers internally.
+        assert callable(nethack.np_move_to)
+        assert nethack.nethack.list_tools() == ["np_move_to", "search"]
+
+        # `help()` is a Python builtin we cannot remove, but the module must not
+        # advertise the withheld call through it -- pydoc filters on __all__,
+        # and exporting the class re-surfaced `list_tools` as inherited.
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            help(nethack)
+        assert "list_tools" not in buf.getvalue()
+    finally:
+        sys.path.remove(str(pkg))
+        sys.modules.pop("nethack", None)
+
+    # And neither document names either call.
+    banned = re.compile(r"list_tools|help\(\)", re.I)
+    for name in ("SKILL.md", "SKILL.baseline.md"):
+        doc = root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill" / name
+        hits = [ln for ln in doc.read_text().splitlines() if banned.search(ln)]
+        assert not hits, f"{name} still names a withheld call: {hits}"
