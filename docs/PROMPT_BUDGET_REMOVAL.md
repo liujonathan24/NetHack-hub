@@ -87,6 +87,37 @@ handle" — that would be E11's gate rewritten as prose, and any leveling change
 would then be ours rather than the model's. The prompt states the objective and
 stops.
 
+## Change C: discovery is withheld, not discouraged
+
+The doc used to say:
+
+> "This file is the authoritative API reference. Everything you need is here —
+> `help()`, `list_tools()` and schema dumps add nothing…"
+
+That left the call available and put the idea in the model's head. Both halves
+were wrong to keep: SKILL.md *is* the complete reference and the server's JSON
+schemas are empty, so a `list_tools()` round-trip returns **less** than the
+document the agent already has, while costing a turn.
+
+| Where | Change |
+|---|---|
+| `skill/src/nethack/__init__.py` | `nethack.list_tools` raises `AttributeError` pointing at SKILL.md |
+| same | `NetHack` dropped from `__all__` — pydoc filters `help()` on `__all__`, and exporting the class re-advertised `list_tools` as an inherited method |
+| `SKILL.md` + `SKILL.baseline.md` | the sentence naming them is gone; header now reads "Every tool is listed below with its exact arguments." |
+| package docstring | "Do not spend calls probing…" removed |
+
+**Only module-level access is withheld.** `McpIntegration` still discovers and
+binds tools on the instance internally — that is how `await nethack.<tool>()`
+resolves at all, and blocking it would break the game. Verified: `list_tools`
+raises, `np_move_to` still resolves, `nethack.nethack.list_tools()` still works
+internally, and `help(nethack)` no longer contains the string (it also shrank
+from 1841 to 922 characters).
+
+**`help()` is a Python builtin and cannot be removed** — the kernel owns it. What
+we can do, and did, is stop naming it and stop the module advertising anything
+through it. A model that calls `help(nethack)` now gets the module docstring and
+nothing about withheld calls.
+
 ## How to judge v2 — not on depth
 
 `max_dlvl` and BALROG% both reward depth, so an agent that survives longer at

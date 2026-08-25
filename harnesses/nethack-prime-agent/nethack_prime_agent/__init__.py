@@ -159,7 +159,7 @@ def _restore_baseline_coord_note(data: bytes) -> bytes:
 # NEW baseline, not a correction: E10's numbers describe v1 and remain valid for
 # it. Regenerate after editing the doc:
 #   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md
-_BASELINE_SKILL_SHA256 = "6ade6d428d956baeee79f8db0fad46db64fe090444599ddb779ba24cbeeb54c0"
+_BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
 
 
 def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> bytes:

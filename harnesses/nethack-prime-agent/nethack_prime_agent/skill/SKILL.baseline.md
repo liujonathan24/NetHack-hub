@@ -5,9 +5,8 @@ description: Play NetHack. The only way to act in the game — every move, attac
 
 # NetHack — complete tool API
 
-This file is the authoritative API reference. Everything you need is here —
-`help()`, `list_tools()` and schema dumps add nothing — the JSON schemas are
-empty and everything is documented here.
+This file is the authoritative API reference. Every tool is listed below with
+its exact arguments.
 
 The game runs in a separate process, reached over MCP. One call = one skill
 executed against the live game. Every tool is **async** — always `await`.

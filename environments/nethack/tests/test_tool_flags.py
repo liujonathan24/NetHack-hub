@@ -235,7 +235,7 @@ def test_the_baseline_skill_doc_is_byte_identical_to_what_e10_served():
     # `git show aee5c43^:harnesses/.../skill/SKILL.md` -- the exact bytes every
     # rollout in outputs/e10_baseline/ was served.
     assert hashlib.sha256(served).hexdigest() == (
-        "6ade6d428d956baeee79f8db0fad46db64fe090444599ddb779ba24cbeeb54c0"
+        "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
     )
 
 
@@ -460,3 +460,68 @@ def test_the_end_of_episode_message_does_not_state_the_budget_size():
     assert returned, "could not find the returned end-of-episode message"
     for ln in returned:
         assert "{budget}" not in ln and "skill calls used" not in ln, ln
+
+
+def test_tool_discovery_is_withheld_not_merely_discouraged():
+    """SKILL.md is the authoritative reference and the server's JSON schemas are
+    empty, so a `list_tools()` round-trip returns LESS than the document the
+    agent already has, while costing a turn.
+
+    Telling the model not to call it left the call available and put the idea in
+    its head. This asserts the call is gone and the docs no longer name it --
+    while the instance's internal discovery, which is how `await
+    nethack.<tool>()` resolves at all, still works.
+    """
+    import pathlib
+    import re
+    import sys
+    import types
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    pkg = root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill/src"
+
+    # Stub `rlm`: the real one lives in Prime Agent's kernel venv.
+    stub = types.ModuleType("rlm")
+
+    class _McpIntegration:
+        def __getattr__(self, n):
+            return lambda *a, **k: n
+
+        def list_tools(self):
+            return ["np_move_to", "search"]
+
+    stub.McpIntegration = _McpIntegration
+    sys.modules.setdefault("rlm", stub)
+    sys.path.insert(0, str(pkg))
+    try:
+        sys.modules.pop("nethack", None)
+        import nethack
+
+        with pytest.raises(AttributeError, match="not available"):
+            nethack.list_tools
+
+        # The game must still work: tools resolve, and the instance still
+        # discovers internally.
+        assert callable(nethack.np_move_to)
+        assert nethack.nethack.list_tools() == ["np_move_to", "search"]
+
+        # `help()` is a Python builtin we cannot remove, but the module must not
+        # advertise the withheld call through it -- pydoc filters on __all__,
+        # and exporting the class re-surfaced `list_tools` as inherited.
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            help(nethack)
+        assert "list_tools" not in buf.getvalue()
+    finally:
+        sys.path.remove(str(pkg))
+        sys.modules.pop("nethack", None)
+
+    # And neither document names either call.
+    banned = re.compile(r"list_tools|help\(\)", re.I)
+    for name in ("SKILL.md", "SKILL.baseline.md"):
+        doc = root / "harnesses/nethack-prime-agent/nethack_prime_agent/skill" / name
+        hits = [ln for ln in doc.read_text().splitlines() if banned.search(ln)]
+        assert not hits, f"{name} still names a withheld call: {hits}"
