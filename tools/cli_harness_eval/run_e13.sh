@@ -44,6 +44,10 @@ CORPUS_SEEDS="$(read_spec corpus_seeds)"
 PLAYERS_EDIT="$(read_spec players_may_edit)"
 PROMPT_NAME="$(read_spec prompt)"; TIER="$(read_spec tier)"
 SPEC_SHA="$(sha256sum "$SPEC" | cut -c1-16)"
+# What the orchestrator is TOLD is the prompt file plus whatever the script
+# splices in. Now that the script appends a round-over-round report, two runs can
+# share a prompt sha and still be handed different evidence -- so pin the script.
+ORCH_SHA="$(sha256sum "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" | cut -c1-16)"
 RUN="${EXP_ID}-r${REPLICATE}"
 
 # Per-experiment install_dir. FIXED per experiment, not globally: the kernel venv
@@ -108,6 +112,7 @@ cat > "$MANIFEST" <<JSON
   "experiment": "${EXP_ID}", "replicate": ${REPLICATE}, "run": "${RUN}",
   "spec": "${SPEC}", "spec_sha256_16": "${SPEC_SHA}",
   "reflection_prompt": "${PROMPT_NAME}", "prompt_sha256_16": "${PROMPT_SHA}",
+  "orchestrator_sha256_16": "${ORCH_SHA}",
   "rounds": ${ROUNDS}, "corpus_seeds": ${CORPUS_SEEDS},
   "eval_seeds": $(read_spec eval_seeds),
   "players_may_edit": ${PLAYERS_EDIT}, "store_mode": "${MODE}",
