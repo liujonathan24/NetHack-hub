@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "socketPath": "/tmp/prime-agent-0/daemon.sock",
-  "defaultSessionConfig": {
-    "cwd": "/root/nld/e13-land",
-    "agentDir": "/root/nld/e13-land/outputs/e13/smoke-one-seed-r1/round1/orch-agent",
-    "serializedRefine": false
-  }
-}

@@ -1,8 +1,0 @@
-{
-  "onboardingShown": true,
-  "defaultProvider": "prime-inference",
-  "defaultModel": "z-ai/glm-5.2",
-  "recentModels": [
-    "prime-inference/z-ai/glm-5.2"
-  ]
-}
