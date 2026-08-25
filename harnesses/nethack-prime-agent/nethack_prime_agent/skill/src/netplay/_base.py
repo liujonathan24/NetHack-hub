@@ -52,11 +52,33 @@ __all__ = [
     "press", "screen", "rest", "pray", "apply", "search", "kick",
     "status", "features", "monsters", "grid", "position", "tile",
     "messages", "prompt_open",
-    "check", "call_count",
+    "check", "call_count", "EpisodeOver",
 ]
 
 _counter = itertools.count(1)
 _calls = 0
+
+# The tool server returns this verbatim once the call budget is spent or the
+# character dies -- every later call gets it too, cheaply. A composite that does
+# not RECOGNISE it keeps pressing keys forever: a seed bug pressed 200,000 keys
+# in one game, each returning this string, before the rollout timed out. So the
+# floor turns it into an exception that unwinds any loop, composite or
+# agent-authored. This lives in _base (frozen) precisely so an agent cannot edit
+# the guard away.
+_EPISODE_OVER = "[The episode is over.]"
+
+# Pure backstop for a loop that never trips the sentinel (e.g. a policy pressing
+# into a wall before the budget is spent). A real NetHack game is a few hundred
+# calls; this is far above any legitimate play but far below a runaway. Checked
+# BEFORE dispatch, so a spinning loop cannot even reach the MCP server.
+_HARD_CALL_CEILING = 20000
+
+
+class EpisodeOver(RuntimeError):
+    """The episode has ended (budget spent, or the character died), or a policy
+    is looping. Raised by the primitive floor so a composite cannot keep calling
+    past the end of the game. Do not catch this to keep playing -- there is no
+    game left to play."""
 
 
 def _log(record: dict[str, Any]) -> None:
@@ -72,8 +94,16 @@ def _log(record: dict[str, Any]) -> None:
 
 
 async def _call(tool: str, **kwargs: Any) -> str:
-    """Dispatch one MCP tool call, bracketed by beacons."""
+    """Dispatch one MCP tool call, bracketed by beacons.
+
+    Raises `EpisodeOver` when the game has ended or a policy is runaway-looping,
+    so no composite can keep calling past the end of the episode.
+    """
     global _calls
+    if _calls >= _HARD_CALL_CEILING:
+        raise EpisodeOver(
+            f"netplay: hard call ceiling ({_HARD_CALL_CEILING}) reached -- a "
+            "policy is looping. Stop and fix it.")
     cid = next(_counter)
     _calls += 1
     _log({"cid": cid, "tool": tool, "args": kwargs, "phase": "call",
@@ -82,6 +112,8 @@ async def _call(tool: str, **kwargs: Any) -> str:
     text = result if isinstance(result, str) else str(result)
     _log({"cid": cid, "tool": tool, "phase": "result", "t": time.time(),
           "len": len(text)})
+    if _EPISODE_OVER in text:
+        raise EpisodeOver(text)
     return text
 
 

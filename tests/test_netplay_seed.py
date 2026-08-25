@@ -117,7 +117,7 @@ def test_the_floor_exports_exactly_the_documented_surface(netplay):
     assert set(_base.__all__) == {
         "press", "screen", "rest", "pray", "apply", "search", "kick",
         "status", "features", "monsters", "grid", "position", "tile",
-        "messages", "prompt_open", "check", "call_count",
+        "messages", "prompt_open", "check", "call_count", "EpisodeOver",
     }
 
 
@@ -398,3 +398,52 @@ def test_the_boundary_is_not_a_public_attribute_of_the_floor():
     assert "\nimport nethack\n" not in src, (
         "binding the shim publicly hands every composite the game without beacons"
     )
+
+
+# ---------- runaway guard (the 200k-keypress bug) ----------
+
+@pytest.mark.asyncio
+async def test_episode_over_sentinel_stops_the_composite(netplay):
+    """A composite that ignores '[The episode is over.]' pressed 200k keys in
+    one game. The frozen floor now raises EpisodeOver on that sentinel so any
+    loop -- ours or the agent's -- unwinds."""
+    rec = netplay._recorder
+    rec._script["np_press_key"] = "[The episode is over.]"
+    from netplay import _base
+    with pytest.raises(_base.EpisodeOver):
+        await netplay.press("j")
+    # exactly one server call happened, not a runaway
+    assert len([c for c in rec.calls if c[0] == "np_press_key"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_move_to_cannot_run_away_on_persistent_drift(netplay):
+    """The specific seed bug: move_to recursed on every drifted step. Feed it an
+    observation whose position never matches the plan; it must give up after a
+    BOUNDED number of calls, not loop."""
+    # a map where the player @ is at (1,1) and target (5,5); position never
+    # advances (screen always returns the same), so every step 'drifts'.
+    obs = ("=== MAP ===\n"
+           " @....\n"
+           " .....\n"
+           " .....\n"
+           " .....\n"
+           " .....\n"
+           "=== STATUS ===\nHP: 10/10  Dlvl: 1  Pos: (1,0)\n")
+    netplay._recorder._script["request_map"] = obs
+    netplay._recorder._script["np_press_key"] = obs  # position never changes
+    result = await netplay.move_to(4, 4)
+    calls = len(netplay._recorder.calls)
+    assert "gave up" in result or "no known route" in result
+    assert calls < 200, f"move_to made {calls} calls on drift -- should be bounded"
+
+
+@pytest.mark.asyncio
+async def test_the_hard_ceiling_backstops_a_loop_that_never_sees_the_sentinel(netplay):
+    """Defence for a loop that presses without ever ending the episode: the
+    floor refuses past a hard ceiling, before dispatching to the server."""
+    from netplay import _base
+    _base._calls = _base._HARD_CALL_CEILING  # simulate a long runaway
+    with pytest.raises(_base.EpisodeOver, match="ceiling"):
+        await netplay.press("j")
+    _base._calls = 0  # reset for other tests
