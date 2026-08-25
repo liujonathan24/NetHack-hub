@@ -2613,9 +2613,17 @@ def load_environment(
             from nethack_harness.tools.balrog_actions import balrog_instruction_prompt
             spec = _dc.replace(spec, system_prompt=balrog_instruction_prompt())
         else:
+            # The code tiers retire the server-side composites (netplay_composites
+            # off) and hand the agent an editable `netplay` package instead. That
+            # package is invisible to the tool-gated prompt, so inject the netplay
+            # guidance block here or the agent never learns the policies exist.
+            from nethack_harness import tool_flags as _tf
+            _netplay = not _tf.enabled("netplay_composites")
             spec = _dc.replace(
                 spec,
-                system_prompt=_render_system_prompt(_allowed_skill_names, verbose=verbose_prompt),
+                system_prompt=_render_system_prompt(
+                    _allowed_skill_names, verbose=verbose_prompt,
+                    netplay_layer=_netplay),
             )
     # E8b mechanic guidance: append system-prompt blocks only (published tool
     # schemas untouched). Default "" leaves every existing arm byte-identical.

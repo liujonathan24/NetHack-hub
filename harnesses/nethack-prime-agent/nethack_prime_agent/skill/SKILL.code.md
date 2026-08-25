@@ -87,7 +87,10 @@ list of what it does badly — those are real, and they are where the value is.
 1. Read the file first. `netplay/_base.py` documents the primitive floor and the
    parsing helpers (`status`, `features`, `monsters`, `grid`, `messages`), which
    are already written and tested — use them rather than re-parsing observations.
-2. Edit with ordinary file writes.
+2. Edit with the built-in `edit` skill (a targeted, single-occurrence replace):
+   `await edit(path="<netplay dir>/explore.py", old_str=..., new_str=...)`.
+   It is Prime Agent's native file editor -- prefer it over rewriting the whole
+   file. (Whole-file writes work too, but `edit` keeps your change surgical.)
 3. **Call `netplay.check()` after every edit.** It compiles the whole tree and
    re-imports it, and returns `{"ok": bool, "errors": [...]}`. A file that does
    not compile takes the policy down for every later episode, not just yours.

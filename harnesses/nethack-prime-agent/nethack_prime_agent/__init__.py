@@ -222,7 +222,7 @@ _BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d3
 # different tool sets (this one retires the four server-side composites), so
 # there is no shared paragraph to patch. Regenerate after a deliberate edit:
 #   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.code.md
-_CODE_SKILL_SHA256 = "d1b67851795248c2890c3a45e2a0293f12f1b2ab0ca5d3da84011f577c07c100"
+_CODE_SKILL_SHA256 = "9f2b05919406955b79218af2c597ed7706aafe3b4040058bd96b4c4ce08cb058"
 
 
 def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool,

@@ -344,7 +344,37 @@ def _fix_hint_vocabulary(hint: str, published_tools) -> str:
     return _re.sub(r"\s{2,}", " ", hint).strip()
 
 
-def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
+
+# The netplay policy layer. Injected ONLY for the skills-as-code tiers (see
+# `netplay_layer`), because it is the one thing the tool-gated prompt cannot
+# advertise: `netplay` is a Python PACKAGE the agent imports, not an MCP tool
+# with a schema, so it never appears in the SKILLS CHEAT SHEET. Without this
+# block the code-tier agent sees only the primitive tools and plays by pressing
+# keys one at a time -- measured on the first live rollout, 0 uses of netplay in
+# ~160 calls. This block is what tells it the policies exist and are its own.
+_NETPLAY_BLOCK = (
+    "=== YOUR POLICIES (netplay) ===\n"
+    "You have a Python package `netplay` with higher-level policies built on the\n"
+    "primitive tools. PREFER these over pressing movement keys one at a time:\n"
+    "  await netplay.explore()        # auto-explore the level\n"
+    "  await netplay.move_to(x, y)    # pathfind to a tile and walk there\n"
+    "  await netplay.descend()        # find the down stair, go to it, press >\n"
+    "  await netplay.dive(levels=3)   # descend several floors\n"
+    "  await netplay.attack(x, y)     # pursue and melee the monster at (x, y)\n"
+    "  await netplay.clear_threats()  # attack visible non-pet monsters\n"
+    "  await netplay.pray_safely()    # pray only when HP is critical\n"
+    "  await netplay.recover()        # rest to heal when it is safe\n"
+    "These are YOUR code. You may READ and IMPROVE them with the built-in edit\n"
+    "skill. If a policy plays badly -- walks into walls, gives up early, dies\n"
+    "avoidably -- find the file (os.path.dirname(netplay.__file__)), then:\n"
+    "  await edit(path=f'{netplay_dir}/explore.py', old_str=..., new_str=...)\n"
+    "  print(netplay.check())                       # compile-check your edit\n"
+    "  import importlib; importlib.reload(netplay)   # make it live this game\n"
+    "Read SKILL.md in the skill directory for the full contract and what is frozen."
+)
+
+def render_system_prompt(published_tools=None, verbose: bool = False,
+                         netplay_layer: bool = False) -> str:
     """Assemble the system prompt for a specific published tool set.
 
     `published_tools=None` means "everything the registry knows", which is the
@@ -378,6 +408,10 @@ def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     sheet = [f"- {blurb}" for name, blurb in _SKILL_BLURBS if name in available]
     if sheet:
         parts.insert(len(parts) - 1, "=== SKILLS CHEAT SHEET ===\n" + "\n".join(sheet))
+    if netplay_layer:
+        # Before the final objective block, so "use your policies" sits next to
+        # the action list rather than after the goal.
+        parts.insert(len(parts) - 1, _NETPLAY_BLOCK)
     return "\n\n".join(parts)
 
 
