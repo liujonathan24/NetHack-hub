@@ -28,7 +28,7 @@ SELF_EDIT_BLOCK = (
     "  rlm.harness.delete_memory(id=..., global_=True)\n"
     "  rlm.harness.create_skill(title=..., content=...,\n"
     "      reference={'type':'python','import':'nethack',\n"
-    "                 'call_pattern':'await nethack.np_explore_level()'},\n"
+    "                 'call_pattern':'await nethack.np_press_key(key=\">\")'},\n"
     "      arguments={}, global_=True)\n"
     "\n"
     "Write only what would have helped you at the START of this game: a mechanic\n"
