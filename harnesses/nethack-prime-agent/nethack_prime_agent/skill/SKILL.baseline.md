@@ -17,10 +17,7 @@ deciding the next call.** It is your only view of the game.
 ## The tools (exact signatures — this is the full set)
 
 Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,
-top to bottom) in the MAP frame: row 0 is the FIRST row of the `=== MAP ===`
-block, the same frame `Pos:` and all `VISIBLE FEATURES` coordinates use. Do
-NOT count rows from the raw terminal screen (it has extra message/status
-lines) — that yields an off-by-one that silently misses every target.
+top to bottom), exactly as shown in the map.
 
 ```python
 await nethack.request_map()                 # Show the FULL map + surroundings in this
