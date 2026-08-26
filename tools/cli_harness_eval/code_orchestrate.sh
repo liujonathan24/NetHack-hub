@@ -147,7 +147,7 @@ BEFORE="$(git -C "$CANON" rev-parse --short HEAD)"
 echo "[corch] $(date -u +%H:%M:%S) round ${ROUND_N}: reading $TRAIN_DIR -> code $CANON @ $BEFORE (provider=$PROVIDER model=$MODEL)"
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
 PRIME_AGENT_KERNEL_VENV="${PRIME_AGENT_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
-  prime-agent --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
+  "${PA38_BIN:-prime-agent}" --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
   > "$ROUND_OUT/code_orchestrator.stdout.txt" 2> "$ROUND_OUT/code_orchestrator.stderr.txt"
 rc=$?
 AFTER="$(git -C "$CANON" rev-parse --short HEAD)"
