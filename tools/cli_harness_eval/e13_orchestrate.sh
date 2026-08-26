@@ -184,8 +184,14 @@ echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH (provider=$PR
 # other unsandboxed prime-agent (another experiment's orchestrator) collides
 # with it. A per-round dir gives it a private socket; players are unaffected
 # (they run under bwrap --tmpfs /tmp and never see this variable).
-mkdir -p "$ORCH_DIR/tmp"
-TMPDIR="$ORCH_DIR/tmp" \
+# SHORT tmp dir, not $ORCH_DIR/tmp: unix socket paths cap at ~108 bytes and the
+# worker socket under a round dir blows past it -- the worker then dies with an
+# uncaught ENOENT lstat on its own socket and the client times out after 30s
+# (cost: the E13 round-10 and E15 round-7 reflections, 01:08-01:09). A hash of
+# ORCH_DIR keeps it unique per round while staying ~40 chars total.
+ORCH_TMP="/tmp/pa-orch-$(printf '%s' "$ORCH_DIR" | md5sum | cut -c1-10)"
+mkdir -p "$ORCH_TMP"
+TMPDIR="$ORCH_TMP" \
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
 PRIME_AGENT_KERNEL_VENV="${ORCH_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
   prime-agent --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
