@@ -171,6 +171,17 @@ skill_doc_coords = false
 [v2_json.contract]
 variant = "JSON"
 
+[v2_odjson]    # V2 follow-up: BBOX_MIN delivery, request_map returns map+JSON
+# On-demand x encoding cell (2026-08-26): quiet turns byte-identical to base;
+# only the bought look differs (ASCII map + structured JSON body). Motivated
+# by the V1 autopsy: keep the stop-and-look beat and the hidden-by-default
+# stair targeting, upgrade the purchase to coordinate-addressable state.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v2_odjson.contract]
+variant = "BBOX_BJSON_OD"
+
 [continual]
 # STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
 # store the agent writes for itself, so its floor must be the same floor the
