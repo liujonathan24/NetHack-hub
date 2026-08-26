@@ -39,10 +39,16 @@ TIER_HASH="$($PY_BIN -c "import sys;sys.path.insert(0,'$REPO/tools/cli_harness_e
 echo "[pre  ] tier: $STACK  hash: $TIER_HASH"
 
 # 3. Mock-play one seed.
-prime-agent shutdown >/dev/null 2>&1 || true
-pkill -9 -x prime-agent 2>/dev/null || true
-pkill -9 -x nethack_v1 2>/dev/null || true
-rm -rf /tmp/prime-agent-0 2>/dev/null || true
+# SCOPED cleanup: kill only processes tied to THIS experiment's install dir.
+# The old global `pkill -9 -x prime-agent` here killed every co-tenant
+# experiment's rollouts (and orchestrators) at every preflight -- observed
+# repeatedly on 2026-08-26. Other experiments' sandboxed daemons live in
+# their own tmpfs /tmp; the shared /tmp/prime-agent-0 is not ours to delete.
+if [ -n "${INSTALL_DIR:-}" ]; then
+  for _pid in $(pgrep -f "$INSTALL_DIR" 2>/dev/null); do
+    kill -9 "$_pid" 2>/dev/null || true
+  done
+fi
 sleep 2
 rm -rf "$OUT"; mkdir -p "$OUT"
 env TOOL_TIER="$STACK" TIER_SHORT_BUDGET=1 \
