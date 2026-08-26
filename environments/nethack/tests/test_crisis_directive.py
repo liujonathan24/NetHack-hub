@@ -21,7 +21,10 @@ from nethack_harness.prompt.crisis_directive import (  # noqa: E402
     pacing_lagging,
     pacing_line,
 )
-from nethack_harness.prompt.human_norms import norm_xl_for_leaving  # noqa: E402
+from nethack_harness.prompt.human_norms import (  # noqa: E402
+    norm_xl_for_arriving,
+    norm_xl_for_leaving,
+)
 
 
 # ---- HP-CRISIS threshold: HP strictly below max/3 AND a hostile adjacent ---
@@ -49,24 +52,48 @@ def test_hp_crisis_never_fires_on_unreadable_stats():
 
 
 def test_hp_crisis_line_text():
+    # Fix1: retreat-only. The r1 wording recommended prayer (cooldown death)
+    # and Elbereth (dust-engraving impossible: '-' key gated off).
     assert hp_crisis_line(4, 16) == (
         "[crisis directive: HP 4/16 with a hostile adjacent. "
-        "Retreat, pray, or engrave Elbereth NOW -- do not melee.]"
+        "Retreat NOW -- move away from the monster toward explored "
+        "territory or upstairs; do not melee.]"
     )
+    for banned in ("pray", "Elbereth", "engrave"):
+        assert banned not in hp_crisis_line(4, 16)
 
 
-# ---- PACING threshold: XL < human-winner norm for leaving this depth -------
+# ---- PACING threshold: XL < human-winner norm for ARRIVING at this depth ---
+
+
+def test_pacing_uses_arrival_norm():
+    # Fix1: r1 compared against the LEAVING norm (arrival norm one depth
+    # ahead), so an agent exactly on the human arrival pace was still told
+    # it lagged — the directive fired on 100% of arrivals at depth >= 3.
+    for d in range(1, 12):
+        at_arrival_norm = norm_xl_for_arriving(d)
+        assert not pacing_lagging(at_arrival_norm, d)
+        if at_arrival_norm > 1:
+            assert pacing_lagging(at_arrival_norm - 1, d)
 
 
 def test_pacing_lags_when_below_norm():
-    # norm_xl_for_leaving(4) == 3 (pinned in test_np_core_surface).
-    assert pacing_lagging(2, 4)
-    assert not pacing_lagging(3, 4)   # at the norm -> no directive
+    # norm_xl_for_arriving(4) <= norm_xl_for_leaving(4) == 3 (pinned in
+    # test_np_core_surface); XL 9 is comfortably above either.
     assert not pacing_lagging(9, 4)
+    assert not pacing_lagging(norm_xl_for_arriving(4), 4)  # at the norm -> no directive
+
+
+def test_arrival_norm_lags_leaving_norm():
+    # The arrival norm for d is the leaving norm for d-1; leaving(d) is the
+    # arrival norm of d+1, so arriving(d) <= leaving(d) everywhere.
+    for d in range(1, 15):
+        assert norm_xl_for_arriving(d) <= norm_xl_for_leaving(d)
+        assert norm_xl_for_arriving(d + 1) == norm_xl_for_leaving(d)
 
 
 def test_pacing_dlvl1_at_xl1_is_on_pace():
-    assert norm_xl_for_leaving(1) == 1
+    assert norm_xl_for_arriving(1) == 1
     assert not pacing_lagging(1, 1)
 
 
@@ -76,10 +103,12 @@ def test_pacing_never_fires_on_unreadable_stats():
 
 
 def test_pacing_line_text():
-    norm = norm_xl_for_leaving(6)
-    assert norm == 5
+    norm = norm_xl_for_arriving(6)
     assert pacing_line(2, 6, norm) == (
-        "[pacing directive: you are XL 2 on Dlvl 6; typical successful "
-        "human runs reach XL 5 before leaving this depth. Level here "
-        "or retreat to a higher dungeon level before descending.]"
+        f"[pacing directive: you are XL 2 on Dlvl 6; typical successful "
+        f"human runs arrive here at XL {norm}. Level here "
+        f"or retreat to a higher dungeon level before descending.]"
     )
+    # The user-specified action sentence survives verbatim.
+    assert ("Level here or retreat to a higher dungeon level before "
+            "descending.]") in pacing_line(2, 6, norm)

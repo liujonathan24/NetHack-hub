@@ -2327,18 +2327,28 @@ def _rollback_ring(env) -> list:
     return ring
 
 
-def push_rollback_snapshot(env, turn: int) -> None:
-    """Capture the post-turn state. Called by env_response, not by the agent."""
+def push_rollback_snapshot(env, turn: int, game_time=None) -> None:
+    """Capture the post-turn state. Called by env_response, not by the agent.
+
+    `game_time` is the in-game clock at capture time; the rollback feedback
+    quotes it ("restored to game turn T") because agents demonstrably reason
+    in game turns, not harness tool-calls (E15 P3 r1: "let me roll back to
+    turn 541", and a rollback(20) at 1 HP that meant ~23 game turns).
+    """
     eng = getattr(env, "_engine", None)
     if eng is None:
         return
     ring = _rollback_ring(env)
     try:
-        ring.append((int(turn), eng.snapshot()))
+        gt = None if game_time is None else int(game_time)
+    except Exception:
+        gt = None
+    try:
+        ring.append((int(turn), gt, eng.snapshot()))
     except Exception:
         return
     while len(ring) > ROLLBACK_RING:
-        _t, h = ring.pop(0)
+        _t, _gt, h = ring.pop(0)
         try:
             eng.free_snapshot(h)
         except Exception:
@@ -2347,13 +2357,15 @@ def push_rollback_snapshot(env, turn: int) -> None:
 
 @registry.register("rollback", {
     "description": (
-        "Undo the last n turns, returning the game to the state it was in "
-        "before them. Use after a mistake -- walking into a losing fight, "
+        "Undo the last n tool calls, returning the game to the state it was "
+        "in before them. Use after a mistake -- walking into a losing fight, "
         "triggering a trap, wasting turns in a dead end. Costs one turn and no "
-        "game time. n must be between 1 and 15."
+        "game time. n counts your tool calls (one call may span many game "
+        "turns); asking for more history than is retained rolls back as far "
+        "as possible."
     ),
     "parameters": {
-        "n": {"type": "integer", "description": "How many turns to undo.",
+        "n": {"type": "integer", "description": "How many tool calls to undo.",
               "default": 1},
     },
 })
@@ -2375,14 +2387,18 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
     max_n = len(ring) - 1
     if max_n < 1:
         return SkillResult(actions=[], feedback="rollback unavailable: no earlier turn recorded yet.")
+    clamp_note = ""
     if n > max_n:
-        return SkillResult(
-            actions=[],
-            feedback=(f"cannot roll back {n} turns; only {max_n} earlier turn(s) are "
-                      f"retained. Try n<={max_n}."),
-        )
+        # Fix1: clamp instead of erroring. E15 P3 r1 seed 3 issued
+        # rollback(20) at 1 HP (meaning ~20 GAME turns), got a range error,
+        # and wasted its crisis call; four calls later a rollback(6) failed
+        # the same way at 4 HP after a deep rollback truncated the ring.
+        # A best-effort restore is strictly better than a refusal here.
+        clamp_note = (f" (asked for {n}, but only {max_n} earlier turn(s) are "
+                      f"retained -- rolled back {max_n})")
+        n = max_n
     idx = len(ring) - 1 - n
-    turn_no, handle = ring[idx]
+    turn_no, game_time, handle = ring[idx]
     try:
         eng.restore(handle)
     except Exception as exc:
@@ -2391,7 +2407,7 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
     # restored entry itself is KEPT, because the ring's invariant is
     # "ring[-1] is the current state" -- dropping it would leave the current
     # state unrepresented and make the next rollback(1) silently jump two turns.
-    for _t, h in ring[idx + 1:]:
+    for _t, _gt, h in ring[idx + 1:]:
         try:
             eng.free_snapshot(h)
         except Exception:
@@ -2408,8 +2424,10 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
     except Exception:
         pass
     # ESC surfaces the restored frame without advancing the clock.
+    gt_note = f" (game turn {game_time})" if game_time is not None else ""
     return SkillResult(
         actions=[27],
-        feedback=(f"rolled back {n} turn(s) to the state after turn {turn_no}. "
+        feedback=(f"rolled back {n} call(s) to the state after call {turn_no}"
+                  f"{gt_note}{clamp_note}. "
                   "The moves you just made have been undone; choose differently."),
     )

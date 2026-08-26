@@ -1198,6 +1198,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             if (state["structured_obs"].status or {}).get("hitpoints", 0) > 0:
                 state["died"] = False
                 state["terminated"] = False
+                # Re-arm the one-turn death window (see is_completed) so a
+                # LATER death gets its own chance to roll back.
+                state.pop("_death_window_spent", None)
+                state.pop("_death_attribution", None)
             state["_stuck_n"] = 0
             tt["feedback"] = _res.feedback or ""
             content = self.spec.turn_template(
@@ -1251,6 +1255,71 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if skill_name in _DIR_BIND:
             skill_args = {"direction": _DIR_BIND[skill_name]}
             skill_name = "move"
+
+        # E8a/E9a descent gate — checked BEFORE dispatch. The netplay skills
+        # are closed-loop (`run_netplay_skill` steps the engine to completion
+        # inside the registry call), so the original post-dispatch placement
+        # fired the gate AFTER the descent had already executed: E15 P1 r1
+        # served all 30/30 gate lines post-descent, and the instructed
+        # "repeat" '>' landed on the NEW level's up-stairs ("You can't go
+        # down here"), costing a game turn each. Pre-dispatch, the gated call
+        # consumes zero engine steps, the rendered observation is still true,
+        # and "Repeat the call to descend anyway" is literally honest (the
+        # ack-set lets the repeat through). Gate the descent ACTION, not one
+        # tool name: np_core has no np_down — agents descend via
+        # np_press_key('>'). Known limit: descent INTENT is judged from the
+        # call alone, so a '>' pressed off-stairs still fires (and, in norm
+        # mode, acks) the gate; all 30 observed r1 firings were on genuine
+        # staircases, so this costs ~nothing in practice.
+        _is_descent = (
+            skill_name == "np_down"
+            or (skill_name == "np_press_key"
+                and str((skill_args or {}).get("key", "")).strip() == ">")
+        )
+        if _is_descent and self.descent_gate in ("enforce", "norm", "directive"):
+            try:
+                _st_now = (state["structured_obs"].status or {})
+                _g_dlvl = int(_st_now.get("depth") or 1)
+                _g_xl = int(_st_now.get("experience_level") or 1)
+            except Exception:
+                _g_dlvl, _g_xl = 1, 1
+            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+            _g_norm = norm_xl_for_leaving(_g_dlvl)
+            # E9a hard enforcement: descent is REFUSED while underleveled,
+            # with no override -- the stairs stay locked until XL >=
+            # norm(Dlvl). Ascent is never gated. docs/EXPERIMENT_E9.md.
+            if self.descent_gate == "enforce" and _g_xl < _g_norm:
+                gate = (f"[descent BLOCKED: you are XL {_g_xl} on Dlvl {_g_dlvl}. The "
+                        f"stairs down stay locked until you reach XL {_g_norm}. "
+                        f"Gain experience on this level first, then descend.]")
+                tt["status"] = "blocked"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+            # Advisory (norm/directive): fire at most once per depth, and
+            # ONLY when actually lagging. r1 fired unconditionally, so the
+            # model's first-ever gate was always the deficit-0 dismissable
+            # one ("XL 1 on Dlvl 1, norm 1") — it concluded the interrupt
+            # class was noise and spent zero reasoning tokens on every later
+            # firing. At/above norm there is nothing to say; say nothing.
+            if self.descent_gate in ("norm", "directive") and _g_xl < _g_norm:
+                ack = state.setdefault("_descent_gate_ack", set())
+                if _g_dlvl not in ack:
+                    ack.add(_g_dlvl)
+                    if self.descent_gate == "norm":
+                        gate = (f"[descent check: you are XL {_g_xl} on Dlvl {_g_dlvl}. "
+                                f"Typical successful human runs reach XL {_g_norm} "
+                                f"before leaving this depth. Repeat the call to "
+                                f"descend anyway.]")
+                    else:
+                        gate = (f"[descent check: level to XL {_g_norm} before moving "
+                                f"on. Repeat the call to descend anyway.]")
+                    tt["status"] = "interrupted"
+                    tt["feedback"] = gate
+                    state["scout_delta"] = 0
+                    obs_text = self._render_obs_text(state)
+                    return compose_user_content(obs_text, [gate])
 
         # Variant CH: `run_macro(name=...)` expands a Refiner-registered
         # macro (an ordered list of existing skill calls) into a concatenated
@@ -1317,72 +1386,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # open (dtime 96) and on the call that found the stairs. So capture the
         # signature and the pre-action clock now, and judge after the engine has
         # actually stepped (see the post-step block below).
-        # E8a descent gate: the FIRST np_down on a given dungeon level returns
-        # the norm line at zero engine cost; the second proceeds. Soft gate --
-        # agency preserved, the game is never blocked. docs/EXPERIMENT_E8.md.
-        # Gate the descent ACTION, not one tool name: np_core has no np_down —
-        # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
-        # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
-        _is_descent = (
-            skill_name == "np_down"
-            or (skill_name == "np_press_key"
-                and str((skill_args or {}).get("key", "")).strip() == ">")
-        )
-        # E9a hard enforcement: descent is REFUSED while underleveled, with no
-        # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
-        # E8a's advice (read and ignored) into a constraint, to test whether
-        # underleveling is CAUSAL for death or merely correlated: if forcing the
-        # model to level before descending improves survival, the reasoning->
-        # policy gap is the bottleneck; if it dies anyway (attrition at shallow
-        # depth), the gap is deeper. Ascent is never gated. docs/EXPERIMENT_E9.md.
-        if self.descent_gate == "enforce" and _is_descent:
-            try:
-                st_now = (state["structured_obs"].status or {})
-                dlvl = int(st_now.get("depth") or 1)
-                xl = int(st_now.get("experience_level") or 1)
-            except Exception:
-                dlvl, xl = 1, 1
-            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
-            norm = norm_xl_for_leaving(dlvl)
-            if xl < norm:
-                gate = (f"[descent BLOCKED: you are XL {xl} on Dlvl {dlvl}. The "
-                        f"stairs down stay locked until you reach XL {norm}. "
-                        f"Gain experience on this level first, then descend.]")
-                tt = state["_turn_trace"]
-                tt["status"] = "blocked"
-                tt["feedback"] = gate
-                state["scout_delta"] = 0
-                obs_text = self._render_obs_text(state)
-                return compose_user_content(obs_text, [gate])
-            # XL >= norm: leveled enough -- allow the descent to proceed.
-
-        if self.descent_gate in ("norm", "directive") and _is_descent:
-            try:
-                st_now = (state["structured_obs"].status or {})
-                dlvl = int(st_now.get("depth") or 1)
-                xl = int(st_now.get("experience_level") or 1)
-            except Exception:
-                dlvl, xl = 1, 1
-            ack = state.setdefault("_descent_gate_ack", set())
-            if dlvl not in ack:
-                ack.add(dlvl)
-                from nethack_harness.prompt.human_norms import norm_xl_for_leaving
-                norm = norm_xl_for_leaving(dlvl)
-                if self.descent_gate == "norm":
-                    gate = (f"[descent check: you are XL {xl} on Dlvl {dlvl}. "
-                            f"Typical successful human runs reach XL {norm} "
-                            f"before leaving this depth. Repeat the call to "
-                            f"descend anyway.]")
-                else:
-                    gate = (f"[descent check: level to XL {norm} before moving "
-                            f"on. Repeat the call to descend anyway.]")
-                tt = state["_turn_trace"]
-                tt["status"] = "interrupted"
-                tt["feedback"] = gate
-                state["scout_delta"] = 0
-                obs_text = self._render_obs_text(state)
-                return compose_user_content(obs_text, [gate])
-
+        # (The E8a/E9a descent gate used to sit here, post-dispatch; it moved
+        # ABOVE the registry dispatch after E15 P1 r1 showed closed-loop
+        # netplay skills executed the descent before the gate could fire.)
         state["_sig_now"] = (skill_name, repr(sorted(skill_args.items())))
         try:
             state["_gt_before"] = (state["structured_obs"].status or {}).get("time")
@@ -1648,7 +1654,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if "rollback" in self._allowed_skill_names and not (terminated or truncated):
             from nethack_harness.tools.skills import push_rollback_snapshot
             try:
-                push_rollback_snapshot(env, state.get("turn_count", 0))
+                try:
+                    _gt_now = (state["structured_obs"].status or {}).get("time")
+                except Exception:
+                    _gt_now = None
+                push_rollback_snapshot(env, state.get("turn_count", 0), game_time=_gt_now)
             except Exception:
                 pass  # never let snapshotting break a rollout
         # ---- stuck-call breaker: JUDGE ---------------------------------
@@ -1723,6 +1733,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if terminated and not state["ascended"] and not state["died"]:
             state["died"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+            # Fix1: name the killing call in the game-over render so the
+            # model's one-turn death window (see is_completed) opens with
+            # explicit attribution: "after calling <skill>(<args>)".
+            state.setdefault(
+                "_death_attribution",
+                f"{skill_name}({', '.join(f'{k}={v!r}' for k, v in (skill_args or {}).items())})",
+            )
         # Zero-HP fallback: neither detector above catches a death whose
         # message screen never reaches the marker scan and whose NLE
         # `terminated` flag never fires — e.g. NetHack's death sequence parks
@@ -1738,6 +1755,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["died"] = True
             state["terminated"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+            state.setdefault(
+                "_death_attribution",
+                f"{skill_name}({', '.join(f'{k}={v!r}' for k, v in (skill_args or {}).items())})",
+            )
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.
         spec = state.get("spec")
@@ -2054,16 +2075,18 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_hp_crisis_prev"] = _in_crisis
             # (b) PACING, at most once per dungeon level (ack-set, the
             # _descent_gate_ack pattern): on first sight of a depth, warn iff
-            # XL lags the human-winner arrival norm for the next depth. The
-            # depth is acked even when leveled enough -- "on arriving" means
-            # a later XL drain on the same floor must not re-fire it.
+            # XL lags the human-winner arrival norm for THIS depth (fix1;
+            # r1 compared against the leaving norm — one depth ahead — and
+            # fired on 100% of arrivals at depth >= 3). The depth is acked
+            # even when leveled enough -- "on arriving" means a later XL
+            # drain on the same floor must not re-fire it.
             _ack = state.setdefault("_pacing_directive_ack", set())
             if _dlvl not in _ack:
                 _ack.add(_dlvl)
                 if pacing_lagging(_xl, _dlvl):
-                    from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+                    from nethack_harness.prompt.human_norms import norm_xl_for_arriving
                     prefix_parts.append(
-                        pacing_line(_xl, _dlvl, norm_xl_for_leaving(_dlvl)))
+                        pacing_line(_xl, _dlvl, norm_xl_for_arriving(_dlvl)))
                     _fired.append("pacing")
             # Telemetry: stamp the turn trace ("hp" | "pacing" | "hp+pacing");
             # _write_trace_entry copies it onto the NDJSON record. The
@@ -2085,6 +2108,24 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
     async def is_completed(self, state: vf.State) -> bool:
         # Game-over (death/ascension/NLE truncation) ends the rollout.
         if bool(state.get("terminated")):
+            # P3 death window (fix1): when rollback is published and the
+            # character just DIED, defer completion by exactly one LM turn so
+            # the death observation actually reaches the model. Without this,
+            # the rollout ended before the model ever saw "You die..." — the
+            # post-death revive path below (died + rollback dispatch) and the
+            # rendered "ONE action still works: rollback(n)" banner were dead
+            # code in all 4 E15 P3 r1 deaths. One turn only, per death event:
+            # if the model's post-death call is a rollback that restores
+            # HP > 0, `died`/`terminated` clear (and the window re-arms for a
+            # later death); any other call leaves `terminated` set and this
+            # branch ends the rollout on the next check.
+            if (
+                state.get("died")
+                and "rollback" in (self._allowed_skill_names or set())
+                and not state.get("_death_window_spent")
+            ):
+                state["_death_window_spent"] = True
+                return False
             self._flush_final_trace_entry(state, "terminated")
             return True
         # Also honor the verifiers per-rollout LM-turn cap (`max_turns`). Without
