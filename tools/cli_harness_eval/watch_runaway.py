@@ -177,9 +177,39 @@ def main() -> int:
               f"-- {h['why']}")
         killable = (a.kill and h.get("zombie")) or (a.kill_runaway and not h.get("zombie"))
         if killable and h["alive"]:
+            # IDENTITY CHECK before signalling. The pid comes from the turn
+            # FILENAME, written at rollout start; once that process dies the
+            # kernel recycles the pid, and a stale-but-flagged file then points
+            # at an unrelated process. Cost of skipping this: 2026-08-26
+            # 03:10, both in-flight reflection orchestrators (fresh processes
+            # wearing recycled rollout pids) were killed at rc=137 and the run
+            # froze prematurely. A pid is killable only while its environ still
+            # names THIS run's directory.
+            # The run-dir basename IS the run id (outputs/e13/<run-id>), and
+            # every process of the run -- host-side eval children and sandboxed
+            # players alike -- carries it in INSTALL_DIR=/tmp/vf-prime-agent-
+            # <run-id>. (The worktree path would NOT work: bwrap unsets
+            # PYTHONPATH, so sandboxed players never mention it.)
+            try:
+                with open(f"/proc/{h['pid']}/environ", "rb") as fh:
+                    env = fh.read().decode("utf-8", "replace")
+            except OSError:
+                env = ""
+            wanted = a.run_dir.resolve().name
+            if wanted not in env:
+                print(f"[runaway]   pid {h['pid']} no longer belongs to this "
+                      f"run (recycled?) -- NOT killing")
+                continue
             try:
                 os.kill(h["pid"], signal.SIGTERM)
                 print(f"[runaway]   SIGTERM -> {h['pid']}")
+                for _ in range(20):
+                    time.sleep(0.1)
+                    if not os.path.isdir(f"/proc/{h['pid']}"):
+                        break
+                if os.path.isdir(f"/proc/{h['pid']}"):
+                    os.kill(h["pid"], signal.SIGKILL)
+                    print(f"[runaway]   SIGKILL -> {h['pid']} (TERM ignored)")
             except OSError as e:
                 print(f"[runaway]   could not signal {h['pid']}: {e}")
     return 1 if hits else 0
