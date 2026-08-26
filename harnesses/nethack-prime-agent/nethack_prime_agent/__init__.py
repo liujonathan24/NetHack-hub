@@ -640,15 +640,25 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         #   tunnels/        WRITE -- per-rollout frpc configs
         prime_home = os.path.join(os.path.expanduser("~"), ".prime")
         if os.path.isdir(prime_home):
-            for leaf, mode in (
-                ("config.json", "--ro-bind"),
-                ("bin", "--ro-bind"),
-                ("agent", "--bind"),
-                ("tunnels", "--bind"),
+            # `agent/` is the one leaf that is both WRITABLE and SHARED across
+            # every experiment on the box (daemon-workers/, session-leases/, a
+            # supervisor's recovery journals) -- a booting run scanning it can
+            # reap another run's live sessions. NETHACK_PA_AGENT_BIND_SRC binds
+            # a per-experiment COPY over the same in-sandbox path, so the
+            # kernel-venv's baked-in /root/.prime/agent/... paths still resolve.
+            # Default unchanged: the shared dir, exactly as before.
+            agent_src = os.environ.get("NETHACK_PA_AGENT_BIND_SRC") or os.path.join(
+                prime_home, "agent")
+            for leaf, mode, src in (
+                ("config.json", "--ro-bind", None),
+                ("bin", "--ro-bind", None),
+                ("agent", "--bind", agent_src),
+                ("tunnels", "--bind", None),
             ):
                 p = os.path.join(prime_home, leaf)
-                if os.path.exists(p):
-                    binds += [mode, p, p]
+                src = src or p
+                if os.path.exists(src):
+                    binds += [mode, src, p]
 
         # An absolute, non-PATH `sandbox_bwrap` override might live outside
         # everything bound above (e.g. a home-directory install of bwrap

@@ -179,6 +179,13 @@ else
 fi
 
 echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH (provider=$PROVIDER model=$MODEL)"
+# TMPDIR: the orchestrator is the one prime-agent that runs UNSANDBOXED, so
+# without this its daemon socket is the box-shared /tmp/prime-agent-0 -- any
+# other unsandboxed prime-agent (another experiment's orchestrator) collides
+# with it. A per-round dir gives it a private socket; players are unaffected
+# (they run under bwrap --tmpfs /tmp and never see this variable).
+mkdir -p "$ORCH_DIR/tmp"
+TMPDIR="$ORCH_DIR/tmp" \
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
 PRIME_AGENT_KERNEL_VENV="${PRIME_AGENT_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
   prime-agent --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
