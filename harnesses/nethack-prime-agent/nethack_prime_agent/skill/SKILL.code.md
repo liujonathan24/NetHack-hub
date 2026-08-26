@@ -65,12 +65,13 @@ import netplay
 
 print(await netplay.move_to(30, 7))   # walk to a coordinate: plan, step, re-plan
 print(await netplay.explore())        # walk to the nearest unexplored edge
+print(await netplay.attack(30, 7))    # approach and melee the monster there
 ```
 
 That is the whole seed: `move.py` (`move_to`, the BFS route finder, the
-walk-interruption logic) and `explore.py` (`explore`, `frontiers`). Everything
-above them — when to descend, whether to fight, how to survive — does not
-exist yet and is yours to build: create new `.py` files beside them
+walk-interruption logic), `explore.py` (`explore`, `frontiers`) and
+`attack.py` (`attack`). Anything else you want does not exist yet and is
+yours to build: create new `.py` files beside them
 (`os.path.dirname(netplay.__file__)`) and they load automatically on the next
 `import netplay`. Export what you want callable via an `__all__` list in the
 new file.
