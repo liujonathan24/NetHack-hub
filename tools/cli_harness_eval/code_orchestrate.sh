@@ -63,6 +63,22 @@ THIS ROUND'S GAMES (read-only): ${TRAIN_DIR}
                  died, scout/descent/reward, skill_calls) and the model calls.
   turns/*.ndjson one line per turn: the observation, the skill called, result.
 
+THE PLAYERS' OWN EDITS (read-only clones): ${NETPLAY_WORK}/<rollout id>/
+  Each rollout plays in its own git clone of the canonical repo and may edit
+  its policies MID-GAME; the teardown commits whatever it changed (look for
+  commits named "rollout <id>: gate=pass ..."). These are candidate
+  improvements you MUST consider, not noise:
+    for d in ${NETPLAY_WORK}/*/ : git -C <d> log --oneline -3
+    git -C <d> diff <base>..HEAD -- <file>   (base = the round tag it cloned)
+  Match clones to this round's rollouts via the ids in traces.jsonl; clones
+  from earlier rounds persist and an unmerged good idea from any round is
+  fair game. Judge each player edit by the SAME differential standard: did
+  the seed that wrote it do better on the mechanism it touches (fewer
+  wall-bumps, fewer stuck loops, cleaner descents)? Adopt the good ones into
+  ${CANON} (re-apply with the edit skill, or cherry-pick the hunk by hand),
+  reject the bad ones, and record every verdict in the rationale as
+  {"action": "adopt-player"|"reject-player", ...} with the rollout id.
+
 PRIOR ROUNDS (read-only, for the DIFFERENTIAL): ${OUT_ROOT}/round*/corpus__prime_agent/traces.jsonl
   Same shape, one directory per earlier round. This is how you tell whether a
   code change HELPED. Parse them all in your IPython kernel and build a table:
