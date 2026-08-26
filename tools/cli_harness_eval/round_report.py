@@ -133,7 +133,15 @@ def _delta(cur: dict[int, dict], base: dict[int, dict]) -> dict:
 
 
 def build(run_dir: pathlib.Path) -> dict:
-    rounds = sorted(run_dir.glob("round*"), key=lambda p: int(p.name.replace("round", "")))
+    # Only directories named exactly round<N>. A sibling like
+    # "round7.wedged-attempt" (an archived failed attempt) used to reach
+    # int("7.wedged-attempt") and raise, which made the orchestrator fall back
+    # to "reflecting on this round alone" -- silently dropping the scoreboard
+    # that is the whole point of this file.
+    rounds = sorted(
+        (d for d in run_dir.glob("round*")
+         if d.is_dir() and d.name[5:].isdigit()),
+        key=lambda p: int(p.name[5:]))
     per_round: list[dict] = []
     rows_by_round: dict[str, dict[int, dict]] = {}
     for rd in rounds:
