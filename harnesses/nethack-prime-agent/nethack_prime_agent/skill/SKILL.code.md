@@ -1,6 +1,6 @@
 ---
 name: nethack
-description: Play NetHack. Every move, attack and descent goes through this skill's async tools — and through `netplay`, a Python package of your own that you can read and rewrite.
+description: Play NetHack. Every move, attack and descent goes through this skill's async tools — and through `netplay`, a Python package of your own that you can read, rewrite and extend.
 ---
 
 # NetHack — tool API and your own policy code
@@ -12,10 +12,9 @@ complete set of tools: there is nothing else to call, and nothing else to find.
 You cannot edit them.
 
 **`netplay`** is your own code. It is ordinary Python on this kernel's
-`sys.path`, it composes those six primitives into the policies you actually
-play with — `explore`, `descend`, `attack`, `pray_safely` and the rest — and
-**you can edit every one of them**. What you leave there persists into the next
-episode.
+`sys.path`. It ships with exactly TWO policies — `move_to(x, y)` and
+`explore()`, the code twins of the retired coordinate-walk and level-explore tools — and **everything else is yours to write**. Any policy you build there
+persists into the next episode.
 
 So: the primitives are fixed and the skills built on them are yours. If a
 policy plays badly, the fix is to rewrite the policy, not to look for a better
@@ -64,23 +63,17 @@ Descending is `>` while standing on a `>` staircase; ascending is `<` on a `<`.
 ```python
 import netplay
 
+print(await netplay.move_to(30, 7))   # walk to a coordinate: plan, step, re-plan
 print(await netplay.explore())        # walk to the nearest unexplored edge
-print(await netplay.descend())        # find the down staircase, walk there, press >
-print(await netplay.attack(30, 7))    # pursue and melee the monster at (30, 7)
-print(await netplay.pray_safely())    # pray only when HP is genuinely critical
 ```
 
-These live in files you can open and rewrite:
-
-| file | what it holds |
-|---|---|
-| `explore.py` | `move_to`, `explore`, the BFS route finder |
-| `descend.py` | `find_stairs`, `descend`, `dive` |
-| `fight.py` | `threats`, `attack`, `clear_threats` |
-| `survive.py` | `hp_fraction`, `in_danger`, `pray_safely`, `recover` |
-
-Find them with `os.path.dirname(netplay.__file__)`. Each one opens with a short
-list of what it does badly — those are real, and they are where the value is.
+That is the whole seed: `move.py` (`move_to`, the BFS route finder, the
+walk-interruption logic) and `explore.py` (`explore`, `frontiers`). Everything
+above them — when to descend, whether to fight, how to survive — does not
+exist yet and is yours to build: create new `.py` files beside them
+(`os.path.dirname(netplay.__file__)`) and they load automatically on the next
+`import netplay`. Export what you want callable via an `__all__` list in the
+new file.
 
 ### The edit protocol
 
@@ -88,7 +81,7 @@ list of what it does badly — those are real, and they are where the value is.
    parsing helpers (`status`, `features`, `monsters`, `grid`, `messages`), which
    are already written and tested — use them rather than re-parsing observations.
 2. Edit with the built-in `edit` skill (a targeted, single-occurrence replace):
-   `await edit(path="<netplay dir>/explore.py", old_str=..., new_str=...)`.
+   `await edit(path="<netplay dir>/move.py", old_str=..., new_str=...)`.
    It is Prime Agent's native file editor -- prefer it over rewriting the whole
    file. (Whole-file writes work too, but `edit` keeps your change surgical.)
 3. **Call `netplay.check()` after every edit.** It compiles the whole tree and

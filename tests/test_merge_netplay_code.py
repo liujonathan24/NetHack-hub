@@ -70,8 +70,8 @@ def test_two_branches_touching_different_files_both_land(canonical):
     _branch_with(canonical, "agent-7", "explore.py",
                  (SEED / "explore.py").read_text() + "\n# seed 7: corridor fix\n")
     _git(canonical, "checkout", "-q", base)
-    _branch_with(canonical, "agent-9", "descend.py",
-                 (SEED / "descend.py").read_text() + "\n# seed 9: door kicking\n")
+    _branch_with(canonical, "agent-9", "move.py",
+                 (SEED / "move.py").read_text() + "\n# seed 9: door kicking\n")
     _git(canonical, "checkout", "-q", base)
 
     report = mnc.merge(canonical, ["agent-7", "agent-9"], round_tag="round-1")
@@ -79,7 +79,7 @@ def test_two_branches_touching_different_files_both_land(canonical):
     assert [m["branch"] for m in report["merged"]] == ["agent-7", "agent-9"]
     assert report["conflicts"] == [] and report["rejected"] == []
     assert "seed 7: corridor fix" in (canonical / "explore.py").read_text()
-    assert "seed 9: door kicking" in (canonical / "descend.py").read_text(), (
+    assert "seed 9: door kicking" in (canonical / "move.py").read_text(), (
         "both contributions must survive; this is the whole reason for git"
     )
 
@@ -106,10 +106,10 @@ def test_same_region_edits_conflict_and_the_later_branch_is_dropped(canonical):
     base = _head_branch(canonical)
     original = (SEED / "explore.py").read_text()
     _branch_with(canonical, "agent-7", "explore.py",
-                 original.replace("max_moves: int = 6", "max_moves: int = 12"))
+                 original.replace("max_moves: int = 3", "max_moves: int = 12"))
     _git(canonical, "checkout", "-q", base)
     _branch_with(canonical, "agent-9", "explore.py",
-                 original.replace("max_moves: int = 6", "max_moves: int = 3"))
+                 original.replace("max_moves: int = 3", "max_moves: int = 1"))
     _git(canonical, "checkout", "-q", base)
 
     report = mnc.merge(canonical, ["agent-7", "agent-9"], round_tag="round-1")

@@ -57,7 +57,17 @@ from netplay._base import (  # noqa: F401  -- re-exported for the agent
 _import_errors: dict[str, str] = {}
 _modules: dict[str, object] = {}
 
-for _name in ("explore", "descend", "fight", "survive"):
+import pathlib as _pathlib
+
+# Auto-discover policy modules: every non-underscore .py beside this file.
+# The round-0 seed ships only `move` (the code twin of E14's np_move_to);
+# new files the agent creates load automatically on the next import.
+_module_names = tuple(sorted(
+    _p.stem for _p in _pathlib.Path(__file__).parent.glob("*.py")
+    if not _p.name.startswith("_")
+))
+
+for _name in _module_names:
     try:
         _mod = __import__(f"netplay.{_name}", fromlist=["*"])
     except Exception as _exc:  # noqa: BLE001 -- see maintainer note

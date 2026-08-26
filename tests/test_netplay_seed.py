@@ -34,7 +34,7 @@ from nethack_prime_agent import netplay_gate
 ALLOWED_ROOTS = set(netplay_gate.ALLOWED_ROOTS)
 DENIED = set(netplay_gate.DENIED_ROOTS)
 FROZEN = set(netplay_gate.FROZEN_FILES)
-MUTABLE = {"explore.py", "descend.py", "fight.py", "survive.py"}
+MUTABLE = {"move.py", "explore.py"}
 
 
 # ---------- the stub MCP shim ----------
@@ -196,28 +196,12 @@ def test_every_seed_composite_imports_cleanly(netplay):
 
 
 def test_the_public_policy_surface_is_bound(netplay):
-    for name in ("explore", "move_to", "descend", "dive", "attack",
-                 "clear_threats", "pray_safely", "recover"):
+    for name in ("explore", "move_to", "frontiers", "route"):
         assert callable(getattr(netplay, name, None)), f"netplay.{name} missing"
 
 
-@pytest.mark.asyncio
-async def test_pray_safely_refuses_above_the_threshold(netplay):
-    obs = "=== STATUS ===\nHP: 16/16  AC: 6  Dlvl: 1  Turn: 1  Pos: (3,6)\n"
-    netplay._recorder._script["request_map"] = obs
-    result = await netplay.pray_safely()
-    assert "NOT praying" in result
-    assert [c[0] for c in netplay._recorder.calls] == ["request_map"], (
-        "pray_safely must not spend the prayer when HP is healthy"
-    )
 
 
-@pytest.mark.asyncio
-async def test_pray_safely_prays_when_critical(netplay):
-    obs = "=== STATUS ===\nHP: 2/40  AC: 6  Dlvl: 3  Turn: 900  Pos: (3,6)\n"
-    netplay._recorder._script["request_map"] = obs
-    await netplay.pray_safely()
-    assert "np_pray" in [c[0] for c in netplay._recorder.calls]
 
 
 # ---------- SPEC 6.1 rail 4: smoke against recorded fixtures ----------
@@ -252,18 +236,10 @@ def test_a_hidden_map_yields_no_grid_rather_than_garbage(netplay):
     assert netplay.position(hidden) == (3, 6)
 
 
-def test_pets_are_distinguished_from_threats(netplay):
-    """Attacking a pet is a real mistake the harness will not stop."""
-    hidden = (GOLDEN / "bbox_reveal.txt").read_text(encoding="utf-8")
-    mons = {m["name"]: m["pet"] for m in netplay.monsters(hidden)}
-    assert mons["little dog"] is True
-    assert mons["lichen"] is False
-    fight = netplay.module("fight")
-    assert "little dog" not in [t["name"] for t in fight.threats(hidden)]
 
 
 def test_the_router_finds_a_real_route_on_a_real_map(revealed, netplay):
-    ex = netplay.module("explore")
+    ex = netplay.module("move")
     route = ex.route(revealed, (57, 13))
     assert route is not None, "no route to the stairs on a fully revealed level"
     assert route[-1] == (57, 13)
@@ -275,36 +251,34 @@ def test_the_router_finds_a_real_route_on_a_real_map(revealed, netplay):
 
 
 def test_the_router_reports_no_route_rather_than_walking_into_stone(revealed, netplay):
-    ex = netplay.module("explore")
+    ex = netplay.module("move")
     assert ex.route(revealed, (0, 0)) is None
 
 
 @pytest.mark.asyncio
 async def test_move_to_stops_on_an_interruption(revealed, netplay):
-    """The fixture carries a message, so the blunt interrupt rule must fire."""
+    """A NEW, non-benign message (combat) must stop the walk after one step;
+    the stale welcome message the fixture carries must NOT (the tracker primes
+    on it before walking)."""
+    hit = revealed.replace(
+        "Velkommen Agent, welcome to NetHack!  You are a neutral human Valkyrie.",
+        "The gnome lord hits!")
     netplay._recorder._script["request_map"] = revealed
-    netplay._recorder._script["np_press_key"] = revealed
+    netplay._recorder._script["np_press_key"] = hit
     await netplay.move_to(57, 13)
     keys = [k["key"] for n, k in netplay._recorder.calls if n == "np_press_key"]
     assert len(keys) == 1, (
-        "any message must stop the walk after one step; got %r" % keys
+        "a new combat message must stop the walk after one step; got %r" % keys
     )
 
 
-@pytest.mark.asyncio
-async def test_descend_reports_failure_when_it_cannot_reach_the_stairs(revealed, netplay):
-    netplay._recorder._script["request_map"] = revealed
-    netplay._recorder._script["np_press_key"] = revealed
-    result = await netplay.descend()
-    assert result.startswith("netplay.descend:"), (
-        "a descent that did not happen must say so, not return a success shape"
-    )
 
 
 def test_the_module_accessor_returns_modules_not_functions(netplay):
     """`netplay.explore` is the FUNCTION; two policies shadow their own module."""
     assert callable(netplay.explore)
     assert netplay.module("explore").__name__ == "netplay.explore"
+    assert netplay.module("move").__name__ == "netplay.move"
     with pytest.raises(KeyError):
         netplay.module("nonexistent")
 
