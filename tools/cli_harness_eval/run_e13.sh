@@ -231,6 +231,7 @@ for r in $(seq 1 "$ROUNDS"); do
   # of the code channel (both accumulate, they are not exclusive).
   "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" \
     "$OUT_ROOT/round${r}/corpus__prime_agent" "$CH" "$OUT_ROOT/round${r}" "$PROMPT_FILE" \
+    "$OUT_ROOT" \
     || echo "[FAIL ] store orchestrator round $r rc=$?" >&2
 
   # CODE orchestrator: reflects on traces + the code lineage -> EDITS netplay.
