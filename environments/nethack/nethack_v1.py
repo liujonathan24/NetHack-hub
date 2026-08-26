@@ -153,6 +153,16 @@ class NetHackState(vf.State):
     succeeded: bool = False
     ascended: bool = False
     died: bool = False
+    # Fix1 (E15 P3) one-turn post-death rollback window. `rollback_published`
+    # is whether this rollout's tool surface includes `rollback`;
+    # `death_window_spent` mirrors the v0 flag set when the model's
+    # post-death call arrives. The `game_over` stop defers exactly one LM
+    # turn on death while (published and not spent), so the death
+    # observation actually reaches the model and a rollback can revive the
+    # run — in P3 r1 every death ended the rollout before the model ever
+    # saw "You die...".
+    rollback_published: bool = False
+    death_window_spent: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -576,8 +586,25 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.succeeded = bool(v0.get("succeeded"))
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
-        state.terminated = bool(v0.get("terminated")) or state.terminated
+        # Fix1: the latch used to be `or state.terminated`, which made a
+        # post-death rollback revive (v0 clears `terminated`) invisible at
+        # this layer — the typed state stayed terminated forever. Budget
+        # exhaustion is the one v1-only terminated setter, so it is the one
+        # latch that must survive the mirror.
+        state.terminated = bool(v0.get("terminated")) or state.budget_exhausted
+        state.rollback_published = state.rollback_published or self._rollback_published()
+        state.death_window_spent = bool(v0.get("_death_window_spent"))
         state.trace_run_id = str(v0.get("_trace_run_id") or "")
+
+    def _rollback_published(self) -> bool:
+        cached = getattr(self, "_rollback_published_cache", None)
+        if cached is None:
+            try:
+                cached = "rollback" in self.tool_functions()
+            except Exception:
+                cached = False
+            self._rollback_published_cache = cached
+        return cached
 
     def _register(self, mcp: FastMCP) -> None:
         """Publish the gated tool set over MCP.
@@ -806,7 +833,24 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
 
     @vf.stop
     async def game_over(self, trace) -> bool:
-        return bool(trace.state.terminated)
+        s = trace.state
+        # Fix1 (E15 P3): one-turn post-death rollback window. Stops run
+        # BEFORE each model call (v1/session.py `refused`), so returning
+        # False here exactly once lets the death observation — with its
+        # "ONE action still works: rollback(n)" banner — reach the model.
+        # The v0 env marks `_death_window_spent` when the post-death call
+        # arrives; a rollback that revives clears died/terminated (and the
+        # spent flag), anything else leaves them set and this stop fires on
+        # the next check. Ascension/step-cap terminations (died=False) and
+        # budget exhaustion (its own stop) are unaffected.
+        if (
+            s.terminated
+            and s.died
+            and s.rollback_published
+            and not s.death_window_spent
+        ):
+            return False
+        return bool(s.terminated)
 
     # -- rewards (v0 implementations, verbatim) ----------------------------- #
     @vf.reward(weight=1.0)

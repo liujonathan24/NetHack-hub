@@ -1186,6 +1186,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # further actions are possible" without touching the snapshot stack.
         # Undoing into a live state clears `died` and the run genuinely resumes.
         if state.get("died") and skill_name == "rollback":
+            # Fix1: a post-death call — whatever it is — spends the one-turn
+            # death window (see is_completed and nethack_v1.game_over). Set
+            # BEFORE dispatch; a successful revive pops it below, re-arming
+            # the window for a later death.
+            state["_death_window_spent"] = True
             _env = state["env"]          # `env` is not bound this early in the fn
             _res = skill_registry.call("rollback", _env, state["structured_obs"], **skill_args)
             for _a in (_res.actions or []):
@@ -1212,6 +1217,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             return compose_user_content(content, [f"[{_res.feedback}]"])
 
         if state.get("died"):
+            state["_death_window_spent"] = True  # fix1: window consumed
             content = self.spec.turn_template(
                 state["structured_obs"], state["journal"], state,
                 compact=self.compact_obs,
