@@ -8,13 +8,14 @@ persists into the next episode, and into every later round of this experiment.
     print(await netplay.explore())     # your explore policy
     print(netplay.check())             # compile-check after every edit
 
-NAME COLLISION, on purpose: `netplay.explore` and `netplay.descend` are the
+NAME COLLISION, on purpose: `netplay.explore` and `netplay.attack` are the
 FUNCTIONS, not the modules of the same name -- the policy call is what you want
 99 times out of 100, so it wins the short name. To reach a module object use
 `netplay.module("explore")`; to edit the file, open it by path.
 
-What is yours          `explore.py`, `descend.py`, `fight.py`, `survive.py`,
-                       and any new module you add beside them.
+What is yours          `move.py`, `explore.py`, `attack.py`, and any new
+                       module you add beside them (new .py files load
+                       automatically on the next import).
 What is frozen         `_base.py` (the primitive floor) and this file. Both are
                        restored from the repo at the start of every episode, so
                        edits to them are silently undone -- do not spend a turn
@@ -75,7 +76,7 @@ for _name in _module_names:
         continue
     _modules[_name] = _mod
     # Bound AFTER the module is recorded, because two of these functions share
-    # a name with their own module (`explore`, `descend`) and the function is
+    # a name with their own module (`explore`, `attack`) and the function is
     # the one worth the short name. `module()` below is the unambiguous route.
     for _attr in getattr(_mod, "__all__", ()):
         globals()[_attr] = getattr(_mod, _attr)

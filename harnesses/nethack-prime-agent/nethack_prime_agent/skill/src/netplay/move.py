@@ -1,8 +1,8 @@
 """move_to: walk to a coordinate.
 
 The one policy the round-0 seed ships -- the code twin of the retired np_move_to
-tool. Everything else (exploring, descending, fighting, resting) is YOURS to
-write: add new .py files beside this one and they load on import.
+tool. Anything beyond walking is a separate policy: add new .py files beside
+this one and they load on import.
 
 This file is YOURS TO EDIT: improve it, and what you change persists.
 """

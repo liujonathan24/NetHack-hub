@@ -355,9 +355,10 @@ def _fix_hint_vocabulary(hint: str, published_tools) -> str:
 _NETPLAY_BLOCK = (
     "=== YOUR POLICIES (netplay) ===\n"
     "You have a Python package `netplay` built on the primitive tools. It ships\n"
-    "with TWO policies:\n"
+    "with THREE policies:\n"
     "  await netplay.move_to(x, y)   # pathfind to a tile and walk there\n"
     "  await netplay.explore()       # walk to the nearest unexplored edge\n"
+    "  await netplay.attack(x, y)    # approach and melee the monster there\n"
     "Every other policy is YOURS TO WRITE. The package is ordinary Python: add\n"
     "new .py files in os.path.dirname(netplay.__file__) and they load on the\n"
     "next import; edit existing ones with the built-in edit skill:\n"

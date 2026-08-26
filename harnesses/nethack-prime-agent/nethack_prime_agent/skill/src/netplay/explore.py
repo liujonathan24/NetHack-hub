@@ -2,8 +2,8 @@
 
 The code twin of the retired `np_explore_level` tool. Finds frontier tiles
 (known-walkable tiles touching unrendered ones), routes to the nearest, and
-repeats up to `max_moves` legs. It does not search, fight, or descend --
-those are separate decisions that stay yours.
+repeats up to `max_moves` legs. It only explores; anything else is a
+separate decision that stays yours.
 
 This file is YOURS TO EDIT: improve it, and what you change persists.
 """

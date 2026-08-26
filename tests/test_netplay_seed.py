@@ -34,7 +34,7 @@ from nethack_prime_agent import netplay_gate
 ALLOWED_ROOTS = set(netplay_gate.ALLOWED_ROOTS)
 DENIED = set(netplay_gate.DENIED_ROOTS)
 FROZEN = set(netplay_gate.FROZEN_FILES)
-MUTABLE = {"move.py", "explore.py"}
+MUTABLE = {"move.py", "explore.py", "attack.py"}
 
 
 # ---------- the stub MCP shim ----------
@@ -196,7 +196,7 @@ def test_every_seed_composite_imports_cleanly(netplay):
 
 
 def test_the_public_policy_surface_is_bound(netplay):
-    for name in ("explore", "move_to", "frontiers", "route"):
+    for name in ("explore", "move_to", "attack", "frontiers", "route"):
         assert callable(getattr(netplay, name, None)), f"netplay.{name} missing"
 
 

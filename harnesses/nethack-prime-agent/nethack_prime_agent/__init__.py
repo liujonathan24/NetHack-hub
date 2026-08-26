@@ -119,6 +119,7 @@ _NETPLAY_FROZEN_FILES_LOCAL = ("__init__.py", "_base.py")
 _NETPLAY_SEED_FILES = (
     "src/netplay/move.py",
     "src/netplay/explore.py",
+    "src/netplay/attack.py",
 )
 
 # The no-batching instruction, verbatim. The honesty pass (9b8d5a4) rewrote
@@ -220,7 +221,7 @@ _BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d3
 # different tool sets (this one retires the four server-side composites), so
 # there is no shared paragraph to patch. Regenerate after a deliberate edit:
 #   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.code.md
-_CODE_SKILL_SHA256 = "2cf86bd60aee23dbc9821921e55e89d2de5f20603e5c4f793da0b7e20d227ba5"
+_CODE_SKILL_SHA256 = "de8af1fc909a18ed46318e6492723bd56035bdaad71738f4ed9e2fc20e293cfa"
 
 
 def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool,
