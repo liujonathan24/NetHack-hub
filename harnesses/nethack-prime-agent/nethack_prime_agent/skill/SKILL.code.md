@@ -12,8 +12,9 @@ complete set of tools: there is nothing else to call, and nothing else to find.
 You cannot edit them.
 
 **`netplay`** is your own code. It is ordinary Python on this kernel's
-`sys.path`. It ships with exactly TWO policies — `move_to(x, y)` and
-`explore()`, the code twins of the retired coordinate-walk and level-explore tools — and **everything else is yours to write**. Any policy you build there
+`sys.path`. It ships with exactly THREE policies — `move_to(x, y)`,
+`explore()` and `attack(x, y)`, the code twins of the three retired composite
+tools — and **everything else is yours to write**. Any policy you build there
 persists into the next episode.
 
 So: the primitives are fixed and the skills built on them are yours. If a
