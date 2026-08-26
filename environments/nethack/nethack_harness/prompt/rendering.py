@@ -354,8 +354,9 @@ def _fix_hint_vocabulary(hint: str, published_tools) -> str:
 # ~160 calls. This block is what tells it the policies exist and are its own.
 _NETPLAY_BLOCK = (
     "=== YOUR POLICIES (netplay) ===\n"
-    "You have a Python package `netplay` built on the primitive tools. It ships\n"
-    "with THREE policies:\n"
+    "You have a Python package `netplay` built on the primitive tools. PREFER\n"
+    "these over pressing movement keys one at a time. It ships with THREE\n"
+    "policies:\n"
     "  await netplay.move_to(x, y)   # pathfind to a tile and walk there\n"
     "  await netplay.explore()       # walk to the nearest unexplored edge\n"
     "  await netplay.attack(x, y)    # approach and melee the monster there\n"
