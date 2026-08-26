@@ -18,7 +18,7 @@ id = "e16-s6-noreflect"
 replicate = 1
 
 # How many reflect -> play rounds. Each round is len(corpus_seeds) games.
-rounds = 10
+rounds = 5
 
 # The games the agent plays and reflects on. The other arm of the headline
 # comparison sets this to a single seed and asks the same lessons to generalise.
