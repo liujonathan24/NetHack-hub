@@ -1,5 +1,5 @@
 {
- "generated": "2026-08-26 04:27 UTC",
+ "generated": "2026-08-26 06:56 UTC",
  "control": "outputs/e14_uncapped/base_r{1,2,3}__prime_agent",
  "arms": {
   "base": {
@@ -2238,6 +2238,223 @@
     "calls": [
      88,
      21.1
+    ]
+   }
+  },
+  "p3_rollback_fix2": {
+   "desc": "P3 \u00b7 rollback + FORCED revive on death (3 deaths on a level = game over)",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
+     "provenance": {
+      "tool_tier": "p3_rollback",
+      "tool_tier_hash": "a49bf3cbf36fc936",
+      "tool_tier_commit": "beac4d9-dirty"
+     }
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 12,
+     "xl": 3,
+     "calls": 214,
+     "balrog": 20.61,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix2__prime_agent/turns/0_3690415_1787720107.ndjson",
+       "turns": 214
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 1,
+     "dlvl": 5,
+     "xl": 5,
+     "calls": 183,
+     "balrog": 2.91,
+     "balrog_min": 2.65,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix2__prime_agent/turns/1_3738141_1787720862.ndjson",
+       "turns": 183
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 2,
+     "dlvl": 10,
+     "xl": 7,
+     "calls": 362,
+     "balrog": 12.56,
+     "balrog_min": 5.08,
+     "single_axis": 0,
+     "died": 0,
+     "stop": "harness_timeout",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix2__prime_agent/turns/2_3690411_1787720107.ndjson",
+       "turns": 362
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 14,
+     "xl": 5,
+     "calls": 523,
+     "balrog": 29.25,
+     "balrog_min": 2.91,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix2__prime_agent/turns/3_3690409_1787720107.ndjson",
+       "turns": 523
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 4,
+     "dlvl": 11,
+     "xl": 5,
+     "calls": 291,
+     "balrog": 16.13,
+     "balrog_min": 2.91,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix2__prime_agent/turns/4_3690413_1787720107.ndjson",
+       "turns": 291
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 5,
+    "died": 4,
+    "single_axis": 0,
+    "dlvl": [
+     10.4,
+     1.5
+    ],
+    "xl": [
+     5,
+     0.63
+    ],
+    "balrog": [
+     16.29,
+     4.36
+    ],
+    "balrog_min": [
+     3.13,
+     0.51
+    ],
+    "calls": [
+     314.6,
+     60.69
+    ]
+   }
+  },
+  "v2_json_s13retry": {
+   "desc": "V2 \u00b7 JSON, seeds 1+3 redo under relaunch contract (merge with r1 seeds 0/2/4)",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "partial",
+     "provenance": {
+      "tool_tier": "v2_json",
+      "tool_tier_hash": "a49bf3cbf36fc936",
+      "tool_tier_commit": "beac4d9-dirty"
+     }
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 1,
+     "dlvl": 6,
+     "xl": 1,
+     "calls": 46,
+     "balrog": 3.54,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_s13retry__prime_agent/turns/1_3703481_1787720297.ndjson",
+       "turns": 57
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 6,
+     "xl": 1,
+     "calls": 46,
+     "status": "running",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_s13retry__prime_agent/turns/3_3703483_1787720297.ndjson",
+       "turns": 46
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 1,
+    "died": 1,
+    "single_axis": 1,
+    "dlvl": [
+     6,
+     0
+    ],
+    "xl": [
+     1,
+     0
+    ],
+    "balrog": [
+     3.54,
+     0
+    ],
+    "balrog_min": [
+     0.0,
+     0
+    ],
+    "calls": [
+     46,
+     0
     ]
    }
   }
