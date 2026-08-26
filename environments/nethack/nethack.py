@@ -1662,9 +1662,16 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             try:
                 try:
                     _gt_now = (state["structured_obs"].status or {}).get("time")
+                    _hp_now = (state["structured_obs"].status or {}).get("hitpoints", 0)
                 except Exception:
-                    _gt_now = None
-                push_rollback_snapshot(env, state.get("turn_count", 0), game_time=_gt_now)
+                    _gt_now, _hp_now = None, 0
+                # hp > 0 guard (fix2): a zero-HP death that NLE's terminated
+                # flag misses (raw hp poke, prompt-chain park) reaches this
+                # line with the LOCAL terminated still False — without the
+                # guard the ring's newest entry would be the corpse itself,
+                # and the forced revive would restore a dead state.
+                if _hp_now > 0:
+                    push_rollback_snapshot(env, state.get("turn_count", 0), game_time=_gt_now)
             except Exception:
                 pass  # never let snapshotting break a rollout
         # ---- stuck-call breaker: JUDGE ---------------------------------
@@ -1765,6 +1772,83 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 "_death_attribution",
                 f"{skill_name}({', '.join(f'{k}={v!r}' for k, v in (skill_args or {}).items())})",
             )
+        # Fix2 (E15 P3, user-specified): FORCED ROLLBACK ON DEATH. When the
+        # rollback tool is published and the character dies, the env restores
+        # the most recent live snapshot itself — no model choice, no reliance
+        # on any layer delivering a post-death turn (P3 r1 and the fix1
+        # one-turn window both foundered on exactly that delivery). The next
+        # observation carries an explicit "[You died: ... rewound ...]" line
+        # with cause, attribution, restored clock, and a death counter. The
+        # THIRD death on the same dungeon level is final: no revive, the
+        # rollout ends as game_over. Deaths on the revived state count again
+        # (the counter bounds any revive->die loop at 3 per level).
+        if (
+            state.get("died")
+            and not state.get("ascended")
+            and "rollback" in (self._allowed_skill_names or set())
+        ):
+            death_dlvl = int((state["structured_obs"].status or {}).get("depth") or
+                             state.get("death_dlvl") or 1)
+            counts = state.setdefault("_death_counts", {})
+            counts[death_dlvl] = counts.get(death_dlvl, 0) + 1
+            n_here = counts[death_dlvl]
+            try:
+                from nethack_harness.prompt.rendering import _death_cause
+                cause = _death_cause(state["structured_obs"], state) or ""
+            except Exception:
+                cause = ""
+            attr = state.get("_death_attribution") or f"{skill_name}(...)"
+            from nethack_harness.tools.skills import _rollback_ring
+            ring = _rollback_ring(env)
+            if n_here >= 3 or not ring:
+                # Final death (3rd on this level) or nothing to restore into:
+                # the rollout genuinely ends. Mark the (dormant) fix1 window
+                # spent so every stop layer fires immediately.
+                state["_death_window_spent"] = True
+                state["_forced_revive_note"] = (
+                    f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
+                    + ("This is death 3/3 on this dungeon level; the game is over for good.]"
+                       if ring else "No snapshot was available to rewind to; the game is over.]")
+                )
+            else:
+                _turn_no, _gt, _handle = ring[-1]
+                revived = False
+                try:
+                    env._engine.restore(_handle)
+                    last_obs, _r, _t, _tr, _i = env.step(27)  # ESC materializes
+                    state["raw_obs"] = last_obs
+                    state["structured_obs"] = shape_observation(last_obs, state["character"])
+                    revived = (state["structured_obs"].status or {}).get("hitpoints", 0) > 0
+                except Exception:
+                    revived = False
+                if revived:
+                    try:
+                        from nethack_harness.tools.netplay_true import reset_agent_cache
+                        reset_agent_cache()
+                    except Exception:
+                        pass
+                    state["died"] = False
+                    state["terminated"] = False
+                    terminated = truncated = False
+                    state["_stuck_n"] = 0
+                    state.pop("death_dlvl", None)  # the FINAL death owns this
+                    state.pop("_death_attribution", None)
+                    state.pop("_death_window_spent", None)
+                    _gt_now = (state["structured_obs"].status or {}).get("time")
+                    state["_forced_revive_note"] = (
+                        f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
+                        f"The game has been rewound to game turn "
+                        f"{_gt_now if _gt_now is not None else _gt}. "
+                        f"(death {n_here}/3 on this dungeon level -- the third is final) "
+                        f"Choose differently this time.]"
+                    )
+                else:
+                    state["_death_window_spent"] = True
+                    state["_forced_revive_note"] = (
+                        f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
+                        f"The rewind failed; the game is over.]"
+                    )
+
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.
         spec = state.get("spec")
@@ -2038,6 +2122,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_dropped_extra_tool_calls"] = 0
         if result.feedback:
             prefix_parts.append(f"[{result.feedback}]")
+        # Fix2 forced-revive line: FIRST in the prefix list so the death and
+        # its rewind are the very first thing the model reads on this turn.
+        _frn = state.pop("_forced_revive_note", None)
+        if _frn:
+            prefix_parts.insert(0, _frn)
+            tt["forced_revive"] = True
         # E14 crisis directive: two naive harness-side heuristics, delivered
         # exactly like the E8a descent gate's norm line -- a bracketed line in
         # the rendered observation, zero engine cost, published tool schemas

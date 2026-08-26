@@ -48,11 +48,20 @@ task_spec = "full_nle"
 # Harness-side factors the baseline also fixed. allow_batching is load-bearing:
 # with it on, the no-batch rule is stripped from the served document AFTER the
 # frozen-doc hash check, so a cell labelled [base] served 4753 bytes where E10
-# served 4829 -- byte-fidelity defeated with no error. max_relaunches is called
-# "ARM SYMMETRY, load-bearing" in prime_agent.toml and is absent from
-# prime_agent_b80.toml, where it defaults to 5.
+# served 4829 -- byte-fidelity defeated with no error.
 allow_batching = false
-max_relaunches = 0
+# E15 fix2 (user-approved, 2026-08-26): 2, not 0. The prime_agent.toml
+# "ARM SYMMETRY" rationale for 0 protected a prime-vs-claude_code scaffold
+# comparison; the E15 probe grid is prime-only, and 0 let empty completions
+# (model returns finish=stop with no text and no tool call) end LIVE runs as
+# `agent_completed` -- P3 r1 seed 4 died this way at D11 (best in arm),
+# v2_bjson lost 3/5 rollouts, v2_json seed 1 was cut at D10. The relaunch
+# loop resumes the same MCP tool server with _RESUME_PROMPT; the count is
+# recorded per rollout as metrics.prime_agent_relaunches. CAVEAT for
+# analysis: the frozen E14 control ran with 0, so depth tails in retry-on
+# arms are not strictly harness-identical to control -- check the relaunch
+# metric before attributing a tail difference to the treatment.
+max_relaunches = 2
 max_parallel_skill_calls = 0
 
 [contract.tune]
