@@ -170,7 +170,7 @@ play_round() { # <round>
       CONTINUAL_PROMPT_SHA="$PROMPT_SHA" CONTINUAL_SPEC_SHA="$SPEC_SHA" \
       CONTINUAL_HARNESS_MODE="$MODE" \
       ${PLAYERS_EDIT:+CONTINUAL_SELF_EDIT="$PLAYERS_EDIT"} \
-      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
+      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" "${MAX_CALLS:-200}" "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
   # Code write-back, in PARALLEL with the store write-back below and not
