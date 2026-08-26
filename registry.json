@@ -1,5 +1,5 @@
 {
- "generated": "2026-08-26 00:54 UTC",
+ "generated": "2026-08-26 04:27 UTC",
  "control": "outputs/e14_uncapped/base_r{1,2,3}__prime_agent",
  "arms": {
   "base": {
@@ -338,85 +338,109 @@
    "cells": [
     {
      "rep": 1,
-     "state": "partial",
+     "state": "done",
      "provenance": {
       "tool_tier": "p1_gate",
       "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
+      "tool_tier_commit": "ec0fa7d-dirty"
      }
     },
     {
      "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "p1_gate",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "p1_gate",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     }
    ],
    "rollouts": [
     {
      "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 22,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 11,
+     "xl": 3,
+     "calls": 435,
+     "balrog": 16.13,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/0_2483391_1787704017.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/0_2595414_1787704534.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/0_2527175_1787704278.ndjson",
-       "turns": 6
+       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/0_2969133_1787709153.ndjson",
+       "turns": 435
       }
      ],
      "rep": 1
     },
     {
      "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 24,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 5,
+     "xl": 4,
+     "calls": 458,
+     "balrog": 2.65,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/1_2483392_1787704017.ndjson",
-       "turns": 24
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/1_2526770_1787704270.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/1_2595391_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/1_2969137_1787709153.ndjson",
+       "turns": 458
       }
      ],
      "rep": 1
     },
     {
      "seed": 2,
-     "dlvl": 2,
+     "dlvl": 7,
+     "xl": 2,
+     "calls": 82,
+     "balrog": 4.85,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/2_2969136_1787709153.ndjson",
+       "turns": 82
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 8,
+     "xl": 3,
+     "calls": 90,
+     "balrog": 6.96,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/3_2969139_1787709153.ndjson",
+       "turns": 90
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 4,
+     "dlvl": 5,
      "xl": 1,
-     "calls": 25,
-     "balrog": 1.54,
+     "calls": 36,
+     "balrog": 2.65,
      "balrog_min": 0.0,
      "single_axis": 1,
      "died": 1,
@@ -425,319 +449,36 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/2_2483395_1787704017.ndjson",
-       "turns": 25
+       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/4_2969141_1787709153.ndjson",
+       "turns": 36
       }
      ],
      "rep": 1
-    },
-    {
-     "seed": 3,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 52,
-     "balrog": 2.65,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/3_2595411_1787704534.ndjson",
-       "turns": 52
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/3_2483394_1787704017.ndjson",
-       "turns": 43
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/3_2526989_1787704284.ndjson",
-       "turns": 29
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 2,
-     "calls": 53,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/4_2483393_1787704017.ndjson",
-       "turns": 53
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/4_2526937_1787704271.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r1__prime_agent/turns/4_2595485_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 0,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 49,
-     "status": "running",
-     "attempts": 2,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/0_2595504_1787704534.ndjson",
-       "turns": 49
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/0_2484101_1787704024.ndjson",
-       "turns": 39
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 38,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/1_2595508_1787704534.ndjson",
-       "turns": 38
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/1_2484100_1787704024.ndjson",
-       "turns": 33
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/1_2526771_1787704269.ndjson",
-       "turns": 27
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 2,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 34,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 2,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/2_2484099_1787704024.ndjson",
-       "turns": 53
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/2_2526776_1787704273.ndjson",
-       "turns": 34
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 21,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/3_2526807_1787704270.ndjson",
-       "turns": 21
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/3_2484102_1787704024.ndjson",
-       "turns": 16
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/3_2595506_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 4,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 31,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/4_2484098_1787704024.ndjson",
-       "turns": 31
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/4_2526816_1787704271.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r2__prime_agent/turns/4_2595505_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 43,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/0_2595389_1787704534.ndjson",
-       "turns": 43
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/0_2487218_1787704034.ndjson",
-       "turns": 26
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/0_2526961_1787704275.ndjson",
-       "turns": 15
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 30,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/1_2595373_1787704534.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/1_2487221_1787704034.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/1_2526932_1787704276.ndjson",
-       "turns": 20
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 3,
-     "xl": 2,
-     "calls": 42,
-     "balrog": 1.85,
-     "balrog_min": 1.75,
-     "single_axis": 0,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/2_2595370_1787704534.ndjson",
-       "turns": 42
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/2_2487222_1787704034.ndjson",
-       "turns": 38
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/2_2526953_1787704275.ndjson",
-       "turns": 13
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 23,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/3_2487219_1787704034.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/3_2526982_1787704279.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/3_2595384_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 51,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/4_2595362_1787704534.ndjson",
-       "turns": 51
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/4_2526918_1787704274.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/p1_gate_r3__prime_agent/turns/4_2487220_1787704034.ndjson",
-       "turns": 20
-      }
-     ],
-     "rep": 3
     }
    ],
    "aggregate": {
-    "n": 4,
-    "died": 4,
-    "single_axis": 3,
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
     "dlvl": [
-     3.25,
-     0.63
+     7.2,
+     1.11
     ],
     "xl": [
-     1.25,
-     0.25
+     2.6,
+     0.51
     ],
     "balrog": [
-     1.95,
-     0.24
+     6.65,
+     2.5
     ],
     "balrog_min": [
-     0.44,
-     0.44
+     1.69,
+     0.43
     ],
     "calls": [
-     38.25,
-     5.75
+     220.2,
+     92.92
     ]
    }
   },
@@ -750,76 +491,46 @@
      "provenance": {
       "tool_tier": "p2_crisis",
       "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7"
+      "tool_tier_commit": "ec0fa7d-dirty"
      }
     },
     {
      "rep": 2,
-     "state": "done",
-     "provenance": {
-      "tool_tier": "p2_crisis",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "done",
-     "provenance": {
-      "tool_tier": "p2_crisis",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7"
-     }
+     "state": "on request"
     }
    ],
    "rollouts": [
     {
      "seed": 0,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 41,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
+     "dlvl": 6,
+     "xl": 2,
+     "calls": 112,
+     "balrog": 3.54,
+     "balrog_min": 1.85,
+     "single_axis": 0,
      "died": 1,
      "stop": "game_over",
      "status": "done",
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/0_1368082_1787695276.ndjson",
-       "turns": 41
+       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/0_2971815_1787709169.ndjson",
+       "turns": 112
       }
      ],
      "rep": 1
     },
     {
      "seed": 1,
-     "dlvl": 10,
-     "xl": 4,
-     "calls": 205,
-     "balrog": 12.56,
-     "balrog_min": 2.42,
-     "single_axis": 0,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/1_1368083_1787695276.ndjson",
-       "turns": 205
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 2,
-     "dlvl": 10,
-     "xl": 4,
+     "dlvl": 8,
+     "xl": 3,
      "calls": 194,
-     "balrog": 12.56,
-     "balrog_min": 2.42,
+     "balrog": 6.96,
+     "balrog_min": 2.08,
      "single_axis": 0,
      "died": 1,
      "stop": "game_over",
@@ -827,19 +538,19 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/2_1368084_1787695276.ndjson",
+       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/1_2971820_1787709169.ndjson",
        "turns": 194
       }
      ],
      "rep": 1
     },
     {
-     "seed": 3,
-     "dlvl": 5,
-     "xl": 3,
-     "calls": 75,
-     "balrog": 2.65,
-     "balrog_min": 2.08,
+     "seed": 2,
+     "dlvl": 3,
+     "xl": 2,
+     "calls": 58,
+     "balrog": 1.85,
+     "balrog_min": 1.75,
      "single_axis": 0,
      "died": 1,
      "stop": "game_over",
@@ -847,19 +558,108 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/3_1368085_1787695276.ndjson",
-       "turns": 75
+       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/2_2971822_1787709169.ndjson",
+       "turns": 58
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 5,
+     "xl": 2,
+     "calls": 142,
+     "balrog": 2.65,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/3_2971814_1787709169.ndjson",
+       "turns": 142
       }
      ],
      "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 7,
-     "xl": 4,
-     "calls": 202,
-     "balrog": 4.85,
-     "balrog_min": 2.42,
+     "dlvl": 5,
+     "xl": 1,
+     "calls": 98,
+     "balrog": 2.65,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/4_2971817_1787709169.ndjson",
+       "turns": 98
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
+    "dlvl": [
+     5.4,
+     0.81
+    ],
+    "xl": [
+     2,
+     0.32
+    ],
+    "balrog": [
+     3.53,
+     0.9
+    ],
+    "balrog_min": [
+     1.51,
+     0.38
+    ],
+    "calls": [
+     120.8,
+     22.75
+    ]
+   }
+  },
+  "p3_rollback": {
+   "desc": "P3 \u00b7 rollback(n) tool published",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
+     "provenance": {
+      "tool_tier": "p3_rollback",
+      "tool_tier_hash": "efebf98b10628caa",
+      "tool_tier_commit": "ec0fa7d-dirty"
+     }
+    },
+    {
+     "rep": 2,
+     "state": "on request"
+    },
+    {
+     "rep": 3,
+     "state": "on request"
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 10,
+     "xl": 3,
+     "calls": 159,
+     "balrog": 12.56,
+     "balrog_min": 2.08,
      "single_axis": 0,
      "died": 1,
      "stop": "game_over",
@@ -867,77 +667,17 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r1__prime_agent/turns/4_1368081_1787695276.ndjson",
-       "turns": 202
+       "file": "outputs/e15_probes/p3_rollback_r1__prime_agent/turns/0_2972634_1787709185.ndjson",
+       "turns": 159
       }
      ],
      "rep": 1
     },
     {
-     "seed": 0,
-     "dlvl": 5,
-     "xl": 4,
-     "calls": 90,
-     "balrog": 2.65,
-     "balrog_min": 2.42,
-     "single_axis": 0,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p2_crisis_r2__prime_agent/turns/0_1434376_1787696639.ndjson",
-       "turns": 90
-      }
-     ],
-     "rep": 2
-    },
-    {
      "seed": 1,
-     "dlvl": 4,
-     "xl": 3,
-     "calls": 98,
-     "balrog": 2.12,
-     "balrog_min": 2.08,
-     "single_axis": 0,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p2_crisis_r2__prime_agent/turns/1_1434375_1787696639.ndjson",
-       "turns": 98
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 2,
-     "dlvl": 5,
-     "xl": 3,
-     "calls": 103,
-     "balrog": 2.65,
-     "balrog_min": 2.08,
-     "single_axis": 0,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p2_crisis_r2__prime_agent/turns/2_1434378_1787696639.ndjson",
-       "turns": 103
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
      "dlvl": 3,
      "xl": 1,
-     "calls": 29,
+     "calls": 90,
      "balrog": 1.75,
      "balrog_min": 0.0,
      "single_axis": 1,
@@ -947,17 +687,146 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r2__prime_agent/turns/3_1434374_1787696639.ndjson",
-       "turns": 29
+       "file": "outputs/e15_probes/p3_rollback_r1__prime_agent/turns/1_2972632_1787709185.ndjson",
+       "turns": 90
       }
      ],
-     "rep": 2
+     "rep": 1
+    },
+    {
+     "seed": 2,
+     "dlvl": 5,
+     "xl": 4,
+     "calls": 69,
+     "balrog": 2.65,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_r1__prime_agent/turns/2_3024134_1787709878.ndjson",
+       "turns": 69
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 5,
+     "xl": 2,
+     "calls": 57,
+     "balrog": 2.65,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_r1__prime_agent/turns/3_2972628_1787709185.ndjson",
+       "turns": 57
+      }
+     ],
+     "rep": 1
     },
     {
      "seed": 4,
+     "dlvl": 11,
+     "xl": 4,
+     "calls": 198,
+     "balrog": 16.13,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 0,
+     "stop": "agent_completed",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_r1__prime_agent/turns/4_2972638_1787709185.ndjson",
+       "turns": 198
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 5,
+    "died": 4,
+    "single_axis": 1,
+    "dlvl": [
+     6.8,
+     1.56
+    ],
+    "xl": [
+     2.8,
+     0.58
+    ],
+    "balrog": [
+     7.15,
+     3.0
+    ],
+    "balrog_min": [
+     1.75,
+     0.45
+    ],
+    "calls": [
+     114.6,
+     27.32
+    ]
+   }
+  },
+  "c1_doors": {
+   "desc": "C1 \u00b7 locked doors removed (tune.locked_door=0)",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
+     "provenance": {
+      "tool_tier": "c1_doors",
+      "tool_tier_hash": "efebf98b10628caa",
+      "tool_tier_commit": "d94b5a7-dirty"
+     }
+    },
+    {
+     "rep": 2,
+     "state": "on request"
+    },
+    {
+     "rep": 3,
+     "state": "on request"
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 12,
+     "xl": 5,
+     "calls": 167,
+     "balrog": 20.61,
+     "balrog_min": 2.91,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/0_2887365_1787708136.ndjson",
+       "turns": 167
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 1,
      "dlvl": 9,
      "xl": 3,
-     "calls": 238,
+     "calls": 149,
      "balrog": 9.77,
      "balrog_min": 2.08,
      "single_axis": 0,
@@ -967,58 +836,18 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r2__prime_agent/turns/4_1434377_1787696639.ndjson",
-       "turns": 238
+       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/1_2887362_1787708136.ndjson",
+       "turns": 149
       }
      ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 80,
-     "balrog": 2.65,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p2_crisis_r3__prime_agent/turns/0_1700562_1787697898.ndjson",
-       "turns": 80
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 53,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/p2_crisis_r3__prime_agent/turns/1_1700565_1787697898.ndjson",
-       "turns": 53
-      }
-     ],
-     "rep": 3
+     "rep": 1
     },
     {
      "seed": 2,
-     "dlvl": 7,
+     "dlvl": 10,
      "xl": 2,
-     "calls": 142,
-     "balrog": 4.85,
+     "calls": 84,
+     "balrog": 12.56,
      "balrog_min": 1.85,
      "single_axis": 0,
      "died": 1,
@@ -1027,602 +856,76 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r3__prime_agent/turns/2_1700566_1787697897.ndjson",
-       "turns": 142
+       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/2_2887364_1787708136.ndjson",
+       "turns": 84
       }
      ],
-     "rep": 3
+     "rep": 1
     },
     {
      "seed": 3,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 45,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
+     "dlvl": 8,
+     "xl": 4,
+     "calls": 102,
+     "balrog": 6.96,
+     "balrog_min": 2.42,
+     "single_axis": 0,
      "died": 1,
      "stop": "game_over",
      "status": "done",
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r3__prime_agent/turns/3_1700563_1787697897.ndjson",
-       "turns": 45
+       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/3_2887363_1787708136.ndjson",
+       "turns": 102
       }
      ],
-     "rep": 3
+     "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 26,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
+     "dlvl": 8,
+     "xl": 2,
+     "calls": 128,
+     "balrog": 6.96,
+     "balrog_min": 1.85,
+     "single_axis": 0,
      "died": 1,
      "stop": "game_over",
      "status": "done",
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/p2_crisis_r3__prime_agent/turns/4_1700564_1787697897.ndjson",
-       "turns": 26
+       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/4_2925924_1787708589.ndjson",
+       "turns": 128
       }
      ],
-     "rep": 3
+     "rep": 1
     }
    ],
    "aggregate": {
-    "n": 15,
-    "died": 15,
-    "single_axis": 6,
+    "n": 5,
+    "died": 5,
+    "single_axis": 0,
     "dlvl": [
-     5.47,
-     0.66
+     9.4,
+     0.75
     ],
     "xl": [
-     2.4,
-     0.34
-    ],
-    "balrog": [
-     4.4,
-     1.01
-    ],
-    "balrog_min": [
-     1.32,
-     0.29
-    ],
-    "calls": [
-     108.07,
-     18.32
-    ]
-   }
-  },
-  "p3_rollback": {
-   "desc": "P3 \u00b7 rollback(n) tool published",
-   "cells": [
-    {
-     "rep": 1,
-     "state": "queued"
-    },
-    {
-     "rep": 2,
-     "state": "queued"
-    },
-    {
-     "rep": 3,
-     "state": "queued"
-    }
-   ],
-   "rollouts": [],
-   "aggregate": {}
-  },
-  "c1_doors": {
-   "desc": "C1 \u00b7 locked doors removed (tune.locked_door=0)",
-   "cells": [
-    {
-     "rep": 1,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c1_doors",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
-    },
-    {
-     "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c1_doors",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
-    },
-    {
-     "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c1_doors",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
-    }
-   ],
-   "rollouts": [
-    {
-     "seed": 0,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 41,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/0_2594716_1787704534.ndjson",
-       "turns": 41
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/0_2709846_1787705502.ndjson",
-       "turns": 16
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/0_2691638_1787705332.ndjson",
-       "turns": 14
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/0_2500851_1787704118.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/0_2526760_1787704272.ndjson",
-       "turns": 9
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 1,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 39,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/1_2691637_1787705332.ndjson",
-       "turns": 39
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/1_2526691_1787704271.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/1_2709844_1787705502.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/1_2500852_1787704118.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/1_2594825_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 2,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 64,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/2_2691639_1787705332.ndjson",
-       "turns": 64
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/2_2594780_1787704534.ndjson",
-       "turns": 39
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/2_2500848_1787704118.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/2_2526280_1787704267.ndjson",
-       "turns": 20
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/2_2709845_1787705502.ndjson",
-       "turns": 17
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 3,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 31,
-     "balrog": 2.65,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 4,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/3_2594819_1787704534.ndjson",
-       "turns": 57
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/3_2691640_1787705332.ndjson",
-       "turns": 31
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/3_2526528_1787704271.ndjson",
-       "turns": 20
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/3_2500849_1787704118.ndjson",
-       "turns": 15
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 30,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/4_2594847_1787704535.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/4_2526646_1787704269.ndjson",
-       "turns": 24
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r1__prime_agent/turns/4_2500850_1787704118.ndjson",
-       "turns": 19
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 0,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 40,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/0_2680824_1787705201.ndjson",
-       "turns": 40
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/0_2503123_1787704126.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/0_2675830_1787705150.ndjson",
-       "turns": 8
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/0_2526480_1787704277.ndjson",
-       "turns": 7
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/0_2594898_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 2,
-     "calls": 50,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/1_2594915_1787704534.ndjson",
-       "turns": 50
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/1_2503130_1787704126.ndjson",
-       "turns": 18
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/1_2526409_1787704268.ndjson",
-       "turns": 17
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/1_2680830_1787705202.ndjson",
-       "turns": 14
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/1_2675829_1787705150.ndjson",
-       "turns": 10
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 2,
-     "dlvl": 7,
-     "xl": 2,
-     "calls": 100,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/2_2680826_1787705201.ndjson",
-       "turns": 100
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/2_2526497_1787704270.ndjson",
-       "turns": 18
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/2_2503121_1787704126.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/2_2675831_1787705150.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/2_2595115_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
-     "dlvl": 7,
-     "xl": 1,
-     "calls": 75,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/3_2680832_1787705202.ndjson",
-       "turns": 75
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/3_2526822_1787704272.ndjson",
-       "turns": 25
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/3_2503127_1787704126.ndjson",
-       "turns": 16
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/3_2675828_1787705150.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/3_2594827_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 2,
-     "calls": 61,
-     "status": "running",
-     "attempts": 5,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/4_2680828_1787705202.ndjson",
-       "turns": 61
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/4_2594833_1787704534.ndjson",
-       "turns": 38
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/4_2526584_1787704269.ndjson",
-       "turns": 35
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/4_2675827_1787705150.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r2__prime_agent/turns/4_2503104_1787704126.ndjson",
-       "turns": 4
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 27,
-     "status": "running",
-     "attempts": 4,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/0_2694430_1787705348.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/0_2526449_1787704273.ndjson",
-       "turns": 24
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/0_2505218_1787704136.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/0_2594803_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 55,
-     "status": "running",
-     "attempts": 4,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/1_2694427_1787705348.ndjson",
-       "turns": 55
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/1_2594818_1787704534.ndjson",
-       "turns": 45
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/1_2526669_1787704277.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/1_2505219_1787704136.ndjson",
-       "turns": 10
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 4,
-     "xl": 2,
-     "calls": 41,
-     "balrog": 2.12,
-     "balrog_min": 1.85,
-     "single_axis": 0,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 4,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/2_2694429_1787705348.ndjson",
-       "turns": 41
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/2_2526638_1787704269.ndjson",
-       "turns": 34
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/2_2505217_1787704136.ndjson",
-       "turns": 17
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/2_2594778_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 6,
-     "xl": 1,
-     "calls": 64,
-     "status": "running",
-     "attempts": 4,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/3_2694428_1787705348.ndjson",
-       "turns": 64
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/3_2594879_1787704534.ndjson",
-       "turns": 45
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/3_2526063_1787704271.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/3_2505220_1787704136.ndjson",
-       "turns": 15
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 34,
-     "status": "running",
-     "attempts": 4,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/4_2694431_1787705348.ndjson",
-       "turns": 34
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/4_2526495_1787704272.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/4_2505216_1787704135.ndjson",
-       "turns": 5
-      },
-      {
-       "file": "outputs/e15_probes/c1_doors_r3__prime_agent/turns/4_2594585_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    }
-   ],
-   "aggregate": {
-    "n": 3,
-    "died": 3,
-    "single_axis": 2,
-    "dlvl": [
-     4,
+     3.2,
      0.58
     ],
-    "xl": [
-     1.33,
-     0.33
-    ],
     "balrog": [
-     2.17,
-     0.26
+     11.37,
+     2.53
     ],
     "balrog_min": [
-     0.62,
-     0.62
+     2.22,
+     0.2
     ],
     "calls": [
-     34,
-     3.51
+     126,
+     15.09
     ]
    }
   },
@@ -1631,7 +934,7 @@
    "cells": [
     {
      "rep": 1,
-     "state": "partial",
+     "state": "done",
      "provenance": {
       "tool_tier": "c2_d025",
       "tool_tier_hash": "efebf98b10628caa",
@@ -1640,398 +943,138 @@
     },
     {
      "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c2_d025",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c2_d025",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     }
    ],
    "rollouts": [
     {
      "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 13,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/0_2526231_1787704269.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/0_2507297_1787704143.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/0_2594909_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 31,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/1_2594896_1787704534.ndjson",
-       "turns": 31
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/1_2525877_1787704269.ndjson",
-       "turns": 19
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/1_2507295_1787704143.ndjson",
-       "turns": 16
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 2,
-     "dlvl": 4,
-     "xl": 3,
-     "calls": 51,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/2_2594916_1787704534.ndjson",
-       "turns": 51
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/2_2525615_1787704266.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/2_2507299_1787704143.ndjson",
-       "turns": 11
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 3,
-     "dlvl": 5,
-     "xl": 2,
-     "calls": 35,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/3_2594869_1787704534.ndjson",
-       "turns": 35
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/3_2526599_1787704271.ndjson",
-       "turns": 33
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/3_2507296_1787704143.ndjson",
-       "turns": 14
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 4,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 17,
-     "balrog": 0.0,
-     "balrog_min": 0.0,
+     "dlvl": 14,
+     "xl": 5,
+     "calls": 206,
+     "balrog": 29.25,
+     "balrog_min": 2.91,
      "single_axis": 0,
      "died": 1,
      "stop": "game_over",
      "status": "done",
-     "attempts": 3,
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/4_2525621_1787704266.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/4_2594904_1787704534.ndjson",
-       "turns": 17
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/4_2507298_1787704143.ndjson",
-       "turns": 14
+       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/0_2889822_1787708152.ndjson",
+       "turns": 206
       }
      ],
      "rep": 1
     },
     {
-     "seed": 0,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 42,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/0_2594857_1787704534.ndjson",
-       "turns": 42
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/0_2526054_1787704261.ndjson",
-       "turns": 17
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/0_2508044_1787704152.ndjson",
-       "turns": 6
-      }
-     ],
-     "rep": 2
-    },
-    {
      "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 11,
+     "xl": 3,
+     "calls": 168,
+     "balrog": 16.13,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/1_2526151_1787704265.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/1_2508048_1787704152.ndjson",
-       "turns": 7
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/1_2594932_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/1_3112340_1787711381.ndjson",
+       "turns": 168
       }
      ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 2,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 62,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 6,
+     "xl": 3,
+     "calls": 76,
+     "balrog": 3.54,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/2_2595463_1787704534.ndjson",
-       "turns": 62
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/2_2526206_1787704267.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/2_2508046_1787704152.ndjson",
-       "turns": 12
+       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/2_2889819_1787708152.ndjson",
+       "turns": 76
       }
      ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 3,
-     "dlvl": 4,
+     "dlvl": 8,
      "xl": 1,
-     "calls": 36,
-     "status": "running",
-     "attempts": 3,
+     "calls": 98,
+     "balrog": 6.96,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/3_2526526_1787704269.ndjson",
-       "turns": 36
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/3_2594852_1787704534.ndjson",
-       "turns": 20
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/3_2508047_1787704152.ndjson",
-       "turns": 14
+       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/3_2889820_1787708152.ndjson",
+       "turns": 98
       }
      ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 37,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/4_2526440_1787704268.ndjson",
-       "turns": 37
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/4_2594772_1787704534.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r2__prime_agent/turns/4_2508045_1787704152.ndjson",
-       "turns": 8
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 29,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/0_2526286_1787704267.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/0_2511083_1787704160.ndjson",
-       "turns": 7
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/0_2594794_1787704534.ndjson",
-       "turns": 7
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 26,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/1_2526777_1787704270.ndjson",
-       "turns": 26
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/1_2511082_1787704161.ndjson",
-       "turns": 5
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/1_2594473_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 22,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/2_2526498_1787704271.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/2_2511079_1787704161.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/2_2594743_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
      "dlvl": 5,
-     "xl": 1,
-     "calls": 45,
-     "status": "running",
-     "attempts": 3,
+     "xl": 2,
+     "calls": 85,
+     "balrog": 2.65,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/3_2594805_1787704534.ndjson",
-       "turns": 45
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/3_2527082_1787704284.ndjson",
-       "turns": 20
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/3_2511078_1787704161.ndjson",
-       "turns": 13
+       "file": "outputs/e15_probes/c2_d025_r1__prime_agent/turns/4_2889818_1787708152.ndjson",
+       "turns": 85
       }
      ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/4_2526114_1787704269.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/4_2511084_1787704161.ndjson",
-       "turns": 8
-      },
-      {
-       "file": "outputs/e15_probes/c2_d025_r3__prime_agent/turns/4_2594808_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
+     "rep": 1
     }
    ],
    "aggregate": {
-    "n": 1,
-    "died": 1,
-    "single_axis": 0,
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
     "dlvl": [
-     1,
-     0
+     8.8,
+     1.66
     ],
     "xl": [
-     1,
-     0
+     2.8,
+     0.66
     ],
     "balrog": [
-     0.0,
-     0
+     11.71,
+     4.99
     ],
     "balrog_min": [
-     0.0,
-     0
+     1.78,
+     0.48
     ],
     "calls": [
-     17,
-     0
+     126.6,
+     25.62
     ]
    }
   },
@@ -2040,7 +1083,7 @@
    "cells": [
     {
      "rep": 1,
-     "state": "partial",
+     "state": "done",
      "provenance": {
       "tool_tier": "c2_d010",
       "tool_tier_hash": "efebf98b10628caa",
@@ -2049,398 +1092,138 @@
     },
     {
      "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c2_d010",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c2_d010",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     }
    ],
    "rollouts": [
     {
      "seed": 0,
-     "dlvl": 4,
-     "xl": 1,
-     "calls": 32,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/0_2594903_1787704534.ndjson",
-       "turns": 32
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/0_2526707_1787704272.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/0_2514752_1787704175.ndjson",
-       "turns": 5
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 1,
-     "dlvl": 4,
-     "xl": 3,
-     "calls": 39,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/1_2526504_1787704269.ndjson",
-       "turns": 39
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/1_2594877_1787704534.ndjson",
-       "turns": 24
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/1_2514755_1787704175.ndjson",
-       "turns": 9
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 2,
-     "dlvl": 4,
-     "xl": 3,
-     "calls": 33,
-     "balrog": 2.12,
-     "balrog_min": 2.08,
+     "dlvl": 13,
+     "xl": 4,
+     "calls": 99,
+     "balrog": 25.66,
+     "balrog_min": 2.42,
      "single_axis": 0,
      "died": 1,
      "stop": "game_over",
      "status": "done",
-     "attempts": 3,
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/2_2526748_1787704268.ndjson",
-       "turns": 47
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/2_2594858_1787704533.ndjson",
-       "turns": 33
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/2_2514756_1787704175.ndjson",
-       "turns": 8
+       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/0_2890623_1787708168.ndjson",
+       "turns": 99
       }
      ],
      "rep": 1
     },
     {
-     "seed": 3,
-     "dlvl": 4,
+     "seed": 1,
+     "dlvl": 3,
+     "xl": 1,
+     "calls": 59,
+     "balrog": 1.75,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/1_2890622_1787708167.ndjson",
+       "turns": 59
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 2,
+     "dlvl": 3,
      "xl": 1,
      "calls": 26,
-     "status": "running",
-     "attempts": 3,
+     "balrog": 1.75,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/3_2526515_1787704271.ndjson",
+       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/2_2949958_1787708889.ndjson",
        "turns": 26
-      },
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 6,
+     "xl": 1,
+     "calls": 59,
+     "balrog": 3.54,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/3_2514754_1787704175.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/3_2594897_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/3_2890620_1787708168.ndjson",
+       "turns": 59
       }
      ],
      "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 21,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 9,
+     "xl": 4,
+     "calls": 200,
+     "balrog": 9.77,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/4_2526690_1787704273.ndjson",
-       "turns": 21
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/4_2514753_1787704175.ndjson",
-       "turns": 5
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/4_2594908_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/c2_d010_r1__prime_agent/turns/4_2890621_1787708168.ndjson",
+       "turns": 200
       }
      ],
      "rep": 1
-    },
-    {
-     "seed": 0,
-     "dlvl": 5,
-     "xl": 3,
-     "calls": 50,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/0_2595408_1787704534.ndjson",
-       "turns": 50
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/0_2526758_1787704272.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/0_2515763_1787704190.ndjson",
-       "turns": 4
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 1,
-     "dlvl": 4,
-     "xl": 2,
-     "calls": 41,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/1_2595360_1787704534.ndjson",
-       "turns": 41
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/1_2526592_1787704268.ndjson",
-       "turns": 19
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/1_2515772_1787704190.ndjson",
-       "turns": 2
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 2,
-     "dlvl": 4,
-     "xl": 3,
-     "calls": 49,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/2_2595376_1787704534.ndjson",
-       "turns": 49
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/2_2526608_1787704271.ndjson",
-       "turns": 20
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/2_2515764_1787704190.ndjson",
-       "turns": 4
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 22,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/3_2526647_1787704268.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/3_2515768_1787704190.ndjson",
-       "turns": 5
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/3_2595381_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 4,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 36,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/4_2595448_1787704534.ndjson",
-       "turns": 36
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/4_2526768_1787704268.ndjson",
-       "turns": 26
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r2__prime_agent/turns/4_2515770_1787704190.ndjson",
-       "turns": 1
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 30,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/0_2595353_1787704534.ndjson",
-       "turns": 30
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/0_2526687_1787704271.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/0_2517368_1787704199.ndjson",
-       "turns": 4
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 11,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/1_2526507_1787704272.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/1_2517460_1787704199.ndjson",
-       "turns": 3
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/1_2595357_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 4,
-     "xl": 1,
-     "calls": 29,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/2_2595371_1787704534.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/2_2526595_1787704272.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/2_2517461_1787704199.ndjson",
-       "turns": 1
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 27,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/3_2526537_1787704266.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/3_2517380_1787704199.ndjson",
-       "turns": 1
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/3_2595375_1787704533.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 4,
-     "xl": 1,
-     "calls": 43,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/4_2595488_1787704534.ndjson",
-       "turns": 43
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/4_2526252_1787704267.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/c2_d010_r3__prime_agent/turns/4_2517377_1787704199.ndjson",
-       "turns": 3
-      }
-     ],
-     "rep": 3
     }
    ],
    "aggregate": {
-    "n": 1,
-    "died": 1,
-    "single_axis": 0,
+    "n": 5,
+    "died": 5,
+    "single_axis": 3,
     "dlvl": [
-     4,
-     0
+     6.8,
+     1.91
     ],
     "xl": [
-     3,
-     0
+     2.2,
+     0.73
     ],
     "balrog": [
-     2.12,
-     0
+     8.49,
+     4.54
     ],
     "balrog_min": [
-     2.08,
-     0
+     0.97,
+     0.59
     ],
     "calls": [
-     33,
-     0
+     88.6,
+     30.16
     ]
    }
   },
@@ -2449,7 +1232,7 @@
    "cells": [
     {
      "rep": 1,
-     "state": "partial",
+     "state": "done",
      "provenance": {
       "tool_tier": "c2_d0025",
       "tool_tier_hash": "efebf98b10628caa",
@@ -2458,21 +1241,11 @@
     },
     {
      "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c2_d0025",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "c2_d0025",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     }
    ],
    "rollouts": [
@@ -2480,332 +1253,88 @@
      "seed": 0,
      "dlvl": 3,
      "xl": 1,
-     "calls": 13,
+     "calls": 16,
      "balrog": 1.75,
      "balrog_min": 0.0,
      "single_axis": 1,
      "died": 1,
      "stop": "game_over",
      "status": "done",
-     "attempts": 2,
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/0_2526671_1787704269.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/0_2521689_1787704208.ndjson",
-       "turns": 1
+       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/0_2907132_1787708361.ndjson",
+       "turns": 16
       }
      ],
      "rep": 1
     },
     {
      "seed": 1,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 46,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/1_2594892_1787704534.ndjson",
-       "turns": 46
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/1_2526555_1787704272.ndjson",
-       "turns": 35
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/1_2521683_1787704208.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 27,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/2_2526573_1787704268.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/2_2521687_1787704208.ndjson",
-       "turns": 1
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/2_2594883_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 3,
-     "dlvl": 9,
-     "xl": 2,
-     "calls": 56,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/3_2594901_1787704534.ndjson",
-       "turns": 56
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/3_2526053_1787704268.ndjson",
-       "turns": 36
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/3_2521686_1787704208.ndjson",
-       "turns": 1
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 4,
-     "dlvl": 4,
-     "xl": 1,
-     "calls": 37,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/4_2526705_1787704270.ndjson",
-       "turns": 37
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/4_2594868_1787704534.ndjson",
-       "turns": 35
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/4_2521690_1787704208.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 0,
      "dlvl": 5,
      "xl": 1,
-     "calls": 34,
-     "status": "running",
-     "attempts": 3,
+     "calls": 28,
+     "balrog": 2.65,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/0_2526496_1787704271.ndjson",
-       "turns": 34
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/0_2521997_1787704217.ndjson",
-       "turns": 0
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/0_2594919_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/1_2907134_1787708361.ndjson",
+       "turns": 28
       }
      ],
-     "rep": 2
-    },
-    {
-     "seed": 1,
-     "dlvl": 4,
-     "xl": 1,
-     "calls": 32,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/1_2526805_1787704273.ndjson",
-       "turns": 32
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/1_2521995_1787704217.ndjson",
-       "turns": 0
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/1_2594936_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 2,
      "dlvl": 7,
-     "xl": 1,
-     "calls": 39,
-     "balrog": 4.85,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/2_2594927_1787704534.ndjson",
-       "turns": 39
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/2_2526788_1787704271.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/2_2521998_1787704217.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
-     "dlvl": 8,
-     "xl": 1,
-     "calls": 54,
-     "balrog": 6.96,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/3_2594923_1787704534.ndjson",
-       "turns": 54
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/3_2526475_1787704267.ndjson",
-       "turns": 36
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/3_2521996_1787704217.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 23,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 2,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/4_2526780_1787704271.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r2__prime_agent/turns/4_2521994_1787704217.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 51,
-     "status": "running",
-     "attempts": 2,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/0_2594813_1787704534.ndjson",
-       "turns": 51
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/0_2523027_1787704254.ndjson",
-       "turns": 32
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 5,
-     "xl": 1,
-     "calls": 29,
-     "balrog": 2.65,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/1_2523025_1787704255.ndjson",
-       "turns": 29
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 26,
-     "balrog": 1.75,
-     "balrog_min": 0.0,
-     "single_axis": 1,
-     "died": 1,
-     "stop": "game_over",
-     "status": "done",
-     "attempts": 1,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/2_2523028_1787704255.ndjson",
-       "turns": 26
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 8,
      "xl": 2,
-     "calls": 55,
-     "status": "running",
-     "attempts": 3,
+     "calls": 60,
+     "balrog": 4.85,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/3_2607869_1787704601.ndjson",
-       "turns": 55
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/3_2523026_1787704256.ndjson",
-       "turns": 35
-      },
-      {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/3_2594809_1787704535.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/2_2907136_1787708361.ndjson",
+       "turns": 60
       }
      ],
-     "rep": 3
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 11,
+     "xl": 4,
+     "calls": 128,
+     "balrog": 16.13,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/3_2907131_1787708361.ndjson",
+       "turns": 128
+      }
+     ],
+     "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 5,
+     "dlvl": 14,
      "xl": 1,
-     "calls": 27,
-     "balrog": 2.65,
+     "calls": 87,
+     "balrog": 29.25,
      "balrog_min": 0.0,
      "single_axis": 1,
      "died": 1,
@@ -2814,36 +1343,36 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/c2_d0025_r3__prime_agent/turns/4_2523024_1787704257.ndjson",
-       "turns": 27
+       "file": "outputs/e15_probes/c2_d0025_r1__prime_agent/turns/4_2907128_1787708361.ndjson",
+       "turns": 87
       }
      ],
-     "rep": 3
+     "rep": 1
     }
    ],
    "aggregate": {
-    "n": 7,
-    "died": 7,
-    "single_axis": 7,
+    "n": 5,
+    "died": 5,
+    "single_axis": 3,
     "dlvl": [
-     4.86,
-     0.77
+     8,
+     2.0
     ],
     "xl": [
-     1,
-     0.0
+     1.8,
+     0.58
     ],
     "balrog": [
-     3.19,
-     0.75
+     10.93,
+     5.26
     ],
     "balrog_min": [
-     0.0,
-     0.0
+     0.85,
+     0.53
     ],
     "calls": [
-     30.14,
-     4.93
+     63.8,
+     20.3
     ]
    }
   },
@@ -2852,501 +1381,99 @@
    "cells": [
     {
      "rep": 1,
-     "state": "partial",
+     "state": "done",
      "provenance": {
       "tool_tier": "v1_b1",
       "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
+      "tool_tier_commit": "ec0fa7d-dirty"
      }
     },
     {
      "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "v1_b1",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "v1_b1",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     }
    ],
    "rollouts": [
     {
      "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 26,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/0_2487949_1787704042.ndjson",
-       "turns": 26
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/0_2595409_1787704534.ndjson",
-       "turns": 26
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/0_2526815_1787704275.ndjson",
-       "turns": 16
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 1,
-     "dlvl": 4,
-     "xl": 1,
-     "calls": 35,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/1_2595372_1787704534.ndjson",
-       "turns": 35
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/1_2487952_1787704042.ndjson",
-       "turns": 31
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/1_2526904_1787704273.ndjson",
-       "turns": 12
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 2,
      "dlvl": 3,
-     "xl": 1,
-     "calls": 23,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/2_2526806_1787704279.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/2_2487950_1787704043.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/2_2595387_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 3,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 29,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/3_2595390_1787704534.ndjson",
-       "turns": 29
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/3_2487948_1787704042.ndjson",
-       "turns": 28
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/3_2526757_1787704281.ndjson",
-       "turns": 18
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 24,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/4_2526809_1787704277.ndjson",
-       "turns": 24
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/4_2487951_1787704042.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/4_2595383_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 1
-    },
-    {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/0_2488710_1787704051.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/0_2526766_1787704269.ndjson",
-       "turns": 6
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/0_2595337_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 28,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/1_2488708_1787704051.ndjson",
-       "turns": 28
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/1_2595331_1787704534.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/1_2526990_1787704275.ndjson",
-       "turns": 24
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 38,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/2_2595340_1787704535.ndjson",
-       "turns": 38
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/2_2488706_1787704051.ndjson",
-       "turns": 18
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/2_2526975_1787704272.ndjson",
-       "turns": 18
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
-     "dlvl": 3,
-     "xl": 1,
+     "xl": 2,
      "calls": 41,
-     "status": "running",
-     "attempts": 3,
+     "balrog": 1.85,
+     "balrog_min": 1.75,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/3_2595338_1787704535.ndjson",
+       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/0_3026305_1787709918.ndjson",
        "turns": 41
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/3_2488709_1787704051.ndjson",
-       "turns": 26
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/3_2526734_1787704271.ndjson",
-       "turns": 22
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 4,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 32,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/4_2595334_1787704534.ndjson",
-       "turns": 32
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/4_2488707_1787704051.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r2__prime_agent/turns/4_2526682_1787704272.ndjson",
-       "turns": 15
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/0_2491056_1787704059.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/0_2526908_1787704270.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/0_2595386_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 40,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/1_2595388_1787704534.ndjson",
-       "turns": 40
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/1_2491053_1787704059.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/1_2526940_1787704278.ndjson",
-       "turns": 25
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 27,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/2_2491055_1787704059.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/2_2526889_1787704278.ndjson",
-       "turns": 18
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/2_2595352_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 22,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/3_2491054_1787704059.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/3_2526905_1787704272.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/3_2595374_1787704533.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 7,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/4_2491052_1787704059.ndjson",
-       "turns": 7
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/4_2526936_1787704275.ndjson",
-       "turns": 3
-      },
-      {
-       "file": "outputs/e15_probes/v1_b1_r3__prime_agent/turns/4_2595378_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    }
-   ],
-   "aggregate": {}
-  },
-  "v2_bjson": {
-   "desc": "V2 \u00b7 map + JSON state (variant B_JSON)",
-   "cells": [
-    {
-     "rep": 1,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "v2_bjson",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
-    },
-    {
-     "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "v2_bjson",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
-    },
-    {
-     "rep": 3,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "v2_bjson",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
-    }
-   ],
-   "rollouts": [
-    {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 10,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/0_2494159_1787704068.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/0_2526708_1787704270.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/0_2595094_1787704534.ndjson",
-       "turns": 9
       }
      ],
      "rep": 1
     },
     {
      "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 9,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 9,
+     "xl": 3,
+     "calls": 138,
+     "balrog": 9.77,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/1_2526602_1787704268.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/1_2494158_1787704068.ndjson",
-       "turns": 7
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/1_2594718_1787704535.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/1_3026307_1787709918.ndjson",
+       "turns": 138
       }
      ],
      "rep": 1
     },
     {
      "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 18,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 9,
+     "xl": 4,
+     "calls": 122,
+     "balrog": 9.77,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/2_2594593_1787704534.ndjson",
-       "turns": 18
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/2_2494156_1787704068.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/2_2526141_1787704263.ndjson",
-       "turns": 14
+       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/2_3026303_1787709918.ndjson",
+       "turns": 122
       }
      ],
      "rep": 1
     },
     {
      "seed": 3,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 6,
+     "xl": 2,
+     "calls": 87,
+     "balrog": 3.54,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/3_2494157_1787704068.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/3_2526113_1787704268.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/3_2594755_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/3_3026301_1787709918.ndjson",
+       "turns": 87
       }
      ],
      "rep": 1
@@ -3355,7 +1482,7 @@
      "seed": 4,
      "dlvl": 3,
      "xl": 1,
-     "calls": 15,
+     "calls": 14,
      "balrog": 1.75,
      "balrog_min": 0.0,
      "single_axis": 1,
@@ -3365,266 +1492,185 @@
      "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/4_2494160_1787704068.ndjson",
-       "turns": 15
+       "file": "outputs/e15_probes/v1_b1_r1__prime_agent/turns/4_3026309_1787709918.ndjson",
+       "turns": 14
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
+    "dlvl": [
+     6,
+     1.34
+    ],
+    "xl": [
+     2.4,
+     0.51
+    ],
+    "balrog": [
+     5.34,
+     1.84
+    ],
+    "balrog_min": [
+     1.62,
+     0.42
+    ],
+    "calls": [
+     80.4,
+     23.51
+    ]
+   }
+  },
+  "v2_bjson": {
+   "desc": "V2 \u00b7 map + JSON state (variant B_JSON)",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
+     "provenance": {
+      "tool_tier": "v2_bjson",
+      "tool_tier_hash": "efebf98b10628caa",
+      "tool_tier_commit": "ec0fa7d-dirty"
+     }
+    },
+    {
+     "rep": 2,
+     "state": "on request"
+    },
+    {
+     "rep": 3,
+     "state": "on request"
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 3,
+     "xl": 1,
+     "calls": 27,
+     "balrog": 1.75,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 0,
+     "stop": "agent_completed",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/0_3027263_1787709934.ndjson",
+       "turns": 27
       }
      ],
      "rep": 1
     },
     {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 11,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/0_2594802_1787704534.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/0_2494884_1787704077.ndjson",
-       "turns": 8
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/0_2525181_1787704266.ndjson",
-       "turns": 8
-      }
-     ],
-     "rep": 2
-    },
-    {
      "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 3,
+     "xl": 2,
+     "calls": 55,
+     "balrog": 1.85,
+     "balrog_min": 1.75,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/1_2526492_1787704268.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/1_2494885_1787704076.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/1_2594548_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/1_3027261_1787709934.ndjson",
+       "turns": 55
       }
      ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 19,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 7,
+     "xl": 3,
+     "calls": 58,
+     "balrog": 4.85,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/2_2594179_1787704534.ndjson",
-       "turns": 19
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/2_2524896_1787704268.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/2_2494886_1787704077.ndjson",
-       "turns": 9
+       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/2_3027268_1787709934.ndjson",
+       "turns": 58
       }
      ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 3,
-     "dlvl": 1,
+     "dlvl": 5,
      "xl": 1,
-     "calls": 16,
-     "status": "running",
-     "attempts": 3,
+     "calls": 46,
+     "balrog": 2.65,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 0,
+     "stop": "agent_completed",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/3_2526661_1787704269.ndjson",
-       "turns": 16
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/3_2494883_1787704077.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/3_2594781_1787704534.ndjson",
-       "turns": 0
+       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/3_3027259_1787709934.ndjson",
+       "turns": 46
       }
      ],
-     "rep": 2
+     "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 4,
-     "xl": 2,
-     "calls": 27,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/4_2594821_1787704536.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/4_2494887_1787704077.ndjson",
-       "turns": 14
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r2__prime_agent/turns/4_2526565_1787704271.ndjson",
-       "turns": 6
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
      "dlvl": 1,
      "xl": 1,
-     "calls": 12,
-     "status": "running",
-     "attempts": 3,
+     "calls": 0,
+     "balrog": 0.0,
+     "balrog_min": 0.0,
+     "single_axis": 0,
+     "died": 0,
+     "stop": "agent_completed",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/0_2594365_1787704535.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/0_2495692_1787704086.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/0_2526591_1787704261.ndjson",
-       "turns": 8
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 17,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/1_2594708_1787704534.ndjson",
-       "turns": 17
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/1_2495691_1787704086.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/1_2526790_1787704273.ndjson",
-       "turns": 8
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 13,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/2_2495690_1787704086.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/2_2526735_1787704272.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/2_2594717_1787704534.ndjson",
+       "file": "outputs/e15_probes/v2_bjson_r1__prime_agent/turns/4_3027257_1787709934.ndjson",
        "turns": 0
       }
      ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 10,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/3_2495689_1787704086.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/3_2526601_1787704267.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/3_2594845_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 4,
-     "xl": 2,
-     "calls": 22,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/4_2594232_1787704534.ndjson",
-       "turns": 22
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/4_2495693_1787704086.ndjson",
-       "turns": 16
-      },
-      {
-       "file": "outputs/e15_probes/v2_bjson_r3__prime_agent/turns/4_2526522_1787704268.ndjson",
-       "turns": 15
-      }
-     ],
-     "rep": 3
+     "rep": 1
     }
    ],
    "aggregate": {
-    "n": 1,
-    "died": 1,
-    "single_axis": 1,
+    "n": 5,
+    "died": 2,
+    "single_axis": 2,
     "dlvl": [
-     3,
-     0
+     3.8,
+     1.02
     ],
     "xl": [
-     1,
-     0
+     1.6,
+     0.4
     ],
     "balrog": [
-     1.75,
-     0
+     2.22,
+     0.79
     ],
     "balrog_min": [
-     0.0,
-     0
+     0.77,
+     0.47
     ],
     "calls": [
-     15,
-     0
+     37.2,
+     10.76
     ]
    }
   },
@@ -3637,514 +1683,900 @@
      "provenance": {
       "tool_tier": "v2_json",
       "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
+      "tool_tier_commit": "ec0fa7d-dirty"
      }
     },
     {
      "rep": 2,
-     "state": "partial",
-     "provenance": {
-      "tool_tier": "v2_json",
-      "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
-     }
+     "state": "on request"
     },
     {
      "rep": 3,
-     "state": "partial",
+     "state": "on request"
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 5,
+     "xl": 2,
+     "calls": 93,
+     "balrog": 2.65,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/0_3164425_1787712266.ndjson",
+       "turns": 93
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 1,
+     "dlvl": 10,
+     "xl": 3,
+     "calls": 92,
+     "balrog": 12.56,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 0,
+     "stop": "agent_completed",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/1_3164431_1787712266.ndjson",
+       "turns": 92
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 2,
+     "dlvl": 3,
+     "xl": 2,
+     "calls": 38,
+     "balrog": 1.85,
+     "balrog_min": 1.75,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/2_3164429_1787712266.ndjson",
+       "turns": 38
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 5,
+     "xl": 2,
+     "calls": 77,
+     "status": "running",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/3_3219321_1787713155.ndjson",
+       "turns": 77
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 4,
+     "dlvl": 4,
+     "xl": 2,
+     "calls": 47,
+     "balrog": 2.12,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/4_3164422_1787712267.ndjson",
+       "turns": 47
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 4,
+    "died": 3,
+    "single_axis": 0,
+    "dlvl": [
+     5.5,
+     1.55
+    ],
+    "xl": [
+     2.25,
+     0.25
+    ],
+    "balrog": [
+     4.79,
+     2.59
+    ],
+    "balrog_min": [
+     1.88,
+     0.07
+    ],
+    "calls": [
+     67.5,
+     14.55
+    ]
+   }
+  },
+  "p1_gate_fix1": {
+   "desc": "P1 \u00b7 descent gate, FIXED interception (gate before dispatch, deficit>0 only)",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
      "provenance": {
-      "tool_tier": "v2_json",
+      "tool_tier": "p1_gate",
       "tool_tier_hash": "efebf98b10628caa",
-      "tool_tier_commit": "d94b5a7-dirty"
+      "tool_tier_commit": "211b3b2-dirty"
      }
     }
    ],
    "rollouts": [
     {
      "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 13,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 6,
+     "xl": 4,
+     "calls": 160,
+     "balrog": 3.54,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/0_2594598_1787704534.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/0_2526753_1787704269.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/0_2496478_1787704093.ndjson",
-       "turns": 8
+       "file": "outputs/e15_probes/p1_gate_fix1__prime_agent/turns/0_3466517_1787716745.ndjson",
+       "turns": 160
       }
      ],
      "rep": 1
     },
     {
      "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 15,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 10,
+     "xl": 5,
+     "calls": 192,
+     "balrog": 12.56,
+     "balrog_min": 2.91,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/1_2594787_1787704534.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/1_2496477_1787704093.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/1_2526125_1787704268.ndjson",
-       "turns": 10
+       "file": "outputs/e15_probes/p1_gate_fix1__prime_agent/turns/1_3466515_1787716745.ndjson",
+       "turns": 192
       }
      ],
      "rep": 1
     },
     {
      "seed": 2,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 27,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 8,
+     "xl": 4,
+     "calls": 242,
+     "balrog": 6.96,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/2_2594822_1787704534.ndjson",
-       "turns": 27
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/2_2496475_1787704093.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/2_2526685_1787704269.ndjson",
-       "turns": 9
+       "file": "outputs/e15_probes/p1_gate_fix1__prime_agent/turns/2_3466513_1787716745.ndjson",
+       "turns": 242
       }
      ],
      "rep": 1
     },
     {
      "seed": 3,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 17,
-     "status": "running",
-     "attempts": 3,
+     "dlvl": 10,
+     "xl": 4,
+     "calls": 165,
+     "balrog": 12.56,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/3_2594714_1787704534.ndjson",
-       "turns": 17
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/3_2526396_1787704269.ndjson",
-       "turns": 16
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/3_2496474_1787704093.ndjson",
-       "turns": 11
+       "file": "outputs/e15_probes/p1_gate_fix1__prime_agent/turns/3_3466512_1787716745.ndjson",
+       "turns": 165
       }
      ],
      "rep": 1
     },
     {
      "seed": 4,
-     "dlvl": 3,
+     "dlvl": 7,
      "xl": 1,
-     "calls": 23,
-     "status": "running",
-     "attempts": 3,
+     "calls": 145,
+     "balrog": 4.85,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
      "turn_files": [
       {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/4_2594798_1787704534.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/4_2526765_1787704267.ndjson",
-       "turns": 18
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r1__prime_agent/turns/4_2496476_1787704093.ndjson",
-       "turns": 17
+       "file": "outputs/e15_probes/p1_gate_fix1__prime_agent/turns/4_3466509_1787716745.ndjson",
+       "turns": 145
       }
      ],
      "rep": 1
-    },
-    {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 21,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/0_2594739_1787704534.ndjson",
-       "turns": 21
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/0_2526791_1787704271.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/0_2499271_1787704101.ndjson",
-       "turns": 8
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 21,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/1_2594673_1787704534.ndjson",
-       "turns": 21
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/1_2499270_1787704101.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/1_2526727_1787704271.ndjson",
-       "turns": 13
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 2,
-     "dlvl": 3,
-     "xl": 1,
-     "calls": 23,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/2_2594463_1787704534.ndjson",
-       "turns": 23
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/2_2499269_1787704101.ndjson",
-       "turns": 11
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/2_2526639_1787704268.ndjson",
-       "turns": 10
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 3,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 19,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/3_2594738_1787704533.ndjson",
-       "turns": 19
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/3_2499273_1787704101.ndjson",
-       "turns": 15
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/3_2526149_1787704268.ndjson",
-       "turns": 14
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 4,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 13,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/4_2499272_1787704101.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/4_2526111_1787704269.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r2__prime_agent/turns/4_2595351_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 2
-    },
-    {
-     "seed": 0,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 19,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/0_2594930_1787704534.ndjson",
-       "turns": 19
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/0_2526792_1787704274.ndjson",
-       "turns": 14
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/0_2500103_1787704110.ndjson",
-       "turns": 8
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 1,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 13,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/1_2500105_1787704110.ndjson",
-       "turns": 13
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/1_2526211_1787704271.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/1_2594817_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 2,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 20,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/2_2594922_1787704534.ndjson",
-       "turns": 20
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/2_2526419_1787704271.ndjson",
-       "turns": 12
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/2_2500101_1787704110.ndjson",
-       "turns": 9
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 3,
-     "dlvl": 1,
-     "xl": 1,
-     "calls": 19,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/3_2594920_1787704534.ndjson",
-       "turns": 19
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/3_2500104_1787704110.ndjson",
-       "turns": 9
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/3_2526745_1787704268.ndjson",
-       "turns": 9
-      }
-     ],
-     "rep": 3
-    },
-    {
-     "seed": 4,
-     "dlvl": 2,
-     "xl": 1,
-     "calls": 14,
-     "status": "running",
-     "attempts": 3,
-     "turn_files": [
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/4_2526605_1787704267.ndjson",
-       "turns": 14
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/4_2500102_1787704110.ndjson",
-       "turns": 10
-      },
-      {
-       "file": "outputs/e15_probes/v2_json_r3__prime_agent/turns/4_2594931_1787704534.ndjson",
-       "turns": 0
-      }
-     ],
-     "rep": 3
     }
    ],
-   "aggregate": {}
+   "aggregate": {
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
+    "dlvl": [
+     8.2,
+     0.8
+    ],
+    "xl": [
+     3.6,
+     0.68
+    ],
+    "balrog": [
+     8.09,
+     1.9
+    ],
+    "balrog_min": [
+     2.03,
+     0.52
+    ],
+    "calls": [
+     180.8,
+     17.08
+    ]
+   }
+  },
+  "p2_crisis_fix1": {
+   "desc": "P2 \u00b7 crisis directive, retreat-only text + arrival-norm pacing",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
+     "provenance": {
+      "tool_tier": "p2_crisis",
+      "tool_tier_hash": "efebf98b10628caa",
+      "tool_tier_commit": "211b3b2-dirty"
+     }
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 9,
+     "xl": 4,
+     "calls": 224,
+     "balrog": 9.77,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_fix1__prime_agent/turns/0_3526677_1787717586.ndjson",
+       "turns": 224
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 1,
+     "dlvl": 4,
+     "xl": 2,
+     "calls": 189,
+     "balrog": 2.12,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_fix1__prime_agent/turns/1_3467397_1787716761.ndjson",
+       "turns": 189
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 2,
+     "dlvl": 4,
+     "xl": 4,
+     "calls": 69,
+     "balrog": 2.42,
+     "balrog_min": 2.12,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_fix1__prime_agent/turns/2_3521254_1787717500.ndjson",
+       "turns": 69
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 5,
+     "xl": 1,
+     "calls": 58,
+     "balrog": 2.65,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_fix1__prime_agent/turns/3_3467395_1787716761.ndjson",
+       "turns": 58
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 4,
+     "dlvl": 5,
+     "xl": 3,
+     "calls": 70,
+     "balrog": 2.65,
+     "balrog_min": 2.08,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p2_crisis_fix1__prime_agent/turns/4_3467391_1787716761.ndjson",
+       "turns": 70
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
+    "dlvl": [
+     5.4,
+     0.93
+    ],
+    "xl": [
+     2.8,
+     0.58
+    ],
+    "balrog": [
+     3.92,
+     1.47
+    ],
+    "balrog_min": [
+     1.69,
+     0.43
+    ],
+    "calls": [
+     122,
+     35.0
+    ]
+   }
+  },
+  "p3_rollback_fix1": {
+   "desc": "P3 \u00b7 rollback + one-turn death window (window did NOT operate \u2014 see flag)",
+   "cells": [
+    {
+     "rep": 1,
+     "state": "done",
+     "provenance": {
+      "tool_tier": "p3_rollback",
+      "tool_tier_hash": "efebf98b10628caa",
+      "tool_tier_commit": "211b3b2-dirty"
+     }
+    }
+   ],
+   "rollouts": [
+    {
+     "seed": 0,
+     "dlvl": 5,
+     "xl": 4,
+     "calls": 75,
+     "balrog": 2.65,
+     "balrog_min": 2.42,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix1__prime_agent/turns/0_3469841_1787716777.ndjson",
+       "turns": 75
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 1,
+     "dlvl": 1,
+     "xl": 1,
+     "calls": 51,
+     "balrog": 0.0,
+     "balrog_min": 0.0,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix1__prime_agent/turns/1_3533463_1787717706.ndjson",
+       "turns": 51
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 2,
+     "dlvl": 8,
+     "xl": 5,
+     "calls": 132,
+     "balrog": 6.96,
+     "balrog_min": 2.91,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix1__prime_agent/turns/2_3507664_1787717290.ndjson",
+       "turns": 132
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 3,
+     "dlvl": 8,
+     "xl": 2,
+     "calls": 143,
+     "balrog": 6.96,
+     "balrog_min": 1.85,
+     "single_axis": 0,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix1__prime_agent/turns/3_3469845_1787716777.ndjson",
+       "turns": 143
+      }
+     ],
+     "rep": 1
+    },
+    {
+     "seed": 4,
+     "dlvl": 4,
+     "xl": 1,
+     "calls": 39,
+     "balrog": 2.12,
+     "balrog_min": 0.0,
+     "single_axis": 1,
+     "died": 1,
+     "stop": "game_over",
+     "status": "done",
+     "attempts": 1,
+     "turn_files": [
+      {
+       "file": "outputs/e15_probes/p3_rollback_fix1__prime_agent/turns/4_3469839_1787716777.ndjson",
+       "turns": 39
+      }
+     ],
+     "rep": 1
+    }
+   ],
+   "aggregate": {
+    "n": 5,
+    "died": 5,
+    "single_axis": 1,
+    "dlvl": [
+     5.2,
+     1.32
+    ],
+    "xl": [
+     2.6,
+     0.81
+    ],
+    "balrog": [
+     3.74,
+     1.39
+    ],
+    "balrog_min": [
+     1.44,
+     0.61
+    ],
+    "calls": [
+     88,
+     21.1
+    ]
+   }
   }
  },
  "disrupted": [
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c1_doors_r1__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c1_doors_r2__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c1_doors_r3__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d0025_r1__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 0
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d010_r1__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 0
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d010_r2__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 0
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d010_r3__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 0
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d025_r1__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d025_r2__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/burst1_stubs/c2_d025_r3__prime_agent",
+   "family": "burst1_stubs",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/p1_gate_r1__prime_agent",
+   "family": "disrupted",
    "turn_files": 9
   },
   {
    "dir": "outputs/e15_probes/disrupted/p1_gate_r1__prime_agent/p1_gate_r1__prime_agent",
+   "family": "p1_gate_r1__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/p1_gate_r2__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/p1_gate_r2__prime_agent/p1_gate_r2__prime_agent",
+   "family": "p1_gate_r2__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/p1_gate_r3__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/p1_gate_r3__prime_agent/p1_gate_r3__prime_agent",
+   "family": "p1_gate_r3__prime_agent",
    "turn_files": 5
   },
   {
+   "dir": "outputs/e15_probes/disrupted/tunnelquota/p1_gate_r1__prime_agent",
+   "family": "tunnelquota",
+   "turn_files": 0
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/tunnelquota/p2_crisis_r1__prime_agent",
+   "family": "tunnelquota",
+   "turn_files": 0
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/tunnelquota/p3_rollback_r1__prime_agent",
+   "family": "tunnelquota",
+   "turn_files": 0
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/tunnelquota/v1_b1_r1__prime_agent",
+   "family": "tunnelquota",
+   "turn_files": 0
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/tunnelquota/v2_bjson_r1__prime_agent",
+   "family": "tunnelquota",
+   "turn_files": 0
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/tunnelquota/v2_json_r1__prime_agent",
+   "family": "tunnelquota",
+   "turn_files": 0
+  },
+  {
    "dir": "outputs/e15_probes/disrupted/v1_b1_r1__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v1_b1_r1__prime_agent/v1_b1_r1__prime_agent",
+   "family": "v1_b1_r1__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v1_b1_r2__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v1_b1_r2__prime_agent/v1_b1_r2__prime_agent",
+   "family": "v1_b1_r2__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v1_b1_r3__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v1_b1_r3__prime_agent/v1_b1_r3__prime_agent",
+   "family": "v1_b1_r3__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_bjson_r1__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_bjson_r1__prime_agent/v2_bjson_r1__prime_agent",
+   "family": "v2_bjson_r1__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_bjson_r2__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_bjson_r2__prime_agent/v2_bjson_r2__prime_agent",
+   "family": "v2_bjson_r2__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_bjson_r3__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_bjson_r3__prime_agent/v2_bjson_r3__prime_agent",
+   "family": "v2_bjson_r3__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_json_r1__prime_agent",
+   "family": "disrupted",
    "turn_files": 11
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_json_r1__prime_agent/v2_json_r1__prime_agent",
+   "family": "v2_json_r1__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_json_r2__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_json_r2__prime_agent/v2_json_r2__prime_agent",
+   "family": "v2_json_r2__prime_agent",
    "turn_files": 5
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_json_r3__prime_agent",
+   "family": "disrupted",
    "turn_files": 10
   },
   {
    "dir": "outputs/e15_probes/disrupted/v2_json_r3__prime_agent/v2_json_r3__prime_agent",
+   "family": "v2_json_r3__prime_agent",
    "turn_files": 5
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c1_doors_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 22
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c1_doors_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 25
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c1_doors_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 20
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d0025_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 14
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d0025_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 14
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d0025_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 8
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d010_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d010_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d010_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d025_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d025_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/c2_d025_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/p1_gate_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 13
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/p1_gate_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 13
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/p1_gate_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/p2_crisis_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 5
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/p2_crisis_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 5
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/p2_crisis_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 5
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v1_b1_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v1_b1_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v1_b1_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v2_bjson_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 13
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v2_bjson_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v2_bjson_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v2_json_r1__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 20
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v2_json_r2__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 15
+  },
+  {
+   "dir": "outputs/e15_probes/disrupted/wrongdoc_e10doc/v2_json_r3__prime_agent",
+   "family": "wrongdoc_e10doc",
+   "turn_files": 20
   }
  ]
 }

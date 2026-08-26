@@ -1,0 +1,125 @@
+model = "z-ai/glm-5.2"
+num_tasks = 5
+num_rollouts = 1
+shuffle = false
+max_concurrent = 128
+verbose = false
+dry_run = false
+rich = false
+server = false
+push = false
+output_dir = "/root/nld/zombie-fix/outputs/e15_probes/p3_rollback_r1__prime_agent"
+
+[taskset]
+id = "nethack_v1"
+task_spec = "full_nle"
+variant = "BBOX_MIN"
+map_detail = "full"
+interface = "skill"
+character = "Val-hum-neu-fem"
+max_turns = 0
+trace_dir = "/root/nld/zombie-fix/outputs/e15_probes/p3_rollback_r1__prime_agent/turns"
+self_dispatch = true
+obs_mode = "push"
+max_skill_calls = 0
+max_parallel_skill_calls = 0
+parallel_batch_window_s = 0.5
+call_id_in_results = true
+colocated = false
+seed_workspace = true
+n_examples = 16
+seed = 0
+explicit_seeds = [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+]
+harness_id = "nethack_v1"
+
+[taskset.task]
+judges = []
+
+[taskset.env_args]
+skill_set = "np_core,request_map,search,rollback"
+record_step_frames = "true"
+describe_args = "true"
+explicit_seeds = "[0, 1, 2, 3, 4]"
+auto_dismiss = "false"
+netplay_telemetry = "false"
+melee_hints = "false"
+tool_tier = "p3_rollback"
+tool_tier_hash = "efebf98b10628caa"
+tool_tier_commit = "ec0fa7d-dirty"
+
+[taskset.env_args.tune]
+reveal_map = "1.0"
+
+[harness]
+id = "nethack-prime-agent"
+forward_env = []
+binary = "prime-agent"
+version = "0.3.3"
+install_dir = "/tmp/vf-prime-agent-e15-p3_rollback"
+path_prepend = "/usr/bin:/root/.local/bin"
+thinking = ""
+websearch = false
+context_window = 1048576
+capture_output = true
+sandbox = true
+sandbox_bwrap = "bwrap"
+skill_doc_coords = false
+allow_batching = false
+max_relaunches = 0
+
+[harness.runtime]
+type = "subprocess"
+
+[harness.env]
+
+[timeout]
+setup = 1800.0
+rollout = 7200.0
+
+[retries.rollout]
+max_retries = 2
+include = []
+exclude = []
+
+[interception]
+type = "server"
+
+[interception.tunnel]
+type = "custom"
+url = "http://127.0.0.1:35103"
+port = 35103
+
+[args]
+
+[extra_env_kwargs]
+
+[pool]
+type = "elastic"
+multiplex = 128
+
+[client]
+base_url = "https://api.pinference.ai/api/v1"
+api_key_var = "PRIME_API_KEY"
+type = "eval"
+
+[client.headers]
+X-Prime-Team-ID = "cmotasmp5005ppyp07dcoh50u"
+
+[sampling]

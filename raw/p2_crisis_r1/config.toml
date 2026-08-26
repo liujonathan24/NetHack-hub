@@ -63,7 +63,7 @@ melee_hints = "false"
 crisis_directive = "on"
 tool_tier = "p2_crisis"
 tool_tier_hash = "efebf98b10628caa"
-tool_tier_commit = "d94b5a7"
+tool_tier_commit = "ec0fa7d-dirty"
 
 [taskset.env_args.tune]
 reveal_map = "1.0"
@@ -100,8 +100,12 @@ include = []
 exclude = []
 
 [interception]
-type = "elastic"
-multiplex = 32
+type = "server"
+
+[interception.tunnel]
+type = "custom"
+url = "http://127.0.0.1:35102"
+port = 35102
 
 [args]
 
