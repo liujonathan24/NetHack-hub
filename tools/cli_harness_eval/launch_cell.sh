@@ -549,6 +549,18 @@ fi
 
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
+# EXTRA_EVAL_FLAGS: whitespace-separated eval-CLI flags appended LAST (they win
+# on duplicate dotted paths). Added for the localhost interception override
+# (--interception.tunnel.type custom ...): the default prime tunnel counts
+# against a 32-tunnel team quota, and quota exhaustion killed whole cells with
+# HarnessError at boot (E15 r1 groups 1-2, 2026-08-26). Infra-transport only —
+# never put experiment factors here; those belong in the tier registry.
+if [ -n "${EXTRA_EVAL_FLAGS:-}" ]; then
+  read -r -a _EXTRA_EVAL <<< "${EXTRA_EVAL_FLAGS}"
+  OVERRIDES+=("${_EXTRA_EVAL[@]}")
+  echo "[launch_cell] extra eval flags: ${EXTRA_EVAL_FLAGS}"
+fi
+
 exec "${EVAL_BIN}" @ "${CFG}" \
   --num_tasks "${N}" \
   --output_dir "${OUT_ABS}" \
