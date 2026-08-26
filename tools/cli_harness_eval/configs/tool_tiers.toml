@@ -28,7 +28,7 @@
 skill_set = "np_core,request_map,search"
 auto_dismiss = "false"
 variant = "BBOX_MIN"
-max_calls = 200
+max_calls = 0
 seeds = [0, 1, 2, 3, 4]
 model = "z-ai/glm-5.2"
 character = "Val-hum-neu-fem"
