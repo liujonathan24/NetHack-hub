@@ -90,8 +90,8 @@ def _interrupted(obs: str) -> bool:
     return bool(_base.messages(obs))
 
 
-async def move_to(x: int, y: int, max_steps: int = 60,
-                  max_replans: int = 8) -> str:
+async def move_to(x: int, y: int, max_steps: int = 30,
+                  max_replans: int = 2) -> str:
     """Walk to (x, y) in the MAP frame. Plan, walk, re-plan on drift, stop on
     interruption.
 
@@ -153,7 +153,7 @@ def frontiers(obs: str) -> list[tuple[int, int]]:
     return out
 
 
-async def explore(max_moves: int = 6) -> str:
+async def explore(max_moves: int = 3) -> str:
     """Walk to the nearest unexplored edge, up to `max_moves` times.
 
     Stops early when there is no reachable frontier left -- which usually means
