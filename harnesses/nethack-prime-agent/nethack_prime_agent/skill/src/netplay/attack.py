@@ -21,7 +21,7 @@ def _monster_at(obs: str, x: int, y: int):
 
 
 async def attack(x: int, y: int, max_swings: int = 10) -> str:
-    """Melee the monster at (x, y): approach, then bump-attack.
+    """Melee the monster at (x, y): approach, pursue if it moves, bump-attack.
 
     Fails with a message when no monster is there (it moved or died), when no
     adjacent tile is reachable, or after `max_swings` swings. Pets are attacked
@@ -30,7 +30,20 @@ async def attack(x: int, y: int, max_swings: int = 10) -> str:
     obs = await _base.screen()
     for _ in range(max_swings):
         if _monster_at(obs, x, y) is None:
-            return f"netplay.attack: there is no monster at ({x}, {y}).\n{obs}"
+            # Pursue: the target may have stepped. Re-acquire the nearest
+            # monster within 2 tiles of where it was (np_melee_attack pursued
+            # its target rather than failing on the first step).
+            best = None
+            for m in _base.monsters(obs):
+                pos = tuple(m.get("pos", ()))
+                if len(pos) != 2:
+                    continue
+                d = max(abs(pos[0] - x), abs(pos[1] - y))
+                if d <= 2 and (best is None or d < best[0]):
+                    best = (d, pos)
+            if best is None:
+                return f"netplay.attack: there is no monster at ({x}, {y}).\n{obs}"
+            x, y = best[1]
         here = _base.position(obs)
         if here is None:
             return obs

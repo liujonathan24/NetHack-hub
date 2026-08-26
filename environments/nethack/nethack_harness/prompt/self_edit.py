@@ -20,8 +20,9 @@ from __future__ import annotations
 SELF_EDIT_BLOCK = (
     "\n=== PERSISTING WHAT YOU LEARN ===\n"
     "You have a continual-harness store that carries into FUTURE games. What you\n"
-    "write here is the only thing that outlives this episode; nothing else you do\n"
-    "is remembered. From the kernel (these are synchronous -- do NOT await them):\n"
+    "write here outlives this episode and is rendered into the next player's\n"
+    "prompt. (In a code arm, your netplay edits persist separately, on their own\n"
+    "channel.) From the kernel (these are synchronous -- do NOT await them):\n"
     "  rlm.get_harness_state(global_=True)                     # read what is known\n"
     "  rlm.harness.create_memory(title=..., content=..., global_=True)\n"
     "  rlm.harness.update_memory(id=..., title=..., content=..., global_=True)\n"

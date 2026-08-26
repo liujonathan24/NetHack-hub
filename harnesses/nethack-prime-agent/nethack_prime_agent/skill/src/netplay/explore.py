@@ -38,8 +38,12 @@ def frontiers(obs: str) -> list[tuple[int, int]]:
     return out
 
 
-async def explore(max_moves: int = 3) -> str:
-    """Walk to the nearest unexplored edge, up to `max_moves` times.
+async def explore(max_moves: int = 40) -> str:
+    """Auto-explore: walk frontier to frontier until the level is revealed.
+
+    Keeps walking to the nearest unexplored edge, up to `max_moves` legs
+    (the retired np_explore_level's contract), and interrupts itself when
+    something notable happens -- combat, prompts, HP drops.
 
     Stops early when there is no reachable frontier left -- which usually
     means the level's remaining exits are behind a closed door or a hidden

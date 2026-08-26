@@ -35,7 +35,10 @@ row 0 is the FIRST row of the `=== MAP ===` block, the same frame `Pos:` and all
 screen — that yields an off-by-one that silently misses every target.
 
 ```python
-await nethack.request_map()                 # Full map + surroundings. Costs no game time.
+await nethack.request_map()                 # Show the FULL map + surroundings in this
+                                            # turn's observation. The map is otherwise
+                                            # withheld — call this whenever you need to
+                                            # see the level. Costs no game time.
 await nethack.np_press_key(key=">")         # Press ONE key, exactly as typed at the
                                             # NetHack prompt. Letters, digits, punctuation
                                             # like > < , . # $, plus "ESC", "SPACE", "ENTER".
@@ -65,8 +68,9 @@ Descending is `>` while standing on a `>` staircase; ascending is `<` on a `<`.
 import netplay
 
 print(await netplay.move_to(30, 7))   # walk to a coordinate: plan, step, re-plan
-print(await netplay.explore())        # walk to the nearest unexplored edge
-print(await netplay.attack(30, 7))    # approach and melee the monster there
+print(await netplay.explore())        # auto-explore: frontier to frontier until
+                                      # the level is revealed or something happens
+print(await netplay.attack(30, 7))    # approach, pursue, and melee that monster
 ```
 
 That is the whole seed: `move.py` (`move_to`, the BFS route finder, the

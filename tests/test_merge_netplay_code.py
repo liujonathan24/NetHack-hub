@@ -106,10 +106,10 @@ def test_same_region_edits_conflict_and_the_later_branch_is_dropped(canonical):
     base = _head_branch(canonical)
     original = (SEED / "explore.py").read_text()
     _branch_with(canonical, "agent-7", "explore.py",
-                 original.replace("max_moves: int = 3", "max_moves: int = 12"))
+                 original.replace("max_moves: int = 40", "max_moves: int = 12"))
     _git(canonical, "checkout", "-q", base)
     _branch_with(canonical, "agent-9", "explore.py",
-                 original.replace("max_moves: int = 3", "max_moves: int = 1"))
+                 original.replace("max_moves: int = 40", "max_moves: int = 1"))
     _git(canonical, "checkout", "-q", base)
 
     report = mnc.merge(canonical, ["agent-7", "agent-9"], round_tag="round-1")
