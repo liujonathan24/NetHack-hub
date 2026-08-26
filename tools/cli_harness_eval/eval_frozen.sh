@@ -89,7 +89,7 @@ mkdir -p "$OUT"; cp "$FINAL/FROZEN.json" "$OUT/evaluated_snapshot.json"
 env TOOL_TIER="$EVAL_TIER" SEEDS="$SEEDS" INSTALL_DIR="$INSTALL_DIR" \
     CONTINUAL_HARNESS="$CH" CONTINUAL_RUN_ID="heldout-${RUN}" \
     CONTINUAL_HARNESS_MODE=shared-ro \
-    "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$OUT" 200 "$N"
+    "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$OUT" "${MAX_CALLS:-0}" "$N"
 rc=$?
 
 AFTER="$(sha256sum "$CH/harness_state.json" | cut -c1-16)"
