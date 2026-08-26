@@ -187,7 +187,7 @@ echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH (provider=$PR
 mkdir -p "$ORCH_DIR/tmp"
 TMPDIR="$ORCH_DIR/tmp" \
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
-PRIME_AGENT_KERNEL_VENV="${PRIME_AGENT_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
+PRIME_AGENT_KERNEL_VENV="${ORCH_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
   prime-agent --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
   > "$ROUND_OUT/orchestrator.stdout.txt" 2> "$ROUND_OUT/orchestrator.stderr.txt"
 rc=$?
