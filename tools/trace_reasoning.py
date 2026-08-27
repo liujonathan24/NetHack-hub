@@ -47,14 +47,32 @@ or several skills. Guessing a 1:1 mapping there would attach the wrong
 paragraph to the wrong move, which is worse than an empty string because it
 looks right.
 
-Two strategies are tried, strongest first, and if neither holds NOTHING is
+Four strategies are tried, strongest first, and if none holds NOTHING is
 written except an explicit `reasoning.available = false` carrying the reason:
 
+  0. `call_id` -- the correlation-id barrier (`tools/trace_align.py`): the
+     harness stamps a per-rollout monotonic id on every turn record AND echoes
+     `[call#N]` into the result payload, which flows back through the model
+     transcript verbatim in every scaffold. When present, the join is exact by
+     construction -- and it is the only strategy that survives the
+     `ipython`-mediated arms, where one assistant turn issues many game calls.
+     (`"call_id"` is an addition to the engine's documented
+     `TS.REASONING_ALIGNMENTS` vocabulary -- doc-only; nothing validates the
+     value -- noted for the engine repo rather than edited here.)
   1. `tool_call_sequence` -- the assistant turns' game tool-call names, in
      order, are walked against the records' dispatched names. Every record must
      find its turn. This is evidence, not an assumption.
   2. `ordinal` -- used only when the two channels hold the same number of
      entries AND no record exposes a dispatched name to check against.
+  3. `timestamp` -- the recovery path for PRE-BARRIER data: runs written before
+     the call-id barrier (`tools/trace_align.py`) carry no `[call#N]` markers,
+     so strategy 0 cannot fire, and the ipython arms defeat 1 and 2. But every
+     record has a wall-clock stamp and every node a timestamp, so each record
+     maps to the last assistant turn emitted at or before it, and a silent move
+     is carried back to the plan it is still executing. Approximate at the
+     boundary (a move's `t_wall` is stamped at exit, after the model may have
+     moved on), so it is the weakest strategy -- but it recovers the reasoning
+     of the 200+ existing trace files the barrier came too late for.
 
 Validated against ground truth: on `outputs/pilot_reveal` (control arm, 4
 rollouts x 99 turns) the recovered text equals the `assistant_message` the
@@ -75,6 +93,12 @@ try:  # the engine package is the schema's home; the hub imports it
     from nethack_core import trace_schema as TS
 except ImportError:  # pragma: no cover - only when the engine is not on the path
     TS = None
+
+from tools.trace_align import (
+    align_records_to_turns_by_call_id,
+    content_text,
+    marker_call_ids,
+)
 
 __all__ = [
     "MCP_TOOL_PREFIXES",
@@ -140,25 +164,56 @@ def assistant_turns_from_nodes(nodes) -> list[dict]:
     reasoning about this turn.
     """
     turns = []
+    # First-occurrence rule for marker harvesting. History compaction rewrites
+    # older user messages every turn, so `prepare_turn` re-commits the whole
+    # rewritten prefix as NEW (unsampled) nodes -- measured on a 10-turn
+    # harness rollout: 91 nodes, with `[call#1]`'s message appearing twice,
+    # the copy sitting after a much later assistant turn. The `sampled` flag
+    # cannot gate these (user/tool nodes are never sampled), but the design
+    # guarantees the FIRST appearance of a marker directly follows the turn
+    # that issued the call; every later appearance is a replayed prefix.
+    seen_call_ids: set = set()
     for node in nodes or []:
         sampled = node.get("sampled") if isinstance(node, dict) else getattr(node, "sampled", None)
-        if not sampled:
-            continue
         message = node.get("message") if isinstance(node, dict) else getattr(node, "message", None)
         if message is None:
             continue
         role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
-        if role != "assistant":
+        if sampled and role == "assistant":
+            raw_calls = (message.get("tool_calls") if isinstance(message, dict)
+                         else getattr(message, "tool_calls", None)) or []
+            names = [n for n in (_call_name(c) for c in raw_calls) if n]
+            turns.append({
+                "content": _msg_field(message, "content"),
+                "reasoning_content": _msg_field(message, "reasoning_content"),
+                "tool_names": names,
+                "game_tool_names": [n for n in names if n.lower() not in NON_GAME_TOOLS],
+                # Correlation ids harvested below from the messages that FOLLOW
+                # this turn -- the `[call#N]` markers the harness echoes into
+                # every result payload (`tools/trace_align.py`).
+                "result_call_ids": [],
+                # Node wall-clock stamp for the `timestamp` fallback (strategy
+                # 3), the only join left for pre-barrier data. Lives on the
+                # node, not the message.
+                "timestamp": (node.get("timestamp") if isinstance(node, dict)
+                              else getattr(node, "timestamp", None)),
+            })
             continue
-        raw_calls = (message.get("tool_calls") if isinstance(message, dict)
-                     else getattr(message, "tool_calls", None)) or []
-        names = [n for n in (_call_name(c) for c in raw_calls) if n]
-        turns.append({
-            "content": _msg_field(message, "content"),
-            "reasoning_content": _msg_field(message, "reasoning_content"),
-            "tool_names": names,
-            "game_tool_names": [n for n in names if n.lower() not in NON_GAME_TOOLS],
-        })
+        # Any other message -- a tool result over MCP, the env-response user
+        # message on the harness route, ipython's printed output -- may carry
+        # `[call#N]` markers. They belong to the assistant turn that PRECEDED
+        # the message, which is the turn that issued those calls. Markers seen
+        # before any sampled assistant turn are prompt-supplied context (a
+        # replayed prefix) and are deliberately dropped, same rule as the
+        # `sampled` gate above.
+        if turns:
+            content = (message.get("content") if isinstance(message, dict)
+                       else getattr(message, "content", None))
+            ids = [i for i in marker_call_ids(content_text(content))
+                   if i not in seen_call_ids]
+            if ids:
+                seen_call_ids.update(ids)
+                turns[-1]["result_call_ids"].extend(ids)
     return turns
 
 
@@ -207,6 +262,17 @@ def align_records_to_turns(records: list[dict], turns: list[dict]):
             "(the harness's model calls were not intercepted)"
         )
 
+    # Strongest strategy first: the call-id barrier (`tools/trace_align.py`).
+    # When it holds it is exact by construction -- the id was assigned by the
+    # process that served the call and echoed through the transcript -- and it
+    # is the only strategy that survives ipython-mediated arms, where one
+    # assistant turn issues many game calls and no name ever matches. Absent
+    # ids (pre-barrier traces) or a broken echo fall through to the name-walk
+    # below, unchanged.
+    by_id, id_mode, id_reason = align_records_to_turns_by_call_id(records, turns)
+    if id_mode == "call_id":
+        return by_id, "call_id", ""
+
     rec_names = [record_call_name(r) for r in records]
     if all(n is not None for n in rec_names):
         mapping: list[int | None] = []
@@ -240,11 +306,78 @@ def align_records_to_turns(records: list[dict], turns: list[dict]):
 
     if len(turns) == len(records):
         return list(range(len(records))), "ordinal", ""
+
+    # 3. timestamp -- the pre-barrier recovery path. No call-id markers, the
+    #    ipython arms defeat the name walk, and the counts disagree, so the
+    #    exact strategies are all out. But a skill is applied after the
+    #    completion that issued it, so a record maps to the last assistant turn
+    #    whose node timestamp is at or before the record's wall-clock time; a
+    #    silent move is then carried back to the plan it is still executing.
+    #    Weakest strategy (exit-time stamps make it boundary-approximate), tried
+    #    last, but it is the only thing that recovers a pre-barrier ipython run.
+    ts_mapping = _timestamp_alignment(records, turns)
+    if ts_mapping is not None:
+        return ts_mapping, "timestamp", ""
+
     return [None] * len(records), None, (
-        f"{seq_reason}; and the two channels disagree on length "
-        f"({len(records)} turn records vs {len(turns)} assistant turns), so "
-        "positional pairing would attach the wrong message to the wrong move"
+        f"call-id join unavailable ({id_reason}); {seq_reason}; the two "
+        f"channels disagree on length ({len(records)} turn records vs "
+        f"{len(turns)} assistant turns); and no usable timestamps were found to "
+        "pair them by, so positional pairing would attach the wrong message to "
+        "the wrong move"
     )
+
+
+def _as_float(value):
+    """A finite float, or None -- and never a bool (`True` is not a timestamp)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _timestamp_alignment(records: list[dict], turns: list[dict]):
+    """Map each record to the assistant turn that governs it, by wall clock.
+
+    First pair each record to the LAST completion emitted at or before it (its
+    issuing turn); then carry the attribution back to the last completion at or
+    before that one which actually SAID something -- because the model narrates
+    a plan once and executes several silent moves under it, so the governing
+    "why" for a silent move is the plan it is still carrying out. Several moves
+    sharing one narration is the honest picture, not a bug.
+
+    Returns the mapping, or `None` when the clocks cannot be trusted -- a
+    missing stamp on either side, either sequence going backwards, or a first
+    move that predates the first completion (the clocks are then not
+    comparable). Refusing is the same contract as the exact strategies: a wrong
+    pairing is worse than an explicit gap.
+    """
+    anchors = [_as_float(r.get("t_wall")) for r in records]
+    stamps = [_as_float(t.get("timestamp")) for t in turns]
+    if any(a is None for a in anchors) or any(s is None for s in stamps):
+        return None
+    if any(anchors[i] > anchors[i + 1] for i in range(len(anchors) - 1)):
+        return None
+    if any(stamps[i] > stamps[i + 1] for i in range(len(stamps) - 1)):
+        return None
+    if anchors[0] < stamps[0]:
+        return None
+    has_text = [bool((t.get("content") or "").strip()
+                     or (t.get("reasoning_content") or "").strip()) for t in turns]
+    last_text_at = [None] * len(turns)
+    seen = None
+    for k in range(len(turns)):
+        if has_text[k]:
+            seen = k
+        last_text_at[k] = seen
+    mapping: list[int | None] = []
+    j = 0
+    for a in anchors:
+        while j + 1 < len(turns) and stamps[j + 1] <= a:
+            j += 1
+        mapping.append(last_text_at[j] if last_text_at[j] is not None else j)
+    return mapping
 
 
 # --------------------------------------------------------------------------- #

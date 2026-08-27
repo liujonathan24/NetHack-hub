@@ -1,0 +1,108 @@
+# Tool-tier registry for reproducible cells (docs/CONTINUAL_HARNESS_BASELINE.md).
+#
+# A cell declares ONE tier; the launcher expands it to the flags below and the
+# resolved values land in the cell's output config.toml. all-off == the tree as
+# the E10 baseline measured it; all-on == current HEAD behaviour.
+#
+# [base] -- frozen. The E10 reference surface (np_core + request_map + search
+#   on the honest harness). Reference numbers: median 3.54 / mean 5.34 /
+#   14 of 15 died / ceiling dl11 (outputs/e10_baseline/).
+# [human] -- the manually engineered post-baseline fixes (PR #29/#31):
+#   E12 measured repeat-cluster budget 67% -> 35%, outcomes unchanged.
+#   Additions to this tier require a commit + a measured cell.
+# [continual] -- reserved for tools/edits the continual harness generates.
+#   MUTATES over time: every continual run must pin this file's git commit and
+#   the generated-code commit in its output config.toml, and is its own arm --
+#   never pooled with base or human.
+
+# ---------------------------------------------------------------------------
+# THE CELL CONTRACT. Emitted for EVERY tier, because a tier selects which
+# post-baseline fixes are on -- not what game is played. Without this,
+# `TOOL_TIER=base` was a pure no-op: it expanded to nothing, so a cell inherited
+# configs/prime_agent.toml (skill_set=netplay_true, variant=B0, 150 calls, 16
+# seeds) and was wrong on four factors while calling itself the E10 baseline.
+#
+# These are the values outputs/e10_baseline/ actually ran. Changing any of them
+# is a new baseline experiment with re-measured reference numbers, not an edit.
+[contract]
+skill_set = "np_core,request_map,search"
+auto_dismiss = "false"
+variant = "BBOX_MIN"
+# 0 = UNCAPPED: every rollout plays until the character dies, ascends, or NLE
+# truncates. Previously 200, which turned out to censor the thing we measure:
+# in E13-v2 round 2, three of five rollouts were still ALIVE when the budget ran
+# out (at dlvl 6, 8 and 9 and still descending), so `max_dlvl_reached` was a
+# lower bound, not a score -- and because round 1 had only one such rollout and
+# round 2 had three, the bias fell unevenly across the very rounds being
+# compared. Deaths halved 4 -> 2 while mean depth looked flat; on the games that
+# actually finished it was 8.00 -> 10.00.
+#
+# Backstops that remain, so this cannot run away: NLE's own
+# max_episode_steps=100_000 in-game steps, and [timeout] rollout=7200s per
+# rollout in the arm config.
+max_calls = 0
+seeds = [0, 1, 2, 3, 4]
+model = "z-ai/glm-5.2"
+character = "Val-hum-neu-fem"
+task_spec = "full_nle"
+# Harness-side factors the baseline also fixed. allow_batching is load-bearing:
+# with it on, the no-batch rule is stripped from the served document AFTER the
+# frozen-doc hash check, so a cell labelled [base] served 4753 bytes where E10
+# served 4829 -- byte-fidelity defeated with no error. max_relaunches is called
+# "ARM SYMMETRY, load-bearing" in prime_agent.toml and is absent from
+# prime_agent_b80.toml, where it defaults to 5.
+allow_batching = false
+max_relaunches = 0
+max_parallel_skill_calls = 0
+
+[contract.tune]
+# Dropped by the E9/E10-era launchers, which is what made "control" cells run
+# fog'd. Its absence is invisible in the launch command and visible only in the
+# resolved config.toml -- hence the read-back in preflight.
+reveal_map = 1.0
+
+[contract.code_pin]
+# The tree state the reference numbers describe.
+branch = "exp/e8-planning-guidance"
+honesty_pass = ["fd8aa13", "9b8d5a4"]
+launcher_restore = "0458275"
+
+[contract.reference]
+runs = "outputs/e10_baseline/NPCORE_v3H_r{1,2,3}__prime_agent"
+median_balrog = 3.54
+mean_balrog = 5.34
+died = "14/15"
+ceiling_dlvl = 11
+
+[base]
+# env-side (ENV_ARGS -> tool_flags)
+netplay_telemetry = false
+melee_hints = false
+# harness-side (PrimeAgentHarnessConfig)
+skill_doc_coords = false
+
+[human]
+netplay_telemetry = true
+melee_hints = true
+skill_doc_coords = true
+
+[continual]
+# STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
+# store the agent writes for itself, so its floor must be the same floor the
+# denominator uses -- otherwise a gain could be the human fixes rather than the
+# agent's own edits. All three fix-flags stay false here, exactly as in [base];
+# what differs is that a shared continual-harness store is mounted.
+#
+# The store is per-EXPERIMENT, not global: several continual experiments run
+# side by side (different reflection prompts), each with its own run id, store
+# and output tree. Path and id are passed by the launcher (CONTINUAL_HARNESS /
+# CONTINUAL_RUN_ID) because they vary per run and cannot be named statically
+# here; both, plus the reflection-prompt hash, are pinned into every cell's
+# config.toml alongside tool_tier.
+#
+# Every experiment begins with an EMPTY store -- run_e13.sh refuses to start
+# round 0 against a non-empty one -- so "starts from the base set of skills" is
+# enforced, not merely intended.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false

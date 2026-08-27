@@ -79,8 +79,8 @@ FULL_GAME_SPEC = GameSpec(
     # model sitting next to a glyph key that says "`<` stairs UP (NOT down)" it
     # reads as an instruction to go UP, which is the opposite of the task.
     description=(
-        "Descend as deep into the dungeon as you can and survive; ultimately "
-        "win the game (retrieve the Amulet of Yendor and escape)."
+        "Win the game: retrieve the Amulet of Yendor and escape. Descending "
+        "is how you progress; surviving is what lets you keep progressing."
     ),
     success_criterion="ascended",
 )
@@ -243,6 +243,7 @@ from nethack_harness.helpers import (
     _continual_reset,
     _write_trace_entry,
     TurnRecorder,
+    append_call_marker,
     build_tool_result,
     _drop_before_last_belief,
     _refinement_directive,
@@ -468,6 +469,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
         # "descend_pacing"). Prompt-only; published tool schemas untouched.
         mechanic_hints: str = "",
+        # E9b awareness probe: comma list of per-turn blocks ("ask", "verify",
+        # "map"). "off"/"" leaves every arm byte-identical. Prompt-only.
+        # docs/EXPERIMENT_E9.md, prompt/reflection.py.
+        reflect: str = "off",
         # Resume-from-trace: a prior cell dir (or its `turns/` dir). At
         # setup_state the turn file for this rollout's seed is replayed
         # byte-for-byte through the freshly seeded engine, so the agent starts
@@ -480,10 +485,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # note with the old session's tail. Replay integrity is verified
         # against the recorded end state and fails loudly on divergence.
         resume_from: Optional[str] = None,
+        # Tool-call correlation id echo (see helpers.CALL_ID_MARKER_FORMAT).
+        # The id is ALWAYS assigned server-side and stamped on the turn record;
+        # this knob only controls whether the `[call#N]` marker is appended to
+        # the result payload the model sees. Default on -- the marker is what
+        # makes the two log streams joinable. Turn off to run a cell whose
+        # result payloads are byte-identical to pre-barrier cells (the marker
+        # costs a few result tokens per call). The published tool schemas are
+        # never touched either way.
+        call_id_in_results: bool = True,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
+        self.call_id_in_results = bool(call_id_in_results)
         self._resume_from = resume_from or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
@@ -503,6 +518,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
+        # E9b: append the reflection prompt to every turn. Off (default) leaves
+        # every arm byte-identical. Any truthy value enables it.
+        self.reflect = str(reflect or "").strip().lower() not in (
+            "", "off", "false", "0", "no")
         self._setup_tune = setup_tune
         self._setup_modify = setup_modify
         self._setup_level_blob = setup_level_blob
@@ -687,6 +706,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["scout_delta"] = 0
         state["scout_reward_total"] = 0.0
         state["max_dlvl_reached"] = 1
+        state["max_xp_level"] = 1
         state["descent_count"] = 0
         state["raw_obs"] = obs
         state["structured_obs"] = shape_observation(obs, character)
@@ -992,7 +1012,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         )
         warning = detect_blocking_ui(
             state.get("raw_obs"), published_tools=state.get("_published_tools"))
-        return f"{warning}\n{obs_text}" if warning else obs_text
+        text = f"{warning}\n{obs_text}" if warning else obs_text
+        # E9b awareness probe: append the reflection questions to every turn.
+        if self.reflect:
+            from nethack_harness.prompt.reflection import REFLECT_BLOCK
+            text = f"{text}\n\n{REFLECT_BLOCK}"
+        return text
 
     async def _apply_tool_call(self, state: vf.State, skill_name: str, skill_args: dict):
         """Instrument one LM turn, run it, and write exactly one trace record.
@@ -1024,6 +1049,19 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # without a flag the caller could forget to pass.
         parsed_calls = state.get("_last_tool_calls")
         route = "harness" if parsed_calls is not None else "mcp"
+        # Tool-call correlation id -- the barrier that aligns the two log
+        # streams (see helpers.CALL_ID_MARKER_FORMAT for the design). Assigned
+        # HERE, at the single execution path every route shares, so the
+        # numbering is identical whether the call arrived from the in-process
+        # loop, over MCP, or from inside an ipython block. One id per
+        # dispatched call == one id per turn record; the end-of-rollout flush
+        # (a call that was never dispatched) explicitly carries None instead.
+        call_id = state["_trace_call_seq"] = int(state.get("_trace_call_seq", 0)) + 1
+        # The transport's own id, when this process can see one (OpenAI-style
+        # `tool_calls[].id` on the harness route). Corroboration only -- the
+        # MCP and code-mode transports never surface one to the server, which
+        # is exactly why the counter above is the primary key.
+        native_call_id = _native_tool_call_id(parsed_calls)
         state["_trace_lm_turn"] = int(state.get("_trace_lm_turn", 0)) + 1
         tt = state["_turn_trace"] = {
             "status": None, "action_indices": [], "reward": 0.0, "feedback": "",
@@ -1033,6 +1071,16 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         with rec:
             content = await self._apply_tool_call_inner(state, skill_name, skill_args)
         clock_after = _game_clock(state)
+        # Echo the correlation id into the RESULT payload -- the one channel
+        # that reaches the model transcript verbatim in every scaffold (an MCP
+        # tool message, or printed output inside an ipython block). Appended
+        # BEFORE the trace write below so `rendered_user_message` records
+        # exactly what the model saw. The published tool schemas are never
+        # touched; this is payload-side only, and `call_id_in_results=False`
+        # restores byte-identical result payloads for token-matched cells
+        # (the game-side stamp on the record stays either way).
+        if self.call_id_in_results:
+            content = append_call_marker(content, call_id)
         obs_text = content_to_text(content)
         # Stash what the model was last SHOWN, so the end-of-rollout flush (the
         # final, never-applied tool call) can record the observation that call
@@ -1046,6 +1094,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             clock_before=clock_before, clock_after=clock_after,
             engine_steps=len(rec.actions), reward=tt.get("reward") or 0.0,
             game_message=rec.messages[-1] if rec.messages else "",
+            call_id=call_id, native_call_id=native_call_id,
+            call_id_echoed=self.call_id_in_results,
         )
         # On the MCP route there is no parsed assistant message to read the call
         # out of, but the call itself was handed to us -- so synthesize the same
@@ -1269,6 +1319,34 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             or (skill_name == "np_press_key"
                 and str((skill_args or {}).get("key", "")).strip() == ">")
         )
+        # E9a hard enforcement: descent is REFUSED while underleveled, with no
+        # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
+        # E8a's advice (read and ignored) into a constraint, to test whether
+        # underleveling is CAUSAL for death or merely correlated: if forcing the
+        # model to level before descending improves survival, the reasoning->
+        # policy gap is the bottleneck; if it dies anyway (attrition at shallow
+        # depth), the gap is deeper. Ascent is never gated. docs/EXPERIMENT_E9.md.
+        if self.descent_gate == "enforce" and _is_descent:
+            try:
+                st_now = (state["structured_obs"].status or {})
+                dlvl = int(st_now.get("depth") or 1)
+                xl = int(st_now.get("experience_level") or 1)
+            except Exception:
+                dlvl, xl = 1, 1
+            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+            norm = norm_xl_for_leaving(dlvl)
+            if xl < norm:
+                gate = (f"[descent BLOCKED: you are XL {xl} on Dlvl {dlvl}. The "
+                        f"stairs down stay locked until you reach XL {norm}. "
+                        f"Gain experience on this level first, then descend.]")
+                tt = state["_turn_trace"]
+                tt["status"] = "blocked"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+            # XL >= norm: leveled enough -- allow the descent to proceed.
+
         if self.descent_gate in ("norm", "directive") and _is_descent:
             try:
                 st_now = (state["structured_obs"].status or {})
@@ -1613,6 +1691,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Tracks deepest (DL, XL) achieved as an empirical-ish P(ascend).
         from nethack_harness.prompt.balrog import progression_score
         s = state["structured_obs"].status
+        # Track the DEEPEST experience level, the same way max_dlvl_reached
+        # tracks the deepest dungeon level. BALROG scores the (Dlvl, XL) pair,
+        # and reading XL off the final observation would report whatever the
+        # character happened to be when it died rather than its high-water mark.
+        state["max_xp_level"] = max(
+            int(state.get("max_xp_level") or 1), int(s.get("experience_level", 1) or 1)
+        )
         state["balrog_progression"] = progression_score(
             state["max_dlvl_reached"], s.get("experience_level", 1)
         )
@@ -2012,6 +2097,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 status="not_applied" if calls else "no_tool_call",
                 clock_before=_game_clock(state), clock_after=_game_clock(state),
                 engine_steps=0, reward=0.0, game_message="",
+                # This record was produced by NO dispatched call: nothing was
+                # served, nothing was echoed, so there is no correlation id --
+                # explicitly None, never a fabricated number. The transport's
+                # own id is still recorded from the parsed call when present.
+                call_id=None, native_call_id=_native_tool_call_id(calls),
+                call_id_echoed=False,
             )
             _write_trace_entry(
                 self, state, assistant, calls, [], 0.0,
@@ -2069,6 +2160,21 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
 
 # ---------- frontier blacklist (kept here: tests monkeypatch these on the nethack module) ----------
+
+def _native_tool_call_id(calls):
+    """The transport's own id for the first parsed tool call, if visible.
+
+    Handles both shapes the harness sees (OpenAI-style dicts and verifiers'
+    flat ``ToolCall`` objects). Returns ``None`` when there is no parsed call
+    or the transport carries no id -- which is every MCP/code-mode dispatch,
+    and exactly why the server-assigned counter is the primary key.
+    """
+    if not calls:
+        return None
+    tc = calls[0]
+    tid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+    return str(tid) if tid else None
+
 
 def _game_clock(state) -> Optional[int]:
     """The in-game turn counter (`status["time"]`), or None if unreadable.
@@ -2369,6 +2475,10 @@ def load_environment(
     refiner_model: Optional[str] = None,
     bootstrap_dir: Optional[str] = None,
     refine: bool = False,
+    # Echo the per-call correlation id (`[call#N]`) into each tool result so
+    # the model transcript and the turn trace can be joined exactly. The id is
+    # always stamped on the trace either way; see NetHackVerifiersEnv.__init__.
+    call_id_in_results: bool = True,
     **kwargs: Any,
 ) -> vf.Environment:
     """
@@ -2462,6 +2572,13 @@ def load_environment(
     _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
     rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
+    # Post-baseline tool fixes are flag-gated so `[base]` in
+    # configs/tool_tiers.toml is reproducible from config instead of a branch
+    # checkout. All default OFF: a cell that names none of them behaves as the
+    # tree did when the E10 baseline was measured. See nethack_harness.tool_flags.
+    from nethack_harness import tool_flags as _tool_flags
+    _tool_flags.configure(**kwargs)
+
     _describe_args = kwargs.get("describe_args", False)
     if isinstance(_describe_args, str):
         _describe_args = _describe_args.strip().lower() not in ("false","0","no","off","")
@@ -2510,6 +2627,14 @@ def load_environment(
             )
     # E8b mechanic guidance: append system-prompt blocks only (published tool
     # schemas untouched). Default "" leaves every existing arm byte-identical.
+    # E13: ask the player to persist durable lessons into the continual-harness
+    # store. Provisioning a writable store is not instruction -- 1 of E9's 15
+    # control rollouts did it unprompted. Default off => byte-identical.
+    _self_edit = str(kwargs.get("continual_self_edit") or "").strip().lower()
+    if _self_edit not in ("", "false", "0", "no", "off"):
+        from nethack_harness.prompt.self_edit import SELF_EDIT_BLOCK
+        spec = _dc.replace(spec, system_prompt=spec.system_prompt + SELF_EDIT_BLOCK)
+
     _hints = str(kwargs.get("mechanic_hints") or "").strip().lower()
     if _hints:
         from nethack_harness.prompt.human_norms import MECHANIC_HINT_BLOCKS
@@ -2566,6 +2691,7 @@ def load_environment(
         no_progress_timeout=int(kwargs.pop('no_progress_timeout', 10_000)),
         pin_objective_on_setup=pin_objective_on_setup,
         self_dispatch=self_dispatch,
+        call_id_in_results=call_id_in_results,
         **kwargs,
     )
 
