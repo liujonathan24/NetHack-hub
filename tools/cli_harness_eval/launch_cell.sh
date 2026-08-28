@@ -137,7 +137,7 @@ export PYTHONPATH="${REPO}/tools/pycompat:${ENG}:${REPO}:${REPO}/environments/ne
 # through `nethack_core._engine.library_path()` (there are at least two
 # libnethack.so on disk and only the build/ one is loaded); a bare python3 that
 # cannot import nethack_core degrades to "unknown", which never blocks.
-PY_BIN="$(dirname "${EVAL_BIN}")/python"
+PY_BIN="${PY_BIN:-$(dirname "${EVAL_BIN}")/python}"
 [ -x "$PY_BIN" ] || PY_BIN=python3
 "$PY_BIN" "${REPO}/tools/cli_harness_eval/engine_provenance.py" \
   --check --json "${OUT_ABS}/engine_provenance.json" || {
@@ -160,7 +160,22 @@ if [ "$ARM" = "control" ]; then
 else
   # `[taskset]` is a typed sub-model, so plain dotted overrides coerce
   # correctly (max_skill_calls lands as a real int).
+  # MAX_CALLS=0 means PLAY TO COMPLETION -- the rollout ends when the character
+  # dies, ascends, or NLE truncates, not when a budget runs out.
+  #
+  # Disabling the referee alone is NOT enough. `max_turns` is a second, quieter
+  # cap: nethack.py:2026 ORs `max_turns_reached` into `is_completed`, and the
+  # arm TOML pins it at 200. Overriding only `max_skill_calls` leaves that in
+  # force, so the rollout still stops at 200 -- with stop_condition
+  # `max_turns_reached` instead of `call_budget_exhausted`, which looks like a
+  # different phenomenon rather than the same cap wearing a hat.
   OVERRIDES=(--taskset.max_skill_calls "${MAX_CALLS}" --taskset.trace_dir "${TRACE_DIR}")
+  if [ "${MAX_CALLS}" -le 0 ] 2>/dev/null; then
+    OVERRIDES+=(--taskset.max_turns 0)
+    echo "[launch_cell] MAX_CALLS=0 -> uncapped: no call budget, no LM-turn cap." >&2
+    echo "[launch_cell]   backstops remain: max_episode_steps=100k NLE steps," >&2
+    echo "[launch_cell]   [timeout] rollout=7200s wall clock." >&2
+  fi
 fi
 
 # MODEL overrides the model pinned in the arm's TOML. The arms MUST agree on it
@@ -233,7 +248,7 @@ if [ -n "${ENV_ARGS:-}" ]; then
   # ("Input should be a valid dictionary"). Dotted paths are also what the
   # existing SKILL_SET override uses, so both go through the same mechanism and
   # merge into the config's table instead of replacing it.
-  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$(dirname "${EVAL_BIN}")/python" - <<'PYFLAT'
+  mapfile -t _ENV_ARG_FLAGS < <(ENV_ARGS="${ENV_ARGS}" "$PY_BIN" - <<'PYFLAT'
 import json, os
 def walk(prefix, node):
     for k, v in node.items():
@@ -351,6 +366,183 @@ case "${ENV_ARGS:-}" in
   *describe_args*) : ;;
   *) OVERRIDES+=(--taskset.env_args.describe_args true) ;;
 esac
+
+# TOOL_TIER selects a row of configs/tool_tiers.toml. The mapping is NOT
+# duplicated here any more: tool_tiers.py reads the registry and emits the
+# override flags, so launcher and registry cannot drift. (They did: the previous
+# bash `case` block was pinned by a substring test that still passed when the
+# entire block was deleted.)
+#
+# TOOL_TIER now expands the CELL CONTRACT as well as the fix flags. It used to
+# expand to nothing for `base`, so a cell declaring the E10 baseline silently
+# inherited configs/prime_agent.toml -- netplay_true instead of np_core, B0
+# instead of BBOX_MIN, 150 calls instead of 200, 16 seeds instead of 5.
+if [ -n "${TOOL_TIER:-}" ]; then
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*) ;;
+    *)
+      # `HarnessConfig` is extra="forbid" and only the prime_agent harness
+      # declares `skill_doc_coords`, so a tier carrying a harness-side flag is a
+      # hard ValidationError on the other arms. Refuse here, where the message
+      # can say why, rather than deep in pydantic.
+      echo "launch_cell: TOOL_TIER is a prime_agent concept (the tier sets" >&2
+      echo "  --harness.skill_doc_coords, which only that harness declares)." >&2
+      echo "  Arm '${ARM}' cannot take it. Set the env_args explicitly instead." >&2
+      exit 2
+      ;;
+  esac
+  if [ -n "${ENV_ARGS:-}" ] || [ -n "${SKILL_SET:-}" ]; then
+    # Both write the same dotted paths and the CLI resolves duplicates
+    # last-wins, silently. Measured: ENV_ARGS='{"netplay_telemetry":true}' with
+    # TOOL_TIER=base produced a cell labelled base running a human-tier fix.
+    # Same class of foot-gun the SKILL_SET/ENV_ARGS guard already refuses.
+    echo "launch_cell: TOOL_TIER cannot be combined with ENV_ARGS or SKILL_SET --" >&2
+    echo "  they set the same dotted paths and the last one silently wins, so the" >&2
+    echo "  cell would not run the tier it claims. Put the difference in" >&2
+    echo "  configs/tool_tiers.toml as its own tier." >&2
+    exit 2
+  fi
+  # The tier resolver needs tomllib (3.11+). PY_BIN falls back to the system
+  # `python3` when EVAL_BIN has no sibling interpreter, and on this box that is
+  # 3.10 -- the same trap the ENV_ARGS flattener documents. Fail with the reason
+  # rather than a bare ModuleNotFoundError from inside a subshell.
+  if ! "$PY_BIN" -c 'import tomllib' 2>/dev/null; then
+    echo "launch_cell: TOOL_TIER needs a Python with tomllib (3.11+); ${PY_BIN} lacks it." >&2
+    echo "  Point EVAL_BIN at the venv binary (its sibling ./python is used), or" >&2
+    echo "  set PY_BIN to a 3.11+ interpreter." >&2
+    exit 2
+  fi
+  _TIER_CONTRACT="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" contract)" || exit 2
+  _TIER_VARIANT="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["variant"])')"
+  _TIER_CALLS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
+  _TIER_SEEDS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["seeds"]))')"
+
+  # The contract owns the encoding and the budget. A caller who passes a
+  # different one is running a different experiment and must say so.
+  if [ -n "${VARIANT:-}" ] && [ "${VARIANT}" != "${_TIER_VARIANT}" ]; then
+    echo "launch_cell: VARIANT=${VARIANT} contradicts the tier contract (${_TIER_VARIANT})." >&2
+    exit 2
+  fi
+  # TIER_SHORT_BUDGET=1 is the preflight's escape: a mock play needs a handful of
+  # calls, not the contract's 200, and it is checking PLUMBING (does the resolved
+  # config match the tier, does the surface come up) rather than producing a
+  # measurable cell. It records the fact in the artifact so a short cell can
+  # never be mistaken for a real one.
+  # ALLOW_BATCHING is not a free knob under a tier: it strips the no-batch rule
+  # from the served document AFTER the frozen-doc hash check, so a [base] cell
+  # would serve a document the E10 baseline never served, and nothing would
+  # fire. The contract pins it; a contradicting env var is refused.
+  if [ -n "${ALLOW_BATCHING:-}" ]; then
+    echo "launch_cell: ALLOW_BATCHING contradicts the tier contract" >&2
+    echo "  (allow_batching is pinned by configs/tool_tiers.toml). A batching" >&2
+    echo "  cell is a different experiment -- give it its own tier." >&2
+    exit 2
+  fi
+  # The seed list is the contract's; running fewer rows than it names is a
+  # SUBSET, which is fine for a mock play and misleading for anything else.
+  _TIER_NSEEDS="$(printf '%s' "$_TIER_SEEDS" | "$PY_BIN" -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+  if [ -z "${SEEDS:-}" ] && [ "${TIER_SHORT_BUDGET:-}" != "1" ] && [ "${N}" != "${_TIER_NSEEDS}" ]; then
+    echo "launch_cell: N=${N} but the tier contract names ${_TIER_NSEEDS} seeds." >&2
+    echo "  Pass SEEDS to run a different set deliberately, or TIER_SHORT_BUDGET=1" >&2
+    echo "  for a preflight mock play." >&2
+    exit 2
+  fi
+  if [ "${TIER_SHORT_BUDGET:-}" = "1" ]; then
+    OVERRIDES+=(--taskset.env_args.tier_short_budget "true")
+  elif [ "${MAX_CALLS}" != "${_TIER_CALLS}" ]; then
+    echo "launch_cell: MAX_CALLS=${MAX_CALLS} contradicts the tier contract (${_TIER_CALLS})." >&2
+    echo "  The reference numbers in tool_tiers.toml describe ${_TIER_CALLS} calls" >&2
+    echo "  (0 = uncapped: play until death, ascension or NLE truncation)." >&2
+    exit 2
+  fi
+  VARIANT="${_TIER_VARIANT}"
+  OVERRIDES+=(--taskset.variant "${VARIANT}")
+  # Pin ROW SELECTION too: `--num_tasks N` only ever takes the first N of the
+  # config's own seed list, so without this the tier's seeds are advisory.
+  # SEEDS overrides the contract's row selection for cells that deliberately
+  # run a different half -- E13's reflection corpus is seeds 5-9 while its
+  # evaluation stays on the contract's 0-4. It cannot go through ENV_ARGS (the
+  # guard above refuses that alongside TOOL_TIER, for good reason), so it is its
+  # own knob, and the artifact records that the contract's seeds were replaced.
+  if [ -n "${SEEDS:-}" ]; then
+    OVERRIDES+=(--taskset.env_args.explicit_seeds "${SEEDS}")
+    OVERRIDES+=(--taskset.env_args.seeds_overridden "true")
+    echo "[launch_cell] seeds overridden: ${SEEDS} (contract: ${_TIER_SEEDS})"
+  else
+    OVERRIDES+=(--taskset.env_args.explicit_seeds "${_TIER_SEEDS}")
+  fi
+  # NOT `mapfile -t X < <(cmd) || exit`: process substitution does not set the
+  # pipeline status, so mapfile succeeds even when the resolver died and the
+  # cell launches with NO tier flags at all. Capture, check, then split.
+  _TIER_FLAGS_RAW="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" \
+    flags "${TOOL_TIER}" --arm "${ARM}")" || exit 2
+  mapfile -t _TIER_FLAGS <<< "$_TIER_FLAGS_RAW"
+  OVERRIDES+=("${_TIER_FLAGS[@]}")
+  echo "[launch_cell] tool_tier=${TOOL_TIER} -> ${_TIER_FLAGS[*]}"
+fi
+
+# CONTINUAL_HARNESS mounts a shared Prime Agent continual-harness store into
+# every rollout of this cell, so lessons an earlier game persisted are in a
+# later game's system prompt (docs/EXPERIMENT_E13.md). prime_agent only.
+#
+# Per EXPERIMENT, not global. Several continual experiments run side by side --
+# different reflection prompts, same base surface -- so the store path, the run
+# id and the reflection-prompt hash all vary per run and are pinned into this
+# cell's config.toml next to tool_tier. Without the id in the artifact, two
+# experiments' outputs are indistinguishable after the fact.
+# INSTALL_DIR isolates one experiment's skill package and kernel venv from
+# another's. It is fixed per experiment on purpose -- Prime Agent keys the kernel
+# venv on the set of Python-skill paths -- but the DEFAULT is global, so two
+# worktrees running concurrently would overwrite each other's SKILL.md mid-run.
+if [ -n "${INSTALL_DIR:-}" ]; then
+  OVERRIDES+=(--harness.install_dir "${INSTALL_DIR}")
+fi
+
+if [ -n "${CONTINUAL_HARNESS:-}" ]; then
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*) ;;
+    *)
+      echo "launch_cell: CONTINUAL_HARNESS is a prime_agent knob (the store is" >&2
+      echo "  mounted into that harness's per-rollout agent dir). Arm '${ARM}'" >&2
+      echo "  has no such store. Refusing." >&2
+      exit 2
+      ;;
+  esac
+  if [ -z "${CONTINUAL_RUN_ID:-}" ]; then
+    echo "launch_cell: CONTINUAL_HARNESS requires CONTINUAL_RUN_ID -- an" >&2
+    echo "  unlabelled continual cell cannot be told apart from another" >&2
+    echo "  experiment's once it is on disk." >&2
+    exit 2
+  fi
+  OVERRIDES+=(--harness.continual_harness_dir "${CONTINUAL_HARNESS}")
+  if [ -n "${CONTINUAL_HARNESS_MODE:-}" ]; then
+    # shared-ro = one store, symlinked, read-only for players (single writer).
+    # copy-merge = a private copy per rollout, merged afterwards -- the arm where
+    # players write. Measured: five concurrent writers on ONE store kept 12 of
+    # 30 entries and one of the five contributed nothing, because rlm.harness
+    # persists with a non-atomic whole-file rewrite and no lock.
+    OVERRIDES+=(--harness.continual_harness_mode "${CONTINUAL_HARNESS_MODE}")
+  fi
+  if [ -n "${CONTINUAL_SELF_EDIT:-}" ]; then
+    # Provisioning a writable store is not instruction: without this block the
+    # player is never told the store exists, and E9 measured exactly one
+    # spontaneous write in 15 rollouts.
+    OVERRIDES+=(--taskset.env_args.continual_self_edit "${CONTINUAL_SELF_EDIT}")
+  fi
+  if [ -n "${CONTINUAL_SPEC_SHA:-}" ]; then
+    OVERRIDES+=(--taskset.env_args.continual_spec_sha "${CONTINUAL_SPEC_SHA}")
+  fi
+  OVERRIDES+=(--taskset.env_args.continual_run_id "${CONTINUAL_RUN_ID}")
+  if [ -n "${CONTINUAL_PROMPT_SHA:-}" ]; then
+    # Which reflection instructions produced this store. Two runs that differ
+    # only in the orchestrator's prompt are otherwise identical on disk.
+    OVERRIDES+=(--taskset.env_args.continual_prompt_sha "${CONTINUAL_PROMPT_SHA}")
+  fi
+  if [ -n "${CONTINUAL_HARNESS_WRITABLE:-}" ]; then
+    OVERRIDES+=(--harness.continual_harness_writable "${CONTINUAL_HARNESS_WRITABLE}")
+  fi
+  echo "[launch_cell] continual: run_id=${CONTINUAL_RUN_ID} store=${CONTINUAL_HARNESS}"
+fi
 
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 

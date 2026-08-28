@@ -49,34 +49,42 @@ ACCEPTANCE = pathlib.Path(__file__).resolve().parents[3] / "tools/cli_harness_ev
 # --------------------------------------------------------------------------- #
 # rigs                                                                         #
 # --------------------------------------------------------------------------- #
-def _drive_mcp_route(trace_dir, plan):
+def _drive_mcp_route(trace_dir, plan, **env_kwargs):
     """Dispatch `plan` the way an MCP tool call does: straight into
-    `_apply_tool_call`, with no assistant message anywhere."""
+    `_apply_tool_call`, with no assistant message anywhere. Returns the trace
+    records AND the result payloads exactly as they went back over the wire."""
 
     async def go():
         env = m.load_environment(
             task_spec="full_nle", variant="B0", skill_set=SKILLS, n_examples=1,
             max_turns=50, explicit_seeds=[SEED], character=CHARACTER,
-            compact_obs=False, trace_dir=str(trace_dir))
+            compact_obs=False, trace_dir=str(trace_dir), **env_kwargs)
         ex = env.dataset[0]
         state = await env.setup_state(
             {"task": {"seed": SEED}, "info": ex["info"], "prompt": ex["prompt"],
              "responses": [], "turn": 0, "id": "probe", "model": "probe"})
+        contents = []
         for name, args in plan:
-            await env._apply_tool_call(state, name, args)
+            contents.append(await env._apply_tool_call(state, name, args))
+        return contents
 
-    asyncio.run(go())
+    contents = asyncio.run(go())
     files = sorted(pathlib.Path(trace_dir).glob("*.ndjson"))
     assert len(files) == 1, files
-    return TS.read_trace(files[0])
+    return TS.read_trace(files[0]), contents
 
 
 PLAN = [("np_press_key", {"key": "s"}), ("np_move_to", {"x": 40, "y": 8})]
 
 
 @pytest.fixture(scope="module")
-def mcp_records(tmp_path_factory):
+def mcp_route(tmp_path_factory):
     return _drive_mcp_route(tmp_path_factory.mktemp("mcp_route"), PLAN)
+
+
+@pytest.fixture(scope="module")
+def mcp_records(mcp_route):
+    return mcp_route[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -162,6 +170,114 @@ def test_reasoning_is_captured_inline_when_the_harness_has_it(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# 2b. the call-id barrier: one id on BOTH log streams                          #
+# --------------------------------------------------------------------------- #
+def test_every_dispatched_call_gets_a_monotonic_correlation_id(mcp_route):
+    """The game-side half of the barrier: the server assigns the id at the
+    single shared dispatch path and stamps it on the record, so it exists on
+    every route regardless of what the scaffold can see."""
+    records, _contents = mcp_route
+    results = [r["tool_results"][0] for r in records]
+    assert [tr["call_id"] for tr in results] == [1, 2]
+    assert all(tr["call_id_echoed"] is True for tr in results)
+    # The MCP transport surfaces no native tool-call id to the server -- which
+    # is exactly why the counter is the primary key, not the corroboration.
+    assert all(tr["native_call_id"] is None for tr in results)
+    for record in records:
+        assert TS.validate_record(record) == [], TS.validate_record(record)
+
+
+def test_the_marker_rides_the_result_payload_on_the_wire(mcp_route):
+    """The model-side half: `[call#N]` is appended to the RESULT -- the one
+    channel that reaches the transcript verbatim in every scaffold -- and the
+    trace's `rendered_user_message` records exactly what the model saw."""
+    from tools.trace_align import marker_call_ids
+
+    records, contents = mcp_route
+    for i, (record, content) in enumerate(zip(records, contents), start=1):
+        text = content if isinstance(content, str) else str(content)
+        assert text.rstrip().endswith(f"[call#{i}]"), text[-60:]
+        assert marker_call_ids(text) == [i]
+        assert record["rendered_user_message"].rstrip().endswith(f"[call#{i}]")
+
+
+def test_the_echo_can_be_disabled_without_losing_the_game_side_id(tmp_path):
+    """`call_id_in_results=False` restores byte-identical result payloads for
+    token-matched cells. The record still carries the id (stamping is free);
+    `call_id_echoed: false` tells a post-hoc join not to expect markers."""
+    records, contents = _drive_mcp_route(
+        tmp_path / "no_echo", [("np_press_key", {"key": "s"})],
+        call_id_in_results=False)
+    text = contents[0] if isinstance(contents[0], str) else str(contents[0])
+    assert "[call#" not in text
+    assert "[call#" not in records[0]["rendered_user_message"]
+    tr = records[0]["tool_results"][0]
+    assert tr["call_id"] == 1
+    assert tr["call_id_echoed"] is False
+
+
+def _scripted_rollout_with_trace(trace_dir, max_turns):
+    """A full scripted rollout returning BOTH log streams: the turn NDJSON and
+    the v1 `Trace` (the `traces.jsonl` line) the legacy bridge produces."""
+    from test_trace_reproducibility import _Scripted
+    from verifiers.v1.legacy import rollout_output_to_trace
+
+    env = m.load_environment(
+        task_spec="full_nle", n_examples=1, max_turns=max_turns,
+        explicit_seeds=[SEED], character=CHARACTER, skill_set="netplay_true",
+        trace_dir=str(trace_dir))
+    out = asyncio.run(env.run_rollout(
+        input=dict(env.get_eval_dataset()[0]), client=_Scripted(),
+        model="scripted", sampling_args={}, state_columns=["trajectory"]))
+    trace = rollout_output_to_trace(out, 0)
+    recs = TS.read_trace(sorted(pathlib.Path(trace_dir).glob("*.ndjson"))[0])
+    return trace, recs
+
+
+def test_the_call_id_join_is_total_and_unique_end_to_end(tmp_path):
+    """THE BARRIER, proven end to end: run a real rollout, then join the two
+    logs on the id alone -- every dispatched record finds exactly one issuing
+    assistant turn, no id is claimed twice, and the never-dispatched flush is
+    explicitly id-less rather than misattributed."""
+    from tools.trace_align import (
+        align_coverage, align_records_to_turns_by_call_id, record_call_id)
+    from tools.trace_reasoning import assistant_turns_from_trace
+
+    trace, recs = _scripted_rollout_with_trace(tmp_path / "join", 5)
+    turns = assistant_turns_from_trace(trace)
+
+    mapping, mode, reason = align_records_to_turns_by_call_id(recs, turns)
+    assert mode == "call_id", reason
+
+    applied = [r for r in recs if r["applied"]]
+    # Total: every dispatched record carries an id and found its turn...
+    assert [record_call_id(r) for r in applied] == list(range(1, len(applied) + 1))
+    assert all(mapping[i] is not None for i, r in enumerate(recs) if r["applied"])
+    # ...and the mapping is the ground-truth identity of the scripted rollout
+    # (assistant turn k issued call k+1), which no ordinal guess was consulted
+    # to produce.
+    assert mapping == list(range(len(applied))) + [None]
+    # Unique: no two records share an id; no id maps to two turns.
+    ids = [record_call_id(r) for r in applied]
+    assert len(set(ids)) == len(ids)
+    # The flush record (generated but never dispatched) is explicit about
+    # having no id -- absence is a stated fact, not a missing key.
+    assert recs[-1]["applied"] is False
+    assert record_call_id(recs[-1]) is None
+    assert recs[-1]["tool_results"][0]["call_id"] is None
+
+    coverage = align_coverage(recs, turns)
+    assert coverage["total"] is True
+    assert coverage["joined"] == coverage["with_id"] == len(applied)
+
+    # And the reasoning backfill now rides the same join: its strongest
+    # alignment mode is the barrier, not a name-walk or an ordinal guess.
+    from tools.trace_reasoning import align_records_to_turns
+    _mapping2, mode2, _ = align_records_to_turns(recs, turns)
+    assert mode2 == "call_id"
+
+
+# --------------------------------------------------------------------------- #
 # 3. schema: additive, and old traces still parse                              #
 # --------------------------------------------------------------------------- #
 def test_the_new_records_still_validate(mcp_records):
@@ -231,6 +347,64 @@ def test_the_missing_reasoning_is_recoverable_from_the_rollout_trace(mcp_records
 
 
 # --------------------------------------------------------------------------- #
+# 4b. timestamp fallback: recover PRE-BARRIER runs with no call-id markers      #
+# --------------------------------------------------------------------------- #
+def test_timestamp_alignment_recovers_pre_barrier_ipython_runs():
+    """The `timestamp` strategy, for a pre-barrier run whose game tools are
+    invisible to the model (Prime Agent: every assistant turn calls `ipython`).
+
+    No `[call#N]` markers (strategy 0 out), no game tool name to walk (1 out),
+    and the counts disagree -- one plan, several silent moves (2 out). The
+    wall-clock join then attributes each move to the last turn emitted at or
+    before it, and carries a silent move back to the plan it is still executing,
+    so several moves honestly share one narration rather than being dropped.
+    """
+    from tools.trace_reasoning import align_records_to_turns, backfill_records
+
+    def turn(text, ts):
+        return {"content": text, "reasoning_content": "", "tool_names": ["ipython"],
+                "game_tool_names": [], "result_call_ids": [], "timestamp": ts}
+
+    turns = [turn("Plan A: head for the downstairs.", 100.0),
+             turn("", 110.0),                                   # silent tool turn
+             turn("Plan B: the newt is next to me, kill it.", 120.0)]
+
+    def rec(name, t_wall):
+        return {"tool_results": [{"name": name}], "tool_calls": [{"name": name}],
+                "assistant_message": "", "t_wall": t_wall}
+
+    records = [rec("np_move_to", 101.0), rec("np_move_to", 112.0),
+               rec("np_move_to", 115.0), rec("np_melee_attack", 121.0)]
+
+    mapping, mode, reason = align_records_to_turns(records, turns)
+    assert mode == "timestamp", reason
+    assert mapping == [0, 0, 0, 2]              # silent moves carried back to Plan A
+
+    stats = backfill_records(records, turns)
+    assert stats["mode"] == "timestamp"
+    assert stats["recovered"] == 4 and stats["unavailable"] == 0
+    assert [r["assistant_message"] for r in records[:3]] == ["Plan A: head for the downstairs."] * 3
+    assert records[3]["assistant_message"] == "Plan B: the newt is next to me, kill it."
+    for r in records:
+        assert r["reasoning"]["alignment"] == "timestamp"
+        assert r["reasoning"]["source"] == "trace_nodes"
+
+
+def test_timestamp_alignment_refuses_when_clocks_are_unusable():
+    """A missing stamp, or a first move that predates the first completion,
+    means the clocks are not comparable -- refuse, do not guess."""
+    from tools.trace_reasoning import align_records_to_turns
+
+    turns = [{"content": "x", "reasoning_content": "", "tool_names": ["ipython"],
+              "game_tool_names": [], "result_call_ids": [], "timestamp": 100.0}]
+    early = [{"tool_results": [{"name": "np_move_to"}], "t_wall": 50.0},
+             {"tool_results": [{"name": "np_move_to"}], "t_wall": 60.0}]
+    _m, mode, reason = align_records_to_turns(early, turns)
+    assert mode is None
+    assert "wrong move" in reason
+
+
+# --------------------------------------------------------------------------- #
 # 5. end to end, over a REAL MCP tool server                                   #
 # --------------------------------------------------------------------------- #
 SEQUENCE = [("search", {"times": 1}), ("search", {"times": 2})]
@@ -239,14 +413,20 @@ SEQUENCE = [("search", {"times": 1}), ("search", {"times": 2})]
 @pytest.fixture(scope="module")
 def served(tmp_path_factory):
     """Drive a real `python -m nethack_v1` server over real MCP, then run the
-    task's own `finalize`. Costs one engine boot."""
+    task's own `finalize`. Costs one engine boot. Also captures what actually
+    crossed the wire: the published tool schemas and the raw result texts."""
     trace_dir = tmp_path_factory.mktemp("served_turns")
 
     async def go():
         task, trace = build_task_and_trace(trace_dir=str(trace_dir))
         async with booted_toolset(task, trace) as (session, mini):
+            listed = await session.list_tools()
+            schemas = {t.name: t.inputSchema for t in listed.tools}
+            wire_texts = []
             for name, args in SEQUENCE:
-                await session.call_tool(name, args)
+                result = await session.call_tool(name, args)
+                wire_texts.append("".join(
+                    getattr(block, "text", "") or "" for block in result.content))
             trace.nodes.extend(
                 _sampled_assistant_nodes(
                     [(f"Turn {i}: searching.", name)
@@ -254,16 +434,16 @@ def served(tmp_path_factory):
                 )
             )
             await task.finalize(trace, None)
-            return trace
+            return trace, schemas, wire_texts
 
-    trace = asyncio.run(go())
+    trace, schemas, wire_texts = asyncio.run(go())
     files = sorted(pathlib.Path(trace_dir).glob("*.ndjson"))
     assert len(files) == 1, files
-    return trace, TS.read_trace(files[0])
+    return trace, TS.read_trace(files[0]), schemas, wire_texts
 
 
 def test_a_real_mcp_rollout_records_its_calls_and_recovers_its_reasoning(served):
-    trace, records = served
+    trace, records, _schemas, _wire = served
     assert len(records) == len(SEQUENCE)
     for record, (name, args) in zip(records, SEQUENCE):
         assert record["dispatch_route"] == "mcp"
@@ -278,10 +458,32 @@ def test_a_real_mcp_rollout_records_its_calls_and_recovers_its_reasoning(served)
     assert trace.metrics["reasoning_unavailable"] == 0.0
 
 
+def test_the_real_mcp_schema_is_untouched_and_the_result_carries_the_id(served):
+    """The barrier's contract, checked on the actual wire: every published
+    inputSchema is exactly the v0 adapter's parameters (no `reasoning`, no
+    `call_id`, no instrumentation of any kind), while every RESULT ends with
+    the correlation marker."""
+    import inspect
+
+    from nethack_harness.helpers import _build_skill_adapter_callables
+
+    _trace, records, schemas, wire_texts = served
+    assert schemas
+    adapters = {a.__name__: a for a in _build_skill_adapter_callables("netplay")}
+    for name, schema in schemas.items():
+        props = set((schema or {}).get("properties") or {})
+        assert props == set(inspect.signature(adapters[name]).parameters), name
+        assert not ({"reasoning", "call_id", "state"} & props), name
+    for i, (text, record) in enumerate(zip(wire_texts, records), start=1):
+        assert text.rstrip().endswith(f"[call#{i}]"), text[-60:]
+        assert record["tool_results"][0]["call_id"] == i
+        assert record["tool_results"][0]["call_id_echoed"] is True
+
+
 def test_the_toolset_publishes_the_trace_file_it_is_writing(served):
     """`finalize` runs in the DRIVER process and the NDJSON is written by the
     TOOL SERVER, so the run id has to cross the state channel; without it the
     join has nothing to open."""
-    trace, _records = served
+    trace, _records, _schemas, _wire = served
     assert trace.state.trace_run_id
     assert trace.state.trace_run_id.startswith("0_")   # <seed>_<pid>_<epoch>

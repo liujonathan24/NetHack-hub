@@ -1,54 +1,92 @@
 ---
 name: nethack
-description: Play NetHack. The only way to act in the game — every move, attack, descent and item use goes through this skill's async tools, called from the IPython kernel. Tools are discovered from the running game server at session start.
+description: Play NetHack. The only way to act in the game — every move, attack, descent and item use goes through this skill's async tools, called from the IPython kernel.
 ---
 
-# NetHack
+# NetHack — complete tool API
 
-The game runs in a separate process and is reached over MCP from the kernel.
-There is no other channel: the shell cannot see the game, and there is no
-keyboard interface. One call = one skill executed against the live game.
+This file is the authoritative API reference. Every tool is listed below with
+its exact arguments.
 
-## Usage
+The game runs in a separate process, reached over MCP. One call = one skill
+executed against the live game. Every tool is **async** — always `await`.
+The return value is the rendered observation (a text block with `=== MAP ===`,
+`=== STATUS ===`, `=== INVENTORY ===` sections). **Print it and read it before
+deciding the next call.** It is your only view of the game.
+
+## The tools (exact signatures — this is the full set)
+
+Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,
+top to bottom) in the MAP frame: row 0 is the FIRST row of the `=== MAP ===`
+block, the same frame `Pos:` and all `VISIBLE FEATURES` coordinates use. Do
+NOT count rows from the raw terminal screen (it has extra message/status
+lines) — that yields an off-by-one that silently misses every target.
 
 ```python
-import nethack
+await nethack.request_map()                 # Show the FULL map + surroundings in this
+                                            # turn's observation. The map is otherwise
+                                            # withheld — call this whenever you need to
+                                            # see the level. Costs no game time.
 
-# 1. Discover what this game exposes. The tool set is defined by the server and
-#    is deliberately restricted -- do not assume a tool exists.
-for tool in await nethack.list_tools():
-    print(tool["name"], "-", tool["description"])
+await nethack.np_explore_level()            # Auto-explore: walks the level revealing
+                                            # rooms, corridors and doors. Interrupts
+                                            # itself when something notable happens.
 
-# 2. Inspect a tool's arguments (rendered from its JSON Schema).
-help(nethack.move_to)
+await nethack.np_move_to(x=54, y=5)         # Pathfind to tile (x, y) in one call.
+                                            # If no route is known it says so —
+                                            # explore more first.
 
-# 3. Call it. Keyword args must match the tool's input schema.
-print(await nethack.explore_and_descend())
+await nethack.np_melee_attack(x=30, y=7)    # Pursue the monster at (x, y) and attack
+                                            # in melee until it dies (or you must stop).
+
+await nethack.np_kick(x=31, y=7)            # Kick the tile at (x, y) — locked doors etc.
+
+await nethack.np_press_key(key=">")         # Press ONE key, exactly as if typed at the
+                                            # NetHack prompt. Letters (both cases),
+                                            # digits, and punctuation like > < , . # $
+                                            # all work, plus "ESC", "SPACE", "ENTER".
+                                            # Use it to answer the game's own prompts
+                                            # and menus (pick the item's letter, y/n,
+                                            # ESC to cancel).
+
+await nethack.np_pray()                     # Pray to your god. Saves you when HP is
+                                            # critical (below ~1/7 of max) or you are
+                                            # starving — but only rarely; do not spam.
+
+await nethack.np_apply(item_letter="a")     # Apply (use) a tool from your inventory.
+                                            # item_letter optional; omit to be prompted.
+
+await nethack.np_rest(count=5)              # Rest in place count moves (default 5) or
+                                            # until something happens.
+
+await nethack.search(times=10)              # Search adjacent tiles for hidden doors /
+                                            # passages, times consecutive tries (1–20).
 ```
 
-Notes:
+## How to descend
 
-- Every tool is `async` — always `await`.
-- The return value is the rendered observation: a text block with `=== MAP ===`,
-  `=== STATUS ===`, `=== INVENTORY ===`, `=== ADJACENT ===` sections. **Print it
-  and read it before deciding the next call.** It is the only view of the game.
-- Do not batch blind sequences of calls. NetHack is turn-based and adversarial;
-  the observation after each call is what tells you whether the previous one
-  worked.
-- There is a hard budget of skill calls for the episode. When it is spent the
-  server refuses further calls and the episode ends — spend calls on progress,
-  not on probing.
-- **Never move by pressing raw movement keys** (via `press_key` or
-  `type_text`, where published). `move_to(x, y)` pathfinds for you in one
-  call; a movement key covers one tile and usually walks into a wall. If
-  `move_to` fails, its message includes a `[why: ...]` clause naming the
-  blocker and the remedy (open the named door, inspect the unexplored gap
-  with your map tool, or `search` near dead ends) — follow it instead of
-  retrying by hand.
-- If the observation contains an `=== OBJECTIVE ===` block, treat its FOCUS
-  line as your current priority: it names which scoring axis is worth pursuing
-  right now and what the next checkpoint is worth.
-- A call that returns an error raises `McpToolError`; a missing tool name raises
-  `AttributeError` naming the tools that do exist. Neither ends the episode.
-- `NotEnabled` means the harness did not wire the server up. It is a setup bug,
-  not something to work around, and not something the user can fix mid-episode.
+1. `await nethack.request_map()` — find the down staircase, shown as `>`.
+2. `await nethack.np_move_to(x=..., y=...)` — walk onto that tile.
+3. `await nethack.np_press_key(key=">")` — descend. That's it.
+
+There is no `descend` tool — descending IS pressing `>` while standing on the
+staircase. Ascending is `<` on a `<` staircase.
+
+## Interactive prompts (auto-dismiss is OFF)
+
+When the game asks something — `[ynq]`, "What do you want to eat?", a `--More--`
+page, a menu — the harness will NOT answer it for you. The observation will show
+the prompt; answer it yourself with `np_press_key` (the choice letter, `y`, `n`,
+`ESC` to cancel, `SPACE` to page). The game clock is FROZEN while a prompt is
+open: if the observation looks unchanged, check for an open prompt first.
+
+## Discipline
+
+- One call, read the observation, then decide. Never batch blind sequences.
+- This file already contains the whole API, so there is nothing to discover by
+  probing it.
+- A skill that fails says why in its returned message (e.g. "Tile (14, 12) is
+  blocked... It's solid stone.") — read it and change plan; don't repeat the
+  call unchanged.
+- `memory/objective.md` in your workspace restates the goal; `memory/` is yours
+  for notes.

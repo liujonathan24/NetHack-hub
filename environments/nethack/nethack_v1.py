@@ -149,6 +149,7 @@ class NetHackState(vf.State):
     scout_reward_total: float = 0.0
     descent_count: float = 0.0
     max_dlvl_reached: int = 1
+    max_xp_level: int = 1
     succeeded: bool = False
     ascended: bool = False
     died: bool = False
@@ -218,6 +219,15 @@ class NetHackToolsetConfig(vf.ToolsetConfig):
     # decision.
     max_parallel_skill_calls: int = 0
     parallel_batch_window_s: float = 0.5
+    # Echo the per-call correlation id (`[call#N]`) into each tool result so
+    # the model transcript (`traces.jsonl`) and the turn NDJSON can be joined
+    # exactly (see `nethack_harness.helpers.CALL_ID_MARKER_FORMAT`). The id is
+    # always assigned server-side and stamped on the trace record; this knob
+    # only controls the result-payload echo, which costs a few tokens per call
+    # -- turn off for a cell that must be token-matched against pre-barrier
+    # runs. The published tool schemas are identical either way: the marker
+    # rides the payload, never the function definitions the model sees.
+    call_id_in_results: bool = True
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob/skill_set, etc.). Kept opaque so
     # the v1 layer never has to track the full v0 kwarg surface.
@@ -260,6 +270,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     max_skill_calls: int = 150
     max_parallel_skill_calls: int = 0
     parallel_batch_window_s: float = 0.5
+    call_id_in_results: bool = True
     env_args: dict = {}
     # Where the tool server runs (colocated = share the harness's runtime).
     colocated: bool = False
@@ -289,6 +300,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
             max_skill_calls=self.max_skill_calls,
             max_parallel_skill_calls=self.max_parallel_skill_calls,
             parallel_batch_window_s=self.parallel_batch_window_s,
+            call_id_in_results=self.call_id_in_results,
             env_args=dict(self.env_args or {}),
         )
 
@@ -331,6 +343,7 @@ def _build_v0_env(cfg: NetHackToolsetConfig | NetHackTasksetConfig, *, n_example
         # CLI-agent arms. The control arm calls `nethack.load_environment`
         # directly and never reaches this function, so it never sets this.
         self_dispatch=cfg.self_dispatch,
+        call_id_in_results=getattr(cfg, "call_id_in_results", True),
         **dict(cfg.env_args or {}),
     )
 
@@ -483,8 +496,13 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
                 state.budget_exhausted = True
                 state.terminated = True
                 return (
-                    f"[Call budget exhausted: {budget} skill calls used. "
-                    "The episode is over.]"
+                    # The only place the call budget's SIZE ever reached a
+                    # model. Post-hoc, so it cannot shape play -- but an
+                    # orchestrator reading traces saw "200 skill calls used" and
+                    # wrote budget advice into the continual store as a learned
+                    # lesson. The episode ending is the fact; its arithmetic is
+                    # ours.
+                    "[The episode is over.]"
                 )
             state.skill_calls += 1
             if name == "move":
@@ -554,6 +572,7 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.scout_reward_total = float(v0.get("scout_reward_total", 0.0) or 0.0)
         state.descent_count = float(v0.get("descent_count", 0.0) or 0.0)
         state.max_dlvl_reached = int(v0.get("max_dlvl_reached", 1) or 1)
+        state.max_xp_level = int(v0.get("max_xp_level", 1) or 1)
         state.succeeded = bool(v0.get("succeeded"))
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
@@ -695,11 +714,34 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
                 "parallel_refusals": float(state.parallel_refusals),
                 "budget_exhausted": float(state.budget_exhausted),
                 "max_dlvl_reached": float(state.max_dlvl_reached),
+                "max_xp_level": float(state.max_xp_level),
                 "descent_count": float(state.descent_count),
                 "scout_reward_total": float(state.scout_reward_total),
                 "died": float(state.died),
                 "terminated": float(state.terminated),
                 "moves_executed": float(state.moves_executed),
+            }
+        )
+        # BALROG, both halves. Previously absent from traces.jsonl entirely: XL
+        # was not published at all, so every report either skipped the metric or
+        # re-derived it by re-reading turns/*.ndjson and re-implementing the
+        # score. The house rule is that a table carries the `max` AND the `min`
+        # over the (Dlvl, XL) axes -- a max alone cannot distinguish "descended"
+        # from "levelled up while stuck" -- so publish the pair and the
+        # xp_carried flag that falls out of it.
+        from nethack_harness.prompt.balrog import balrog_both
+
+        _hi, _lo = balrog_both(
+            state.max_dlvl_reached,
+            state.max_xp_level,
+            reached_planes=False,
+            ascended=bool(state.ascended),
+        )
+        trace.metrics.update(
+            {
+                "balrog_pct": 100.0 * _hi,
+                "balrog_min_pct": 100.0 * _lo,
+                "xp_carried": float(_hi > 0.0 and _lo == 0.0),
             }
         )
         # Published so a run's own output says how much of the agent's reasoning
