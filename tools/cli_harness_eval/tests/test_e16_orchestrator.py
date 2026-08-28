@@ -898,23 +898,57 @@ def test_player_summaries_entering_the_orchestrator_are_capped(tmp_path):
     assert sess.cap_summary("short") == "short"
 
 
-def test_compaction_triggers_on_the_context_bound(tmp_path):
-    runner, _ = _fake_prime_agent(reply="handoff text")
-    sess = S.PrimeAgentSession(work_dir=tmp_path / "o", agent_dir=tmp_path / "a",
-                               runner=runner, context_chars=50)
-    assert not sess.needs_compaction()
-    sess.ask("x" * 60)
-    assert sess.needs_compaction()
+def test_the_context_bound_is_the_CLIs_own_compaction_not_ours(tmp_path):
+    """The 128K-token bound, handed to prime-agent instead of prompted for.
 
-    cfg = cfg_for(tmp_path, selector="llm")
-    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
-    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(), session=sess)
-    summary = orch.maybe_compact()
-    assert summary == "handoff text"
-    assert sess.compactions == 1
-    assert (cfg.orchestrator_dir / "handoff_1.txt").read_text() == "handoff text"
-    # A fresh session is started, and the chain is kept.
-    assert len(sess.session_ids) >= 1
+    What is asserted is the ARITHMETIC that makes the bound bind. prime-agent
+    compacts when ``contextTokens > contextWindow - reserveTokens``, so the
+    only setting that expresses an absolute bound is the reserve, and it has to
+    be computed from the model's REAL window.
+    """
+    agent = tmp_path / "agent"
+    agent.mkdir(parents=True)
+    (agent / "settings.json").write_text(
+        json.dumps({"defaultProvider": "prime-inference"}) + "\n")
+
+    rec = S.configure_native_compaction(agent, model="z-ai/glm-5.2",
+                                        limit_tokens=131072)
+    if not rec["enforced"]:
+        pytest.skip(f"no prime-agent model catalog on this box: {rec.get('why')}")
+    cw = rec["context_window_tokens"]
+    written = json.loads((agent / "settings.json").read_text())
+    assert written["compaction"]["enabled"] is True
+    # THE BOUND, restated as the CLI computes it.
+    assert cw - written["compaction"]["reserveTokens"] == 131072
+    # The settings that were already there survive: this rewrites one key, and
+    # losing `defaultProvider` would break the session it is configuring.
+    assert written["defaultProvider"] == "prime-inference"
+
+    # NO PROMPT OF OURS. The orchestrator no longer has a compaction round at
+    # all -- neither a prompt to send nor a method to send it.
+    assert not hasattr(E.Orchestrator, "COMPACTION_PROMPT")
+    assert not hasattr(E.Orchestrator, "maybe_compact")
+    assert not hasattr(S.SessionBase, "needs_compaction")
+
+
+def test_a_window_we_cannot_read_is_reported_not_guessed(tmp_path):
+    """The failure case, which must not silently write a wrong reserve.
+
+    A reserve computed from a guessed window enforces a bound nobody chose --
+    too high and it never fires, too low and it fires every turn. So an
+    unknown window leaves the CLI's defaults alone and says so.
+    """
+    agent = tmp_path / "agent"
+    rec = S.configure_native_compaction(agent, model="no/such-model")
+    assert rec["enforced"] is False and rec["why"]
+    assert "compaction" not in json.loads((agent / "settings.json").read_text()) \
+        if (agent / "settings.json").is_file() else True
+
+    # A model whose own window is already inside the bound cannot be bounded
+    # further, and says that rather than writing a negative reserve.
+    small = S.configure_native_compaction(tmp_path / "b", model="z-ai/glm-4.5",
+                                          limit_tokens=1_000_000)
+    assert small["enforced"] is False
 
 
 FIXTURES = HERE.parent / "fixtures"
@@ -1259,6 +1293,12 @@ def test_dry_run_select_restore_play_save_ingest_over_four_attempts(tmp_path):
     # Every attempt resumed a checkpoint that existed at selection time.
     for ctx in player.seen:
         assert ctx.checkpoint_dir is not None and ctx.checkpoint_dir.is_dir()
+
+    # -- the archive is a TREE, on a real multi-attempt run -----------------
+    tree = E.archive_tree(E.ledger_rows(cfg.archive_dir))
+    assert tree["problems"] == [], E.render_archive_tree(
+        E.ledger_rows(cfg.archive_dir))
+    assert tree["roots"] == ["1"]
 
     # -- the archive grew, and the new checkpoints are stamped ---------------
     names = sorted(p.name for p in checkpoint_list(cfg.archive_dir))
@@ -1775,6 +1815,30 @@ def test_the_round_prompt_no_longer_claims_the_table_is_the_whole_menu():
     assert "appears in the table above" not in E.Orchestrator.DIRECTIVE_RETRY_PROMPT
 
 
+def test_the_round_prompt_does_not_dictate_the_SHAPE_of_a_directive():
+    """The directive is a strategy, not a gradable clause.
+
+    The prompt used to carry two phrasing rules -- prohibit outcomes not tools,
+    always pair a prohibition with something to do -- both written so the
+    keyword rubric could score what came back. That constrained the strategy
+    space to what the classifier can measure, which is backwards: "kill the
+    thing we know is on that level", "avoid it at all costs" and "farm here
+    until XL 5, then take it on" are the strategies worth testing and none of
+    them is phrased for a grader. The directive is still served verbatim and
+    still recorded; only the instructions on how to word it are gone.
+    """
+    p = E.Orchestrator.ROUND_PROMPT
+    assert "PROHIBIT OUTCOMES, NOT TOOLS" not in p
+    assert "ALWAYS PAIR A PROHIBITION WITH SOMETHING TO DO" not in p
+    assert "HOW TO PHRASE IT SO IT CAN BE SCORED" not in p
+    assert "checkable" not in p
+    assert "whether it followed you is\nmeasured" not in p
+    # ...and what must survive: the JSON contract and the free choice of id.
+    assert '{{"checkpoint": "<id from the archive above>"' in p
+    assert "Any checkpoint id in the archive above is a legal choice." in p
+    assert "There is NO required form." in p
+
+
 def test_the_launched_id_is_never_shadowed_by_the_scripted_pick():
     """The selection-plumbing root cause, as a unit.
 
@@ -2219,3 +2283,221 @@ def test_the_attempt_record_flags_spend_as_a_lower_bound_when_retried(tmp_path):
     assert row["spend_usd"] == pytest.approx(10.0), "the costed number is untouched"
     assert row["spend_usd_billed_upper_est"] == pytest.approx(30.0)
     assert row["retry_errors"] == ["ProviderError", "ProviderError"]
+
+
+# --------------------------------------------------------------------------- #
+# the archive is a TREE, not a star
+# --------------------------------------------------------------------------- #
+
+def _fake_checkpoint(root: Path, ident, *, created_at: float, dlvl=1, xl=1,
+                     score=0, created_by="auto", name="", note="",
+                     parent=None) -> Path:
+    """A checkpoint dir complete enough for `checkpoint_list`/`checkpoint_meta`.
+
+    The bundle is a placeholder: nothing in the lineage code restores a game,
+    and building 6 real ones would make a test about `parent` fields depend on
+    the engine. The engine-backed version of this assertion rides on the
+    four-attempt dry run above.
+    """
+    d = root / f"c{ident}"
+    d.mkdir(parents=True)
+    (d / "state.bundle").write_bytes(b"placeholder")
+    (d / "meta.json").write_text(json.dumps({
+        "id": str(ident), "created_at": created_at, "created_by": created_by,
+        "dlvl": dlvl, "xl": xl, "score": score, "hp": 10, "max_hp": 10,
+        "gameturn": int(created_at), "name": name, "note": note,
+        "parent": parent, "attempts_from": 0,
+    }) + "\n")
+    return d
+
+
+def test_one_attempts_checkpoints_form_a_PATH_and_the_archive_a_TREE(tmp_path):
+    """THE DEFECT, and the shape that replaces it.
+
+    Every checkpoint an attempt wrote used to be stamped with the checkpoint
+    that ATTEMPT resumed from. The mechcheck archive is the result: c2..c24 all
+    pointing at c1, a star with 23 spokes, in which nothing records that c6 was
+    written after c5 in the same life. What is asserted here is both halves of
+    the fix -- within one attempt the parents form a PATH, and across attempts
+    the paths join into a tree whose forks are where two attempts resumed the
+    same state.
+    """
+    cfg = cfg_for(tmp_path / "run")
+    archive = cfg.archive_dir
+    archive.mkdir(parents=True)
+    _fake_checkpoint(archive, 1, created_at=100.0, created_by="orchestrator",
+                     name="entrance", parent=None)
+
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult())
+
+    def stamp(attempt: int, resumed: str, new_ids: list, t0: float):
+        made = [_fake_checkpoint(archive, i, created_at=t0 + 10.0 * k,
+                                 dlvl=1 + k, name=f"auto call_{20 * (k + 1)}")
+                for k, i in enumerate(new_ids)]
+        ctx = E.PlayerContext(attempt=attempt, checkpoint_dir=archive / f"c{resumed}",
+                              checkpoint_id=resumed, archive_dir=archive,
+                              wiki_dir=cfg.wiki_dir, out_dir=tmp_path / "o",
+                              ledger_text="", fidelity_log=cfg.fidelity_path,
+                              game_seed=1, tier=cfg.tier, arm=cfg.player_arm)
+        for path, parent_id in E.parent_chain(made, ctx.checkpoint_id):
+            orch._stamp_new_checkpoint(path, ctx, E.PlayerResult(), parent_id)
+
+    # attempt 1 resumes c1 and writes c2 -> c3 -> c4
+    stamp(1, "1", ["2", "3", "4"], 200.0)
+    # attempt 2 resumes c2 -- ALREADY WRITTEN, deliberately: this is the
+    # branching the whole selection redesign exists to make possible.
+    stamp(2, "2", ["5", "6"], 400.0)
+
+    parents = {r.id: r.parent for r in E.ledger_rows(archive)}
+    # THE PATH. Not one of c3, c4, c6 points at the state its attempt resumed.
+    assert parents == {"1": None, "2": "1", "3": "2", "4": "3",
+                       "5": "2", "6": "5"}
+
+    tree = E.archive_tree(E.ledger_rows(archive))
+    assert tree["problems"] == []          # connected, acyclic, single-rooted
+    assert tree["roots"] == ["1"]
+    # THE FORK, which a star cannot express: c2 is where two attempts diverged.
+    assert tree["children"]["2"] == ["3", "5"]
+    assert tree["children"]["1"] == ["2"]
+
+    text = E.render_archive_tree(E.ledger_rows(archive))
+    assert "ARCHIVE TREE: 6 checkpoint(s), 1 root(s)." in text
+    assert "NOT A VALID TREE" not in text
+    # ...and the orchestrator can see it, because the ledger carries it.
+    ledger = E.render_ledger(E.ledger_rows(archive), cfg)
+    assert "from" in ledger and "c2" in ledger
+
+
+def test_the_tree_dump_NAMES_a_broken_lineage_rather_than_drawing_a_lie(tmp_path):
+    archive = tmp_path / "archive"
+    archive.mkdir(parents=True)
+    _fake_checkpoint(archive, 1, created_at=1.0, parent=None)
+    _fake_checkpoint(archive, 2, created_at=2.0, parent="9")   # no such node
+    _fake_checkpoint(archive, 3, created_at=3.0, parent="4")   # a 2-cycle
+    _fake_checkpoint(archive, 4, created_at=4.0, parent="3")
+    rows = E.ledger_rows(archive)
+    problems = " ".join(E.archive_tree(rows)["problems"])
+    assert "parent c9 is not in the archive" in problems
+    assert "cycle" in problems
+    assert "roots" in problems
+    assert "NOT A VALID TREE" in E.render_archive_tree(rows)
+
+
+# --------------------------------------------------------------------------- #
+# --decide-only: the decision loop, with no players and no player budget
+# --------------------------------------------------------------------------- #
+
+class ScriptedDecider(S.SessionBase):
+    """A session that replies with whatever the script says, in order."""
+
+    kind = "scripted_decider"
+
+    def __init__(self, replies, **kw):
+        super().__init__(**kw)
+        self.replies = list(replies)
+        self.prompts: list = []
+
+    def ask(self, prompt, *, kind="round"):
+        self.rounds += 1
+        self.sent_chars += len(prompt)
+        self.prompts.append((kind, prompt))
+        text = self.replies.pop(0) if self.replies else "no more replies"
+        return S.RoundResult(text=text, session_id="decide-only-1",
+                             spend_usd=0.02)
+
+
+def test_decide_only_runs_the_real_rounds_and_launches_NOTHING(tmp_path):
+    """TASK 1's gate: the decision loop, exercised without paying for a player.
+
+    A player attempt costs ~$31 and half an hour, a decision round ~$0.08, and
+    until this mode there was no way to buy the second without the first --
+    `should_stop` gates the round and the launch behind one check. What is
+    asserted here is that the mode runs the REAL `decide` (real ledger, real
+    parser, real selection record) while the launcher is never called and the
+    player budget never moves.
+    """
+    cfg = cfg_for(tmp_path / "run", selector="llm", budget_ceiling_usd=100.0,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    cfg.archive_dir.mkdir(parents=True)
+    _fake_checkpoint(cfg.archive_dir, 1, created_at=1.0,
+                     created_by="orchestrator", name="entrance")
+    _fake_checkpoint(cfg.archive_dir, 2, created_at=2.0, dlvl=6, xl=2, score=391,
+                     name="auto level_entry_d6")
+    _fake_checkpoint(cfg.archive_dir, 3, created_at=3.0, dlvl=8, xl=4, score=731,
+                     name="auto level_up_xl4", parent="2")
+
+    session = ScriptedDecider([
+        # Long enough to clear the opening round's degeneration floor: a
+        # 200-char "plan" is not a plan, and the real run refuses one.
+        "THE PLAN. " + ("Descend on the deepest state while it is still "
+                        "paying, and branch back to a shallower one the "
+                        "moment a state has died twice the same way. What "
+                        "would tell me this is wrong: two branch-backs in a "
+                        "row that die shallower than the state they came "
+                        "from. " * 3),
+        'picking the deepest first.\n{"checkpoint": "3", "directive": "dive", '
+        '"rationale": "deepest"}',
+        'c3 died; going back.\n{"checkpoint": "2", "directive": "level up '
+        'first", "rationale": "c3 is a trap"}',
+    ], work_dir=cfg.orchestrator_dir)
+
+    launched: list = []
+
+    def never(ctx):
+        launched.append(ctx)
+        raise AssertionError("decide-only launched a player")
+
+    orch = E.Orchestrator(cfg, never, session=session)
+    summary = orch.run_decide_only([
+        {"outcome": "died", "max_dlvl": 8, "calls": 40,
+         "summary": "died to a soldier ant on D8", "lesson": "ants are fast",
+         "compliance": "followed", "spend_usd": 31.0},
+        {"outcome": "censored", "censor_reason": E.CENSOR_HARNESS_ERROR,
+         "max_dlvl": 6, "calls": 3, "summary": "the harness died",
+         "compliance": "not_scored", "spend_usd": 2.0},
+    ])
+
+    # -- NOTHING LAUNCHED, NOTHING BILLED TO THE PLAYERS --------------------
+    assert launched == []
+    assert summary["budget"]["player_usd"] == 0.0
+    assert summary["budget"]["orchestrator_usd"] > 0.0
+    # A spec's cost is recorded where it cannot be summed as if it were spent.
+    assert [a["spend_usd"] for a in orch.attempts] == [0.0, 0.0]
+    assert [a["synthetic_spend_usd"] for a in orch.attempts] == [31.0, 2.0]
+
+    # -- IT CAN NEVER BE MISTAKEN FOR A REAL RUN ----------------------------
+    assert summary["mode"] == "decide_only" and summary["synthetic"] is True
+    sels = [json.loads(l) for l in cfg.selection_path.read_text().splitlines()
+            if l.strip()]
+    rows = [json.loads(l) for l in cfg.attempts_path.read_text().splitlines()
+            if l.strip()]
+    assert len(sels) == 2 and len(rows) == 2
+    assert all(r["synthetic"] is True for r in sels + rows)
+
+    # -- the rounds were the REAL ones --------------------------------------
+    assert [s["chosen_id"] for s in sels] == ["3", "2"]
+    assert [s["source"] for s in sels] == ["llm", "llm"]
+    # c3 is the whole Pareto frontier here, so round 2 is a dominated pick --
+    # the behaviour this study exists to measure, and it is recorded.
+    assert [s["chosen_on_frontier"] for s in sels] == [True, False]
+    assert sels[0]["n_candidates_shown"] == 3
+    assert [s["directive"] for s in sels] == ["dive", "level up first"]
+
+    # -- outcome N reached round N+1 ----------------------------------------
+    kinds = [k for k, _ in session.prompts]
+    assert kinds[0] == "opening"
+    round2 = session.prompts[2][1]
+    assert "died to a soldier ant on D8" in round2
+    assert "from c3" in round2 and "died" in round2
+    # ...and the lesson landed on the checkpoint the ledger reads it from.
+    assert "ants are fast" in E.read_lessons(cfg.archive_dir / "c3")
+    assert "SYNTHETIC" in E.read_lessons(cfg.archive_dir / "c3")
+    # attempts_from was bumped, so the `tried` column is what a real run shows.
+    assert checkpoint_meta(cfg.archive_dir / "c3")["attempts_from"] == 1
+
+
+def test_decide_only_refuses_the_scripted_selector(tmp_path):
+    cfg = cfg_for(tmp_path / "run", selector="scripted")
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult())
+    with pytest.raises(ValueError, match="needs the LLM selector"):
+        orch.run_decide_only([{"outcome": "died"}])

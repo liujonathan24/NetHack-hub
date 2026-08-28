@@ -288,14 +288,23 @@ class OrchestratorConfig:
     #: paragraph and a half -- enough for "died to a wraith on D15 after
     #: melee'ing it", which is the whole informational content.
     orchestrator_summary_cap: int = 1500
-    #: Compaction trigger: cumulative characters the orchestrator has been sent
-    #: across the session. Past this, the run asks the session to write a
-    #: hand-off summary and continues in a FRESH session seeded with it. The
-    #: session chain is recorded, so the conversation stays auditable even
-    #: though it is no longer one file.
-    orchestrator_context_chars: int = 400_000
-    #: Chars the compaction hand-off may be.
-    orchestrator_compaction_cap: int = 6000
+    #: THE HARD CONTEXT BOUND for the orchestrator's conversation, in TOKENS.
+    #: Enforced by prime-agent's OWN threshold compaction, configured into the
+    #: run's private agent dir at session build time
+    #: (`e16_session.configure_native_compaction`). There is no hand-off prompt
+    #: of ours any more and no fresh-session reseed: the conversation stays one
+    #: session and the CLI compacts it in place. What was actually configured
+    #: -- including the failure cases, where the bound could NOT be enforced --
+    #: is written into provenance.
+    orchestrator_context_limit_tokens: int = 128 * 1024
+    #: Filled in by `build_session`: the record of what compaction the CLI was
+    #: actually configured with. Provenance reads it; nothing decides on it.
+    orchestrator_compaction: Optional[dict] = None
+    #: `--decide-only`: USD that must remain before another decision round is
+    #: bought. Sized for a decision round (cents), not for a player launch --
+    #: see `min_headroom_usd`, which is the launch gate and would refuse every
+    #: round of a decide-only run under a small ceiling.
+    decide_only_headroom_usd: float = 0.25
     #: Agent-state dir for the orchestrator session. MUST NOT be shared with a
     #: player sandbox: /root/.prime/agent holds daemon-workers/ and
     #: session-leases/, and a booting experiment scanning it has been measured
@@ -532,6 +541,50 @@ def ledger_rows(archive) -> list:
     return [row_from_meta(p, checkpoint_meta(p)) for p in checkpoint_list(archive)]
 
 
+def creation_order(paths: list) -> list:
+    """Checkpoint dirs in the order the engine wrote them, oldest first.
+
+    `created_at` is harness-written at save time. The id is only a tiebreak,
+    and a numeric one -- ``c10`` was written after ``c9``, and any ordering
+    that sorts them as strings would build the lineage backwards.
+    """
+    def key(path):
+        try:
+            ts = float(checkpoint_meta(path).get("created_at") or 0.0)
+        except Exception:
+            ts = 0.0
+        return (ts, _id_key_name(Path(path).name))
+    return sorted(paths, key=key)
+
+
+def parent_chain(paths: list, resume_id: Optional[str]) -> list:
+    """``[(path, parent id), ...]`` -- one attempt's checkpoints as a PATH.
+
+    THE DEFECT THIS FIXES. Every checkpoint an attempt wrote used to be
+    stamped with the checkpoint that ATTEMPT resumed from, so an attempt that
+    saved 23 states produced 23 siblings of one node: a star with 23 spokes,
+    in which nothing records that c6 was written after c5 in the same life.
+    The mechcheck archive is exactly that -- c2..c24 all pointing at c1 -- and
+    it is unusable as a tree.
+
+    A life is a CHAIN. The first checkpoint an attempt writes descends from the
+    state it resumed; the second descends from the first; and so on. The chain
+    is joined to the rest of the archive at the resume point, so a later
+    attempt resuming the SAME state starts a second child there and the fork is
+    visible as a fork -- which is the only way branching, the behaviour this
+    experiment is trying to observe, shows up in the structure at all.
+    """
+    out = []
+    prev = str(resume_id) if resume_id else None
+    for path in creation_order(paths):
+        out.append((Path(path), prev))
+        try:
+            prev = str(checkpoint_meta(path).get("id") or Path(path).name.lstrip("c"))
+        except Exception:
+            prev = Path(path).name.lstrip("c")
+    return out
+
+
 def pareto_frontier(rows: list) -> list:
     """Rows not dominated on (Dlvl, XL, score).
 
@@ -609,7 +662,12 @@ def checkpoint_kind(row: Row) -> str:
             return KIND_LEVEL_ENTRY
         if "level_up" in text or "reached XL" in text:
             return KIND_LEVEL_UP
-        if "turn_" in text or "game turns elapsed" in text:
+        # BOTH CADENCE VOCABULARIES. The trigger counts LM calls now
+        # (`call_37`, "20 LM calls elapsed"); archives written before that
+        # change say `turn_222` / "150 game turns elapsed" and must keep
+        # classifying as cadence rather than falling through to `auto`.
+        if ("call_" in text or "LM calls elapsed" in text
+                or "turn_" in text or "game turns elapsed" in text):
             return KIND_CADENCE
         return KIND_AUTO
     return by or KIND_UNKNOWN
@@ -956,9 +1014,14 @@ def lesson_excerpt(checkpoint_dir, max_chars: int = 90) -> str:
 
 #: Header widths, in one place so the column line and the rows cannot drift.
 _TRIED_W = 22
-_LEDGER_HEADER = ("   id   branch  Dlvl  XL      HP   hp%    turn  score  dup  "
-                  "kind         " + "tried".ljust(_TRIED_W)
+_LEDGER_HEADER = ("   id    from  branch  Dlvl  XL      HP   hp%    turn  score  "
+                  "dup  kind         " + "tried".ljust(_TRIED_W)
                   + " name / why saved")
+
+
+def _parent_cell(r: Row) -> str:
+    """The `from` column: which checkpoint this one descends from."""
+    return f"c{r.parent}" if r.parent else "root"
 
 
 def _state_line(g: StateGroup, *, current_id: Optional[str],
@@ -987,7 +1050,8 @@ def _state_line(g: StateGroup, *, current_id: Optional[str],
     note = _trim(r.note, 46)
     if note:
         text += f" | {note}"
-    line = (f"{mark} c{r.id:<4} {branch_short(r.dungeon_number):>7} "
+    line = (f"{mark} c{r.id:<4} {_parent_cell(r):>5} "
+            f"{branch_short(r.dungeon_number):>7} "
             f"{r.dlvl:>4}  {r.xl:>2}  {r.hp:>3}/{r.max_hp:<3} {pct}  "
             f"{r.gameturn:>6} {r.score:>6}  "
             f"{('x' + str(g.count)) if g.count > 1 else '  ':>3}  "
@@ -1008,7 +1072,8 @@ def _compact_line(g: StateGroup) -> str:
     frac = hp_fraction(r)
     pct = f"{round(100 * frac)}%" if frac is not None else "?"
     ids = " ".join("c" + i for i in g.ids)
-    return (f"    {ids:<14} {branch_short(r.dungeon_number)} D{r.dlvl} XL{r.xl} "
+    return (f"    {ids:<14} <-{_parent_cell(r)} "
+            f"{branch_short(r.dungeon_number)} D{r.dlvl} XL{r.xl} "
             f"{r.hp}/{r.max_hp} {pct} t{r.gameturn} s{r.score} "
             f"{checkpoint_kind(r)}")
 
@@ -1087,6 +1152,10 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
         f"All numbers are measured by the harness from the game engine, not "
         f"written by anyone; name, note and lesson are text and are never "
         f"measured.",
+        f"  from   = the checkpoint this one descends from. The archive is a "
+        f"TREE: within one attempt each state's parent is the previous state "
+        f"that attempt saved, and a state with two children is a point two "
+        f"attempts branched from.",
         f"  branch = which dungeon branch (main / MINES / SOKO ...). Depth "
         f"alone cannot tell a Mines level from a Dungeons-of-Doom one.",
         f"  hp%    = HP as a fraction of max. Two states with the same Dlvl, "
@@ -1139,6 +1208,7 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
             frac = hp_fraction(m)
             cands.append({
                 "id": m.id,
+                "parent": m.parent,
                 "dlvl": m.dlvl, "xl": m.xl, "score": m.score,
                 "dungeon_number": m.dungeon_number,
                 "branch": branch_name(m.dungeon_number),
@@ -1163,6 +1233,97 @@ def render_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
                   attempts: Optional[list] = None) -> str:
     """The archive as text. See :func:`build_ledger` for what it contains."""
     return build_ledger(rows, cfg, current_id, attempts)[0]
+
+
+def archive_tree(rows: list) -> dict:
+    """``{"roots": [...], "children": {id: [id, ...]}, "problems": [...]}``.
+
+    The archive's lineage as a graph, with every way it can fail to be a tree
+    named rather than smoothed over: a parent that does not exist, a cycle, a
+    second root. Callers that want to LOOK at the tree use
+    :func:`render_archive_tree`; callers that want to ASSERT on it read
+    ``problems``.
+    """
+    by_id = {r.id: r for r in rows}
+    children: dict = {r.id: [] for r in rows}
+    roots: list = []
+    problems: list = []
+    for r in rows:
+        if r.parent is None:
+            roots.append(r.id)
+        elif r.parent not in by_id:
+            problems.append(f"c{r.id}: parent c{r.parent} is not in the archive")
+            roots.append(r.id)
+        elif r.parent == r.id:
+            problems.append(f"c{r.id}: is its own parent")
+            roots.append(r.id)
+        else:
+            children[r.parent].append(r.id)
+    for k in children:
+        children[k].sort(key=_id_key)
+    # CYCLES. Walk up from every node; a node that does not reach a root in
+    # `len(rows)` steps is in one.
+    for r in rows:
+        seen = set()
+        cur = r.id
+        while cur is not None and cur in by_id:
+            if cur in seen:
+                problems.append(f"c{r.id}: its ancestry contains a cycle "
+                                f"through c{cur}")
+                break
+            seen.add(cur)
+            cur = by_id[cur].parent
+    if len(roots) > 1:
+        problems.append(f"{len(roots)} roots ({', '.join('c' + i for i in roots)}); "
+                        f"a tree has one")
+    if rows and not roots:
+        problems.append("no root: every checkpoint claims a parent")
+    return {"roots": sorted(set(roots), key=_id_key), "children": children,
+            "problems": problems, "by_id": by_id}
+
+
+def render_archive_tree(rows: list) -> str:
+    """The archive as an indented tree, for a human to eyeball.
+
+    Deliberately plain text and deliberately not pruned: this is what the
+    branching structure of a run LOOKS like, and a picture that hides the
+    boring parts of it would hide exactly the runs where nothing branched.
+    """
+    if not rows:
+        return "ARCHIVE TREE: empty."
+    t = archive_tree(rows)
+    out = [f"ARCHIVE TREE: {len(rows)} checkpoint(s), "
+           f"{len(t['roots'])} root(s)."]
+    if t["problems"]:
+        out.append("NOT A VALID TREE:")
+        out.extend("  ! " + p for p in t["problems"])
+    seen: set = set()
+
+    def walk(ident: str, prefix: str, last: bool, top: bool) -> None:
+        if ident in seen:                       # a cycle; already reported
+            out.append(f"{prefix}+- c{ident} (already shown -- cycle)")
+            return
+        seen.add(ident)
+        r = t["by_id"][ident]
+        stem = "" if top else ("`- " if last else "+- ")
+        out.append(f"{prefix}{stem}c{ident}  {branch_short(r.dungeon_number)} "
+                   f"D{r.dlvl} XL{r.xl} s{r.score} t{r.gameturn} "
+                   f"{r.hp}/{r.max_hp}  {checkpoint_kind(r)}"
+                   + (f"  attempts_from={r.attempts_from}"
+                      if r.attempts_from else "")
+                   + (f"  \"{_trim(r.name, 32)}\"" if r.name else ""))
+        kids = t["children"].get(ident, [])
+        pad = prefix if top else prefix + ("   " if last else "|  ")
+        for i, k in enumerate(kids):
+            walk(k, pad, i == len(kids) - 1, False)
+
+    for root in t["roots"]:
+        walk(root, "", True, True)
+    stranded = [r.id for r in rows if r.id not in seen]
+    if stranded:
+        out.append("UNREACHED FROM ANY ROOT (this is the defect, not a view "
+                   "option): " + " ".join("c" + i for i in stranded))
+    return "\n".join(out)
 
 
 def read_lessons(checkpoint_dir) -> str:
@@ -2997,6 +3158,9 @@ def reconcile_run(cfg: OrchestratorConfig, *, apply: bool = True,
     unattributed: list = []
     held_by_live: list = []
     per_attempt_new: dict = {}
+    #: attempt -> [(path, meta, the id that attempt resumed)]. Filled in the
+    #: loop, stamped after it, because `parent_chain` needs the whole set.
+    to_stamp: dict = {}
     for path, meta in orphans:
         created = meta.get("created_at")
         if not isinstance(created, (int, float)):
@@ -3028,13 +3192,24 @@ def reconcile_run(cfg: OrchestratorConfig, *, apply: bool = True,
         per_attempt_new.setdefault(n, []).append(path.name)
         attributed.append({"checkpoint": path.name, "attempt": n,
                            "created_at": created})
-        if apply:
-            meta["created_in_attempt"] = n
-            if meta.get("parent") is None and parent:
-                meta["parent"] = parent
-            meta["attributed_by"] = "recovery"
-            atomic_write(path / META_JSON,
-                         json.dumps(meta, indent=2, sort_keys=True) + "\n")
+        # STAMPED PER ATTEMPT, BELOW, not here. The lineage of a checkpoint
+        # depends on the OTHER checkpoints the same attempt wrote, so it cannot
+        # be decided one orphan at a time -- doing it that way is what made
+        # every recovered archive a star.
+        to_stamp.setdefault(n, []).append((path, meta, parent))
+
+    if apply:
+        for n, items in to_stamp.items():
+            resume_id = next((par for _p, _m, par in items if par), None)
+            parents = dict(parent_chain([p for p, _m, _par in items],
+                                        resume_id))
+            for path, meta, _par in items:
+                meta["created_in_attempt"] = n
+                if meta.get("parent") is None and parents.get(path):
+                    meta["parent"] = str(parents[path])
+                meta["attributed_by"] = "recovery"
+                atomic_write(path / META_JSON,
+                             json.dumps(meta, indent=2, sort_keys=True) + "\n")
 
     # (1b) now that attribution is known, write the finalized rows.
     for n in interrupted:
@@ -3243,8 +3418,10 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
             "session_resume_verified": cfg.session_resume_verified,
             "context_bound": {
                 "player_summary_cap_chars": cfg.orchestrator_summary_cap,
-                "compaction_trigger_chars": cfg.orchestrator_context_chars,
-                "handoff_cap_chars": cfg.orchestrator_compaction_cap,
+                "context_limit_tokens": cfg.orchestrator_context_limit_tokens,
+                # WHOSE COMPACTION. Ours is gone; this says what the CLI's was
+                # set to, and says so even when it could not be set.
+                "compaction": cfg.orchestrator_compaction,
             },
         },
         # Honest statements about what this run is NOT.
@@ -3326,6 +3503,9 @@ class Orchestrator:
         self.resumed = False
         #: Set by the signal handlers; named on the finalized attempt row.
         self.interrupted_by: str = ""
+        #: True while `run_decide_only` is driving. Everything it writes says
+        #: so, and this is what puts it in the summary.
+        self.decide_only = False
 
     # -- setup ------------------------------------------------------------- #
 
@@ -3444,23 +3624,15 @@ ceiling ${ceiling:.2f}.
 {ledger}
 
 Choose the checkpoint the next player resumes from, and write it a DIRECTIVE:
-one or two sentences of concrete instruction for THIS attempt. It must name
-what to do and be checkable against what the game records -- the two rules
-below say how. The directive is served to the player
-verbatim at the top of its first observation, and whether it followed you is
-measured -- so make it checkable, not encouraging.
+one or two sentences of concrete instruction for THIS attempt. The directive is
+served to the player verbatim at the top of its first observation.
+
+There is NO required form. Say the strategy you actually want followed, in
+whatever terms express it -- go and kill the thing you know is on that level,
+avoid it entirely, farm here until XL 5 and then take it on, take this route
+down. You are not writing for a grader; you are steering a player.
 
 Any checkpoint id in the archive above is a legal choice.
-
-HOW TO PHRASE IT SO IT CAN BE SCORED. Two rules, both learned from directives
-that could not be measured:
-  * PROHIBIT OUTCOMES, NOT TOOLS. "Do not clear the level" is checkable against
-    what the game shows. "Do not explore" is not: the player may have to
-    explore in order to reach the staircase you told it to take, and nothing
-    that stays out of its reasoning can tell that from disobedience.
-  * ALWAYS PAIR A PROHIBITION WITH SOMETHING TO DO. A directive that only
-    forbids is satisfied by dying on turn two, so it cannot distinguish your
-    steering from an attempt that never started.
 
 Reply with a short rationale and then EXACTLY this JSON object on its own line:
 {{"checkpoint": "<id from the archive above>", "directive": "<your instruction>", "rationale": "<one line>"}}
@@ -3489,13 +3661,15 @@ control arm, and would be recorded as a failure of this round rather than as a
 player result.
 """
 
-    COMPACTION_PROMPT = """\
-Your context is getting long, so this conversation will be continued in a new
-one seeded only with what you write now. Write the hand-off: at most {cap}
-characters covering what you have learned about this seed, which checkpoints
-have been productive and which are dead ends, what directives worked, and what
-you intend to do next. Write it for yourself. No JSON this round.
-"""
+    # NO HAND-WRITTEN COMPACTION PROMPT. There used to be one here: past
+    # 400k sent characters the run asked the orchestrator to summarize itself
+    # and continued in a FRESH session seeded with that summary. It is gone.
+    # Compaction is now the CLI's own -- prime-agent has native threshold
+    # compaction (`settings.compaction`), and we configure it to fire at a hard
+    # 128K-token context bound rather than writing a summarization prompt of
+    # our own. See `e16_session.configure_native_compaction`. The conversation
+    # stays ONE session across the whole run, which is also what makes
+    # `--resume` continuity meaningful.
 
     def open_discussion(self, character: str = "Val-hum-neu-fem") -> Optional[dict]:
         """Round 1: the planning phase, before any player is launched.
@@ -3739,40 +3913,14 @@ you intend to do next. Write it for yourself. No JSON this round.
                 return a
         return None
 
-    def maybe_compact(self) -> Optional[str]:
-        """Hand the conversation off to a fresh one when context gets long.
-
-        The orchestrator's context is the only thing here that grows without
-        bound, and Prime Agent ENDS the agent loop when context exceeds
-        `contextWindow - 16384` -- under `--print` nothing resumes it and the
-        CLI exits 0 with no output, which reaches the harness as a silent
-        success. That failure truncated three of five rollouts in an earlier
-        run. So compaction is pre-emptive, and the session chain is recorded so
-        the conversation stays auditable even though it is no longer one file.
-        """
-        if self.session is None or not self.session.needs_compaction():
-            return None
-        res = self.session.ask(
-            self.COMPACTION_PROMPT.format(cap=self.cfg.orchestrator_compaction_cap),
-            kind="compaction")
-        self.budget.add_orchestrator(res.spend_usd)
-        summary = (res.text or "")[:self.cfg.orchestrator_compaction_cap]
-        if hasattr(self.session, "compact"):
-            self.session.compact(summary)
-        else:
-            # A PrimeAgentSession compacts by starting a new session seeded
-            # with the hand-off: dropping the id makes the next round create
-            # one, and the chain is already in `session_ids`.
-            self.session.session_id = ""
-            self.session.sent_chars = 0
-            self.session.compactions += 1
-            self.session.ask(
-                "You are continuing an E16 Go-Explore run. This is the hand-off "
-                "from your previous conversation; treat it as your own memory:\n\n"
-                + summary, kind="compaction_seed")
-        atomic_write(self.cfg.orchestrator_dir / f"handoff_{self.session.compactions}.txt",
-                     summary)
-        return summary
+    # `maybe_compact` IS GONE. It used to ask the model for a hand-off
+    # summary at 400k sent chars and continue in a fresh session seeded with
+    # it -- our own summarization prompt, our own idea of what was worth
+    # keeping, and a broken conversation every time it fired. prime-agent
+    # compacts natively at a token threshold it computes from the model's real
+    # context window, so the bound is configured once (128K tokens, in
+    # `e16_session.configure_native_compaction`) and the CLI does the rest
+    # inside the one session.
 
     # -- stopping ---------------------------------------------------------- #
 
@@ -3831,7 +3979,6 @@ you intend to do next. Write it for yourself. No JSON this round.
             return self.run_matched_restart_attempt(rows)
 
         n = len(self.attempts) + 1
-        self.maybe_compact()
         choice = self.decide(rows)
         chosen_id = choice["checkpoint_id"]
         directive = choice["directive"]
@@ -4391,8 +4538,14 @@ you intend to do next. Write it for yourself. No JSON this round.
         # not by trusting a count the player reported.
         after_paths = checkpoint_list(cfg.archive_dir)
         new_dirs = [p for p in after_paths if p.name not in before]
-        for p in new_dirs:
-            self._stamp_new_checkpoint(p, ctx, result)
+        # THE LINEAGE IS A CHAIN, NOT A FAN. See `parent_chain`: within one
+        # attempt each checkpoint's parent is the previous one this attempt
+        # wrote, and only the first points back at the state that was resumed.
+        chain = parent_chain(new_dirs, ctx.checkpoint_id)
+        new_dirs = [p for p, _ in chain]  # creation order, so the record's
+        # `new_checkpoints` list reads as the trajectory it was.
+        for p, parent_id in chain:
+            self._stamp_new_checkpoint(p, ctx, result, parent_id)
 
         # attempts_from++ on the source checkpoint, atomically.
         #
@@ -4514,20 +4667,28 @@ you intend to do next. Write it for yourself. No JSON this round.
         return record
 
     def _stamp_new_checkpoint(self, path: Path, ctx: PlayerContext,
-                              result: PlayerResult) -> None:
+                              result: PlayerResult,
+                              parent_id: Optional[str] = None) -> None:
         """Record which attempt produced a checkpoint, and its lineage.
 
         The `save` skill knows nothing about attempts or parents -- it writes
         from inside the game. Stamping here is what makes the archive a tree
         rather than a pile. Numeric fields are NOT touched.
+
+        ``parent_id`` comes from :func:`parent_chain`: the PREVIOUS checkpoint
+        this same attempt wrote, or the state the attempt resumed for the first
+        one. Passing ``ctx.checkpoint_id`` for all of them is what built the
+        star this argument exists to replace.
         """
         try:
             meta = checkpoint_meta(path)
         except Exception:
             return
         meta.setdefault("parent", None)
-        if meta.get("parent") is None and ctx.checkpoint_id:
-            meta["parent"] = ctx.checkpoint_id
+        if parent_id is None:
+            parent_id = ctx.checkpoint_id
+        if meta.get("parent") is None and parent_id:
+            meta["parent"] = str(parent_id)
         meta["created_in_attempt"] = ctx.attempt
         atomic_write(path / META_JSON,
                      json.dumps(meta, indent=2, sort_keys=True) + "\n")
@@ -4689,6 +4850,11 @@ you intend to do next. Write it for yourself. No JSON this round.
         censored = sum(1 for a in self.attempts if a["outcome"] == OUTCOME_CENSORED)
         out = {
             "run_dir": str(self.cfg.run_dir),
+            # LOUD, AND FIRST. A decide-only run has no players in it; nothing
+            # downstream may read its attempt rows as measurements.
+            "mode": "decide_only" if self.decide_only else "full",
+            "synthetic": bool(self.decide_only),
+            "synthetic_note": SYNTHETIC_NOTE if self.decide_only else "",
             "experiment_arm": self.cfg.arm,
             "player_arm": self.cfg.player_arm,
             "reseed_on_restore": self.cfg.reseed_on_restore,
@@ -5027,6 +5193,169 @@ you intend to do next. Write it for yourself. No JSON this round.
             self.stop_reason = self.stop_reason or STOP_MAX_ATTEMPTS
         self.finish()
         return self.write_summary()
+
+    # -- the decision loop, with no players -------------------------------- #
+
+    def run_decide_only(self, outcomes: list) -> dict:
+        """The orchestrator's ROUNDS, against synthetic attempt outcomes.
+
+        WHY THIS EXISTS. A player attempt costs ~$31 and half an hour; an
+        orchestrator decision round costs ~$0.08. Until this mode there was no
+        supported way to exercise the decision loop at all -- `should_stop`
+        gates the round and the launch behind the same check -- so the question
+        the whole selection redesign was for ("does it USE the freedom to pick
+        a dominated checkpoint, branch, and adapt to outcomes?") could only be
+        asked at 400x the price of the answer.
+
+        Each round is the real thing: the real `decide`, the real ledger built
+        from a real archive, the real parser, the real `selection.jsonl`
+        record. What is fake is only what comes BACK -- the attempt outcome,
+        which the caller supplies. `outcomes` is one spec per round::
+
+            {"outcome": "died", "censor_reason": "", "max_dlvl": 8,
+             "max_xl": 4, "calls": 120, "summary": "...", "lesson": "...",
+             "compliance": "ignored", "spend_usd": 31.0}
+
+        NOTHING HERE CAN BE MISTAKEN FOR A REAL RUN. Every record this writes
+        -- the selection line, the attempt row, the lesson appended to the
+        checkpoint, the summary -- carries ``synthetic: true``, and the run
+        summary carries ``mode: decide_only``. The player budget line stays at
+        zero because no player ran: a spec's ``spend_usd`` is recorded on the
+        row as ``synthetic_spend_usd`` and is NOT added to the budget, because
+        adding it would make the ceiling stop a run that had spent nothing.
+
+        NO STOP CONDITIONS EXCEPT THE BUDGET. `should_stop` is deliberately not
+        consulted: the milestone and stall rules exist to stop paying for
+        players, and here there are none. The round count is the caller's.
+        """
+        self.decide_only = True
+        if self.session is None:
+            raise ValueError("--decide-only needs the LLM selector: with "
+                             "--selector scripted there is no decision round "
+                             "to exercise, only the softmax.")
+        self.install_signal_handlers()
+        self.write_summary()
+        try:
+            try:
+                self.open_discussion()
+            except OrchestratorRoundFailed as exc:
+                self.stop_reason = STOP_ORCHESTRATOR_FAILED
+                self.orchestrator_error = f"{type(exc).__name__}: {exc}"
+                self.write_summary()
+                raise
+            for spec in outcomes:
+                # THE CEILING, ON A DECISION ROUND'S SCALE. `budget.check()`
+                # refuses below `min_headroom_usd`, which is sized for LAUNCHING
+                # AN UNCAPPED PLAYER ($5 by default) -- against a decide-only
+                # ceiling of $8 or $15 that gate would refuse every round while
+                # the actual cost of one is a few cents. There is no launch here
+                # to reserve headroom for, so the ceiling is the ceiling.
+                if self.budget.remaining <= self.cfg.decide_only_headroom_usd:
+                    self.stop_reason = STOP_BUDGET
+                    break
+                rows = self.rows()
+                if not rows:
+                    self.stop_reason = STOP_EMPTY_ARCHIVE
+                    break
+                n = len(self.attempts) + 1
+                try:
+                    choice = self.decide(rows)
+                except OrchestratorRoundFailed as exc:
+                    self.stop_reason = STOP_ORCHESTRATOR_FAILED
+                    self.orchestrator_error = f"{type(exc).__name__}: {exc}"
+                    self.write_summary()
+                    raise
+                rec = selection_record(n, choice, rows,
+                                       frontier=self.frontier_ids(rows))
+                rec["synthetic"] = True
+                rec["synthetic_note"] = SYNTHETIC_NOTE
+                _append_jsonl(self.cfg.selection_path, rec)
+                self.ingest_synthetic(choice, dict(spec or {}))
+            else:
+                self.stop_reason = self.stop_reason or STOP_MAX_ATTEMPTS
+        finally:
+            clear_run_lock(self.cfg.run_dir)
+        self.finish()
+        return self.write_summary()
+
+    def ingest_synthetic(self, choice: dict, spec: dict) -> dict:
+        """Fold one SYNTHETIC attempt outcome back into the record.
+
+        The same shape `ingest` produces, minus everything that could only come
+        from a player: no new checkpoints, no compliance rubric (the spec says
+        what happened instead), no player spend. `attempts_from` is bumped and
+        the lesson IS appended to the source checkpoint, because both of those
+        are what the orchestrator reads next round -- a probe that skipped them
+        would be probing a different ledger than the one a real run shows.
+        """
+        n = len(self.attempts) + 1
+        chosen_id = choice.get("checkpoint_id")
+        directive = choice.get("directive") or ""
+        ck_dir = next((r.path for r in self.rows() if r.id == chosen_id), None)
+        outcome = str(spec.get("outcome") or OUTCOME_DIED)
+        censor = str(spec.get("censor_reason") or "")
+        compliance = {"class": str(spec.get("compliance") or "not_scored"),
+                      "source": "synthetic: supplied by the operator, not "
+                                "measured from any player's calls"}
+        if ck_dir is not None:
+            self._bump_attempts_from(ck_dir)
+            body = (f"{SYNTHETIC_NOTE}\n\n"
+                    f"DIRECTIVE GIVEN: {directive or '(none)'}\n"
+                    f"WHAT THE (SYNTHETIC) ATTEMPT DID: "
+                    f"{compliance['class']}\n\n"
+                    + str(spec.get("summary") or "(no summary)").strip())
+            if spec.get("lesson"):
+                body += "\n\nLESSON: " + str(spec["lesson"]).strip()
+            append_lesson(ck_dir, body,
+                          heading=f"attempt {n} (SYNTHETIC, {outcome}"
+                                  + (f":{censor}" if censor else "") + ")")
+        record = {
+            "attempt": n,
+            "synthetic": True,
+            "synthetic_note": SYNTHETIC_NOTE,
+            "from_checkpoint": chosen_id,
+            "directive": directive,
+            "directive_compliance": compliance,
+            "directive_kind": classify_directive_kind(directive),
+            "directive_lint": lint_directive(directive),
+            "experiment_arm": self.cfg.arm,
+            "pair_id": None, "pair_role": ROLE_SOLO,
+            "reseed": None,
+            "selection_source": choice.get("source"),
+            "orchestrator_decision": choice.get("decision"),
+            "outcome": outcome,
+            "censored": outcome == OUTCOME_CENSORED,
+            "censor_reason": censor,
+            "stop_condition": str(spec.get("stop_condition") or outcome),
+            "error": str(spec.get("error") or ""),
+            "calls": int(spec.get("calls") or 0),
+            # NOT ON THE BUDGET. Named so it can never be summed as if it were.
+            "spend_usd": 0.0,
+            "synthetic_spend_usd": float(spec.get("spend_usd") or 0.0),
+            "rollouts_paid": 0,
+            "wall_s": 0.0,
+            "max_dlvl": int(spec.get("max_dlvl") or 0),
+            "max_xl": int(spec.get("max_xl") or 1),
+            "new_checkpoints": [],
+            "frontier_advanced": False,
+            "attempts_since_frontier_advance": self._since_advance,
+            "cumulative_calls": self.cum_calls,
+            "cumulative_spend_usd": round(self.budget.spent_usd, 4),
+            "cumulative_wall_s": round(self.cum_wall, 1),
+            "model_text": {"summary": spec.get("summary") or "",
+                           "lesson": spec.get("lesson") or ""},
+            "out_dir": "",
+        }
+        self._since_advance += 1
+        self.attempts.append(record)
+        _append_jsonl(self.cfg.attempts_path, record)
+        self.write_summary()
+        return record
+
+
+SYNTHETIC_NOTE = ("SYNTHETIC. No player was launched and no player budget was "
+                  "spent; the outcome fed back to the orchestrator was written "
+                  "by the operator to probe the decision loop.")
 
 
 def _count(values) -> dict:
@@ -5532,6 +5861,21 @@ def main(argv=None) -> int:
     ap.add_argument("--progress-interval", type=float, default=15.0,
                     help="Seconds between progress.jsonl samples while an "
                          "attempt plays. `tail -f` that file to watch a run.")
+    ap.add_argument("--decide-only", default="",
+                    help="PROBE THE DECISION LOOP WITHOUT PAYING FOR PLAYERS. "
+                         "Path to a JSON list of synthetic attempt outcomes "
+                         "(or {\"outcomes\": [...]}), one per round: the "
+                         "orchestrator plays its real opening round and one "
+                         "real decision round per entry, against the real "
+                         "archive in <run_dir>/archive, and each round is fed "
+                         "back the outcome you wrote instead of a player's. "
+                         "No player is launched and no player budget is spent. "
+                         "Every record it writes is marked synthetic:true.")
+    ap.add_argument("--tree", action="store_true",
+                    help="Print the archive as an indented lineage tree and "
+                         "exit. NO model calls, no spend, no writes -- it "
+                         "reads meta.json's `parent`. Says out loud when what "
+                         "it found is not a tree.")
     ap.add_argument("--seed-archive", action="store_true",
                     help="Write c1 (a fresh game at the entrance) and exit.")
     ap.add_argument("--prepare-only", action="store_true",
@@ -5570,6 +5914,15 @@ def main(argv=None) -> int:
     # RECONCILE-ONLY runs against the directory as it stands. No wiki copy, no
     # provenance rewrite, no session -- so it is safe to point at a run someone
     # else is still holding, and safe to run twice.
+    # --tree, like --reconcile, runs against the directory as it stands: no
+    # wiki copy, no provenance rewrite, no session, no writes at all.
+    if args.tree:
+        if not cfg.archive_dir.is_dir():
+            print(f"e16: {cfg.archive_dir} does not exist", file=sys.stderr)
+            return 2
+        rows = ledger_rows(cfg.archive_dir)
+        print(render_archive_tree(rows))
+        return 0 if not archive_tree(rows)["problems"] else 1
     if args.reconcile:
         if not cfg.archive_dir.is_dir():
             print(f"e16: {cfg.archive_dir} does not exist", file=sys.stderr)
@@ -5605,7 +5958,14 @@ def main(argv=None) -> int:
         except Exception:
             pass
     session = build_session(cfg) if cfg.selector == "llm" else None
-    orch = Orchestrator(cfg, SubprocessPlayer(), session=session)
+
+    def _no_player(ctx):
+        raise RuntimeError("--decide-only launches no players; reaching the "
+                           "launcher means the mode is not doing what it says")
+
+    orch = Orchestrator(cfg,
+                        _no_player if args.decide_only else SubprocessPlayer(),
+                        session=session)
     prov = orch.prepare()
     print(json.dumps(prov, indent=2, sort_keys=True))
     if args.prepare_only:
@@ -5619,6 +5979,31 @@ def main(argv=None) -> int:
         orch.finish()
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0 if result.get("verified") else 1
+    if args.decide_only:
+        # NO PLAYER EXISTS IN THIS MODE, and the launcher says so rather than
+        # being a stub that could quietly run one.
+        spec = json.loads(Path(args.decide_only).read_text())
+        outcomes = spec["outcomes"] if isinstance(spec, dict) else spec
+        if not isinstance(outcomes, list) or not outcomes:
+            print(f"e16: --decide-only {args.decide_only} holds no outcomes",
+                  file=sys.stderr)
+            return 2
+        if not checkpoint_list(cfg.archive_dir):
+            print(f"e16: --decide-only needs an archive in {cfg.archive_dir}; "
+                  f"copy one in (never point this at an archive you care "
+                  f"about -- the mode appends lessons and bumps "
+                  f"attempts_from)", file=sys.stderr)
+            return 2
+        try:
+            summary = orch.run_decide_only(outcomes)
+        except OrchestratorRoundFailed as exc:
+            print(f"[e16] ORCHESTRATOR FAILED: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            print(json.dumps(orch.summary(), indent=2, sort_keys=True,
+                             default=str))
+            return 3
+        print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+        return 0
     if args.seed_archive or not checkpoint_list(cfg.archive_dir):
         target = seed_archive(cfg)
         print(f"[e16] seeded archive: {target}")
@@ -5678,20 +6063,32 @@ def build_session(cfg: OrchestratorConfig):
     whose ``daemon-workers/`` and ``session-leases/`` a booting experiment was
     measured reaping from another experiment's live rollouts.
     """
-    from e16_session import DEFAULT_MODEL, PrimeAgentSession, seed_agent_dir
+    from e16_session import (DEFAULT_MODEL, PrimeAgentSession,
+                             configure_native_compaction, seed_agent_dir)
 
     agent_dir = cfg.orchestrator_agent_dir or (cfg.orchestrator_dir / "agent")
     cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
     seed_agent_dir(agent_dir)
+    model = cfg.orchestrator_model or DEFAULT_MODEL
+    # THE CONTEXT BOUND, HANDED TO THE CLI. After `seed_agent_dir`, because it
+    # rewrites the settings.json that was just copied in -- and into the
+    # PRIVATE agent dir, so the operator's own prime-agent keeps its defaults.
+    cfg.orchestrator_compaction = configure_native_compaction(
+        agent_dir, model=model,
+        limit_tokens=cfg.orchestrator_context_limit_tokens)
+    if not cfg.orchestrator_compaction.get("enforced"):
+        print(f"[e16] WARNING: the "
+              f"{cfg.orchestrator_context_limit_tokens}-token orchestrator "
+              f"context bound is NOT enforced: "
+              f"{cfg.orchestrator_compaction.get('why')}", file=sys.stderr)
     tmpdir = cfg.orchestrator_tmpdir or (Path(agent_dir) / "tmp")
     cfg.orchestrator_tmpdir = Path(tmpdir)
     return PrimeAgentSession(
         work_dir=cfg.orchestrator_dir, agent_dir=agent_dir,
         log_path=cfg.orchestrator_log,
-        model=cfg.orchestrator_model or DEFAULT_MODEL,
+        model=model,
         timeout_s=cfg.orchestrator_timeout_s,
         summary_cap=cfg.orchestrator_summary_cap,
-        context_chars=cfg.orchestrator_context_chars,
         tmpdir=tmpdir,
         json_mode_policy=cfg.orchestrator_json_mode,
     )

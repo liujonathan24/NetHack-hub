@@ -320,13 +320,11 @@ class SessionBase:
 
     kind = "base"
 
-    def __init__(self, *, work_dir, log_path=None, summary_cap: int = 1500,
-                 context_chars: int = 400_000):
+    def __init__(self, *, work_dir, log_path=None, summary_cap: int = 1500):
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = Path(log_path) if log_path else self.work_dir / "rounds.jsonl"
         self.summary_cap = summary_cap
-        self.context_chars = context_chars
         self.rounds = 0
         self.sent_chars = 0
         self.spend_usd = 0.0
@@ -354,8 +352,13 @@ class SessionBase:
             return text
         return text[:max(0, self.summary_cap - 20)].rstrip() + " [...truncated]"
 
-    def needs_compaction(self) -> bool:
-        return self.sent_chars >= self.context_chars
+    # `needs_compaction` IS GONE, and with it the 400k-sent-chars trigger and
+    # the hand-off prompt it fired. Compaction is prime-agent's own: see
+    # `configure_native_compaction`, which writes the CLI's `settings.compaction`
+    # so its threshold check (`shouldCompact`: contextTokens > contextWindow -
+    # reserveTokens) fires at a hard 128K-token bound. `compactions` below is
+    # kept only as a counter for compactions we can OBSERVE, and is no longer
+    # something this module causes.
 
     def budget_lines(self) -> dict:
         return {
@@ -408,6 +411,169 @@ class SessionBase:
             os.fsync(fh.fileno())
 
 
+#: THE HARD CONTEXT BOUND for the orchestrator's conversation, in tokens.
+#: 128K. Compaction fires when the session's context exceeds it.
+CONTEXT_LIMIT_TOKENS = int(os.environ.get("ORCH_CONTEXT_LIMIT_TOKENS",
+                                          128 * 1024))
+
+#: Tokens of recent conversation prime-agent's compactor keeps verbatim. Its
+#: own default; named here so the written settings are complete rather than
+#: half-specified.
+COMPACTION_KEEP_RECENT_TOKENS = 20_000
+
+
+def model_context_window(model: str = DEFAULT_MODEL,
+                         provider: str = DEFAULT_PROVIDER,
+                         binary: str = PRIME_AGENT_BIN) -> Optional[int]:
+    """The EXACT context window prime-agent will use for ``provider/model``.
+
+    Read out of the CLI's own bundled model catalog, because the number has to
+    be exact and no interface exposes it exactly. ``prime-agent model list``
+    prints it rounded ("1.0M"), and rounding DOWN a 1048576-token window to
+    1000000 would push the compaction threshold ~48K tokens above the bound we
+    are trying to enforce -- the one direction of error that matters, since the
+    trigger is ``contextWindow - reserveTokens``.
+
+    Returns ``None`` when the catalog cannot be read or the model is not in it.
+    A caller that gets ``None`` must say so rather than guess: an over-estimate
+    of the window compacts late, and an under-estimate can make the threshold
+    negative and compact on every single turn.
+    """
+    try:
+        real = Path(shutil.which(binary) or binary).resolve()
+    except Exception:
+        return None
+    bundle = real.parent
+    if not bundle.is_dir():
+        return None
+    # The catalog is `"<provider>": { ... "<model id>": { ... contextWindow: N }`
+    # in one of the bundle chunks. Anchored on the model id AND the provider
+    # field inside its own object, so a same-named model under another provider
+    # (there are several `glm-5.2`s) cannot answer for this one.
+    key = re.compile(r'"' + re.escape(model) + r'":\s*\{')
+    for js in sorted(bundle.glob("*.js")):
+        try:
+            text = js.read_text(errors="replace")
+        except OSError:
+            continue
+        if model not in text:
+            continue
+        for m in key.finditer(text):
+            body = _brace_body(text, m.end() - 1)
+            if body is None or f'provider: "{provider}"' not in body:
+                continue
+            cw = re.search(r'contextWindow:\s*([0-9][0-9_.]*(?:e[0-9]+)?)', body)
+            if not cw:
+                continue
+            try:
+                return int(float(cw.group(1).replace("_", "")))
+            except ValueError:
+                continue
+    return None
+
+
+def _brace_body(text: str, open_idx: int, limit: int = 8000) -> Optional[str]:
+    """The text between ``text[open_idx] == '{'`` and its matching ``}``.
+
+    Brace-matched rather than regex-terminated because a model entry contains a
+    nested ``cost: { ... }``, and any non-greedy "up to the next closing brace"
+    pattern stops inside it -- before ``contextWindow``, which is the one field
+    this is read for.
+    """
+    if open_idx >= len(text) or text[open_idx] != "{":
+        return None
+    depth = 0
+    for i in range(open_idx, min(len(text), open_idx + limit)):
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1:i]
+    return None
+
+
+def configure_native_compaction(agent_dir, *, model: str = DEFAULT_MODEL,
+                                provider: str = DEFAULT_PROVIDER,
+                                binary: str = PRIME_AGENT_BIN,
+                                limit_tokens: int = CONTEXT_LIMIT_TOKENS
+                                ) -> dict:
+    """Make prime-agent compact THIS session at a hard ``limit_tokens`` bound.
+
+    THE CLI'S OWN COMPACTION, not ours. prime-agent has native threshold
+    compaction: ``settings.compaction = {enabled, reserveTokens,
+    keepRecentTokens}``, and its check is
+
+        shouldCompact(contextTokens, contextWindow, s) =
+            s.enabled and contextWindow > 0 and
+            contextTokens > contextWindow - s.reserveTokens
+
+    so the only knob that sets an absolute bound is ``reserveTokens``. Setting
+    it to ``contextWindow - limit_tokens`` makes the threshold exactly
+    ``limit_tokens``. Nothing here writes a summarization prompt: what the
+    compactor keeps and how it summarizes is the CLI's business.
+
+    Written into the orchestrator's PRIVATE agent dir, never the operator's.
+
+    Returns the record of what was done, including the failure cases, for
+    provenance. When the window cannot be discovered, or is already at or below
+    the bound, the CLI's own defaults are left alone and ``enforced`` is False
+    -- a run that could not enforce its bound has to say so rather than write a
+    reserve computed from a guessed window.
+    """
+    agent_dir = Path(agent_dir)
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    path = agent_dir / "settings.json"
+    try:
+        settings = json.loads(path.read_text())
+        if not isinstance(settings, dict):
+            settings = {}
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+
+    cw = model_context_window(model, provider, binary)
+    rec = {
+        "mechanism": "prime-agent native threshold compaction "
+                     "(settings.compaction), configured -- no summarization "
+                     "prompt of ours",
+        "model": model, "provider": provider,
+        "context_window_tokens": cw,
+        "limit_tokens": int(limit_tokens),
+        "settings_path": str(path),
+    }
+    if cw is None:
+        rec.update(enforced=False,
+                   why="prime-agent's model catalog did not yield an exact "
+                       "contextWindow for this provider/model, and a reserve "
+                       "computed from a guessed window would enforce the wrong "
+                       "bound. The CLI's default compaction (enabled, reserve "
+                       "16384) is left in place.")
+        return rec
+    if cw <= limit_tokens:
+        rec.update(enforced=False, reserve_tokens=None,
+                   why=f"the model's own context window ({cw} tokens) is at or "
+                       f"below the {limit_tokens}-token bound, so the bound "
+                       f"cannot bind. The CLI's default compaction is left in "
+                       f"place.")
+        return rec
+
+    reserve = int(cw) - int(limit_tokens)
+    settings["compaction"] = {
+        "enabled": True,
+        "reserveTokens": reserve,
+        "keepRecentTokens": COMPACTION_KEEP_RECENT_TOKENS,
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+    rec.update(enforced=True, reserve_tokens=reserve,
+               keep_recent_tokens=COMPACTION_KEEP_RECENT_TOKENS,
+               compacts_when="context tokens exceed "
+                             f"{cw} - {reserve} = {limit_tokens}")
+    return rec
+
+
 def seed_agent_dir(dest, src=None) -> list:
     """Give the orchestrator a private agent dir with the operator's settings.
 
@@ -439,11 +605,11 @@ class PrimeAgentSession(SessionBase):
                  model: str = DEFAULT_MODEL, provider: str = DEFAULT_PROVIDER,
                  timeout_s: float = 900.0, runner: Optional[Runner] = None,
                  env: Optional[dict] = None, extra_args: Optional[list] = None,
-                 summary_cap: int = 1500, context_chars: int = 400_000,
+                 summary_cap: int = 1500,
                  kernel_venv: str = "", tmpdir=None,
                  json_mode_policy: str = JSON_MODE_DISCOVERY_ONLY):
         super().__init__(work_dir=work_dir, log_path=log_path,
-                         summary_cap=summary_cap, context_chars=context_chars)
+                         summary_cap=summary_cap)
         self.agent_dir = Path(agent_dir)
         (self.agent_dir / SESSIONS_SUBDIR).mkdir(parents=True, exist_ok=True)
         self.binary = binary
@@ -1021,9 +1187,9 @@ class ReplaySession(SessionBase):
     kind = "replay"
 
     def __init__(self, *, work_dir, ask_fn, log_path=None,
-                 summary_cap: int = 1500, context_chars: int = 400_000):
+                 summary_cap: int = 1500):
         super().__init__(work_dir=work_dir, log_path=log_path,
-                         summary_cap=summary_cap, context_chars=context_chars)
+                         summary_cap=summary_cap)
         self.ask_fn = ask_fn
         self.history: list = []
 
@@ -1132,6 +1298,7 @@ def parse_decision(text: str, valid_ids) -> Decision:
 
 
 __all__ = [
+    "CONTEXT_LIMIT_TOKENS",
     "DEFAULT_MODEL",
     "DEFAULT_PROVIDER",
     "Decision",
@@ -1148,6 +1315,8 @@ __all__ = [
     "RoundTimeout",
     "SessionBase",
     "SessionCwdMismatch",
+    "configure_native_compaction",
+    "model_context_window",
     "parse_decision",
     "parse_json_mode_stdout",
     "parse_round_stdout",

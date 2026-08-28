@@ -963,26 +963,32 @@ def test_the_first_call_seeds_the_watermarks_and_saves_nothing(tmp_path):
     assert _auto(state)["saved"] == []
 
 
-def test_a_periodic_auto_checkpoint_fires_on_game_turns(tmp_path):
-    """The 150-game-turn trigger, driven by the real engine clock.
+def test_a_periodic_auto_checkpoint_fires_on_LM_CALLS(tmp_path):
+    """The cadence trigger, counted in LM CALLS and not in game turns.
 
     This is the trigger for a rollout that is making progress the depth and XL
-    triggers cannot see -- wandering a large level for hundreds of turns. The
-    interval is shortened here so the check costs seconds instead of minutes;
-    the production default is 150.
+    triggers cannot see -- wandering one level for a long time. The interval is
+    shortened to 3 here so the check costs seconds; the production default is
+    20.
+
+    Counting calls is what makes the checkpoint land on a reasoning boundary,
+    where `prefix.jsonl` ends exactly where the saved state begins. The old
+    game-turn rule fired whenever the clock crossed a multiple, which is a
+    point inside some call's work.
     """
     archive = tmp_path / "archive"
     env, state, _ = _env_with(tmp_path, checkpoint_archive=str(archive),
-                              auto_checkpoint_turn_interval=20)
-    for _ in range(10):
-        asyncio.run(env._apply_tool_call(state, "np_explore_level", {}))
-        if _auto(state)["saved"]:
-            break
+                              auto_checkpoint_every_n_calls=3)
+    for _ in range(4):
+        asyncio.run(env._apply_tool_call(state, "search", {"times": 1}))
     saved = _auto(state)["saved"]
     assert saved, (
         f"no periodic auto-checkpoint after "
-        f"{state['structured_obs'].status.get('time')} game turns")
-    assert saved[0]["trigger"].startswith("turn_")
+        f"{_auto(state)['calls']} LM calls")
+    # `search` moves the clock barely at all, so a game-turn rule would not
+    # have fired here at any production interval. The call counter did.
+    assert _auto(state)["calls"] == 4
+    assert saved[0]["trigger"].startswith("call_")
     ids = _archive_ids(archive)
     assert ids, "the trigger fired but nothing reached the archive"
 
@@ -1129,7 +1135,7 @@ def test_auto_checkpoints_appear_in_the_turn_trace(tmp_path):
     archive = tmp_path / "archive"
     env, state, trace_dir = _env_with(tmp_path,
                                       checkpoint_archive=str(archive),
-                                      auto_checkpoint_turn_interval=20)
+                                      auto_checkpoint_every_n_calls=3)
     for _ in range(6):
         asyncio.run(env._apply_tool_call(state, "np_explore_level", {}))
     records = [json.loads(l) for f in trace_dir.glob("*.ndjson")
@@ -1162,8 +1168,8 @@ def test_auto_checkpoints_appear_in_the_turn_trace(tmp_path):
 
 def test_the_trigger_policy_without_an_engine():
     """The three conditions, and the watermarks that stop them re-firing."""
-    auto = {"seen_dlvl": {1}, "last_xl": 1, "last_periodic_turn": 0,
-            "interval": 150}
+    auto = {"seen_dlvl": {1}, "last_xl": 1, "calls": 0,
+            "last_periodic_call": 0, "interval": 20}
     T = m._auto_checkpoint_triggers
 
     assert T(auto, 1, 1, 10) == []                     # nothing happened
@@ -1171,12 +1177,36 @@ def test_the_trigger_policy_without_an_engine():
     assert T(auto, 2, 1, 30) == []                     # not again for Dlvl 2
     assert [t[0] for t in T(auto, 2, 2, 40)] == ["level_up_xl2"]
     assert T(auto, 2, 2, 60) == []
-    assert [t[0] for t in T(auto, 2, 2, 160)] == ["turn_160"]
-    # The clock advances by WHOLE intervals, so one 400-turn call does not
-    # reset the phase to an arbitrary point.
-    assert auto["last_periodic_turn"] == 150
-    assert [t[0] for t in T(auto, 2, 2, 460)] == ["turn_460"]
-    assert auto["last_periodic_turn"] == 450
+    # THE CADENCE IS CALLS, NOT TURNS. The game clock has run 60 turns and
+    # nothing has fired; it is the call counter that decides.
+    auto["calls"] = 20
+    assert [t[0] for t in T(auto, 2, 2, 61)] == ["call_20"]
+    # The counter advances by WHOLE intervals, so a burst of calls between two
+    # checks does not reset the phase to an arbitrary point.
+    assert auto["last_periodic_call"] == 20
+    auto["calls"] = 65
+    assert [t[0] for t in T(auto, 2, 2, 99)] == ["call_65"]
+    assert auto["last_periodic_call"] == 60
     # Going back UP a level is not a new level, and losing XL is not a level-up.
+    auto["calls"] = 61
     assert T(auto, 1, 2, 460) == []
     assert T(auto, 1, 1, 460) == []
+
+
+def test_level_entry_and_level_up_fire_INDEPENDENTLY_of_the_cadence():
+    """The two structural triggers are untouched by the cadence change.
+
+    With the cadence OFF entirely they still fire; and a call that both enters
+    a level and completes an interval writes both, rather than one masking the
+    other.
+    """
+    T = m._auto_checkpoint_triggers
+    off = {"seen_dlvl": {1}, "last_xl": 1, "calls": 999,
+           "last_periodic_call": 0, "interval": 0}
+    assert [t[0] for t in T(off, 3, 1, 500)] == ["level_entry_d3"]
+    assert [t[0] for t in T(off, 3, 2, 500)] == ["level_up_xl2"]
+
+    both = {"seen_dlvl": {1}, "last_xl": 1, "calls": 20,
+            "last_periodic_call": 0, "interval": 20}
+    fired = [t[0] for t in T(both, 4, 2, 700)]
+    assert fired == ["level_entry_d4", "level_up_xl2", "call_20"]

@@ -657,13 +657,30 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # from the seed state at $13 a try.
         #
         # So the harness saves at the states the design named -- level entry,
-        # level-up, and every `auto_checkpoint_turn_interval` game turns -- and
+        # level-up, and every `auto_checkpoint_every_n_calls` LM calls -- and
         # the model's `save` becomes an addition to that rather than the whole
         # mechanism. Off unless `checkpoint_archive` is configured, so no arm
         # outside E16 acquires it.
         auto_checkpoint: bool = True,
-        #: Game turns (not LM calls) between periodic auto-checkpoints.
-        auto_checkpoint_turn_interval: int = 150,
+        #: LM CALLS between periodic auto-checkpoints. NOT game turns, and the
+        #: change is deliberate.
+        #:
+        #: A call is where reasoning starts and ends. A checkpoint written on a
+        #: call boundary therefore lines up with the transcript: `prefix.jsonl`
+        #: ends exactly where the checkpoint's state begins, and no half-formed
+        #: reasoning straddles the boundary a later attempt resumes from. Game
+        #: turns have no such property -- one skill call can advance dozens of
+        #: them, so a turn-triggered checkpoint lands in the middle of a call's
+        #: work and the prefix it ships is a conversation cut mid-thought.
+        #:
+        #: It also fixes a spacing defect that was measured rather than
+        #: predicted. The old rule fired when the game clock CROSSED a multiple
+        #: of 150, checked at call boundaries, so the realised intervals were
+        #: ragged: the mechcheck attempt's cadence checkpoints came 100, 136,
+        #: 143, 154, 151, 192, 103, 151 turns apart -- 14 of them over 249
+        #: calls. At 20 calls the same attempt yields ~12, evenly spaced, each
+        #: on a reasoning boundary.
+        auto_checkpoint_every_n_calls: int = 20,
         **kwargs,
     ):
         self.interface = interface
@@ -683,7 +700,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             auto_checkpoint = auto_checkpoint.strip().lower() not in (
                 "false", "0", "no", "off", "")
         self._auto_checkpoint = bool(auto_checkpoint)
-        self._auto_checkpoint_turn_interval = int(auto_checkpoint_turn_interval or 0)
+        self._auto_checkpoint_every_n_calls = int(auto_checkpoint_every_n_calls or 0)
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         # env_args flow through the eval CLI as dotted-scalar STRINGS, so
@@ -944,7 +961,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # ---- E16: automatic checkpointing, seeded from the START state ------
         # Seeded from where this rollout BEGINS, not from zero: a rollout
         # resumed at Dlvl 4 / game turn 900 must not fire "new level" and
-        # "150 turns elapsed" on its first call for a state it just restored
+        # "20 calls elapsed" on its first call for a state it just restored
         # and that is already in the archive.
         state["_auto_ck"] = {
             # `configured` means "this is an E16 rollout with an archive", and
@@ -955,10 +972,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # archive writes exactly the bytes it wrote before.
             "configured": bool(self._checkpoint_archive),
             "enabled": bool(self._auto_checkpoint and self._checkpoint_archive),
-            "interval": self._auto_checkpoint_turn_interval,
+            "interval": self._auto_checkpoint_every_n_calls,
+            "interval_unit": "lm_calls",
             "seen_dlvl": set(),
             "last_xl": None,
-            "last_periodic_turn": None,
+            #: LM calls this rollout has made (counted here, on the harness
+            #: side of the tool boundary, so it is calls and not env steps).
+            "calls": 0,
+            "last_periodic_call": 0,
             # Triggers the savepoint guard deferred. NOT dropped: a `--More--`
             # is most likely exactly when a trigger fires (level entry prints
             # one), so a dropped trigger loses the checkpoints that matter most.
@@ -2867,6 +2888,14 @@ def _auto_checkpoint_triggers(auto: dict, dlvl: int, xl: int,
 
     Pure and side-effect-free apart from advancing `auto`'s watermarks, so the
     trigger policy is testable without an engine.
+
+    THE CADENCE IS COUNTED IN LM CALLS, not game turns -- see
+    `auto_checkpoint_every_n_calls` for why. `gameturn` is still taken, and
+    still goes in the note, because "which turn was this" is what makes a
+    cadence checkpoint identifiable afterwards; it just no longer decides
+    WHETHER one is written. Level entry and level-up are unchanged and fire
+    independently of the cadence: a call that both enters a level and completes
+    an interval writes both.
     """
     fired = []
     if dlvl and dlvl not in auto["seen_dlvl"]:
@@ -2877,18 +2906,23 @@ def _auto_checkpoint_triggers(auto: dict, dlvl: int, xl: int,
     if xl:
         auto["last_xl"] = max(int(auto["last_xl"] or 0), int(xl))
     interval = int(auto.get("interval") or 0)
-    if interval > 0 and gameturn is not None:
-        last = auto["last_periodic_turn"]
-        if last is None:
-            auto["last_periodic_turn"] = gameturn
-        elif gameturn - last >= interval:
-            # Advance by whole intervals rather than to `gameturn`, so a skill
-            # that burns 400 turns in one call does not silently reset the
-            # clock to an arbitrary phase.
-            auto["last_periodic_turn"] = last + interval * (
-                (gameturn - last) // interval)
-            fired.append((f"turn_{gameturn}", f"{interval} game turns elapsed "
-                          f"(turn {gameturn})"))
+    calls = int(auto.get("calls") or 0)
+    if interval > 0:
+        last = int(auto.get("last_periodic_call") or 0)
+        if calls - last >= interval:
+            # Advance by whole intervals rather than to `calls`, so the phase
+            # of the cadence is fixed by the interval and not by which call
+            # happened to notice it.
+            auto["last_periodic_call"] = last + interval * (
+                (calls - last) // interval)
+            # NAMED FOR THE CALL, because the call is what triggered it. The
+            # game turn stays in the note -- it is what makes one cadence
+            # checkpoint identifiable from another afterwards -- but the label
+            # no longer claims a turn count decided anything.
+            fired.append((f"call_{calls}",
+                          f"{interval} LM calls elapsed (call {calls}"
+                          + (f", turn {gameturn})" if gameturn is not None
+                             else ")")))
     return fired
 
 
@@ -2948,9 +2982,14 @@ def _maybe_auto_checkpoint(state: dict) -> None:
         if dlvl:
             auto["seen_dlvl"].add(dlvl)
         auto["last_xl"] = xl or None
-        auto["last_periodic_turn"] = gameturn
+        auto["calls"] = 1
+        auto["last_periodic_call"] = 1
         return
 
+    # THE CALL COUNTER, advanced here and nowhere else. This function runs once
+    # per tool call on the harness's side of the boundary, which is what makes
+    # "calls" the right unit to count here rather than env steps.
+    auto["calls"] = int(auto.get("calls") or 0) + 1
     auto["pending"].extend(_auto_checkpoint_triggers(auto, dlvl, xl, gameturn))
     if not auto["pending"]:
         return
