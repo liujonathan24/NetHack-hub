@@ -145,6 +145,10 @@ fi
 
 BEFORE="$(git -C "$CANON" rev-parse --short HEAD)"
 echo "[corch] $(date -u +%H:%M:%S) round ${ROUND_N}: reading $TRAIN_DIR -> code $CANON @ $BEFORE (provider=$PROVIDER model=$MODEL)"
+ORCH_TMP="/tmp/pa-orch-$(printf '%s' "$ORCH_DIR" | md5sum | cut -c1-10)"
+mkdir -p "$ORCH_TMP"
+TMPDIR="$ORCH_TMP" \
+PRIME_AGENT_KERNEL_VENV="${ORCH_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
 PRIME_AGENT_KERNEL_VENV="${PRIME_AGENT_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
   "${PA38_BIN:-prime-agent}" --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
