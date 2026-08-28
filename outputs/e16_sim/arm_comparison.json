@@ -1,0 +1,105 @@
+[
+  {
+    "arm": "control_nodirective",
+    "directive": "(none - control)",
+    "served_nodes_with_directive": 0,
+    "first_decision": "np_melee_attack(x=27, y=8)",
+    "action_mix": {
+      "request_map": 1,
+      "np_melee_attack": 1,
+      "np_explore_level": 1,
+      "np_move_to": 3,
+      "np_press_key": 5
+    },
+    "n_attacks": 1,
+    "n_explore": 1,
+    "descent_count": 0.0,
+    "max_dlvl": 1.0,
+    "max_xl": 1.0,
+    "skill_calls": 10.0,
+    "died": 0.0,
+    "stop": "call_budget_exhausted"
+  },
+  {
+    "arm": "no_descend",
+    "directive": "Do NOT descend this attempt. Explore this level, fight only weak monsters, and reach XL 3 before taking any staircase.",
+    "served_nodes_with_directive": 1,
+    "first_decision": "np_melee_attack(x=27, y=8)",
+    "action_mix": {
+      "request_map": 3,
+      "np_melee_attack": 2,
+      "np_explore_level": 1,
+      "np_move_to": 2,
+      "np_press_key": 3
+    },
+    "n_attacks": 2,
+    "n_explore": 1,
+    "descent_count": 0.0,
+    "max_dlvl": 1.0,
+    "max_xl": 1.0,
+    "skill_calls": 10.0,
+    "died": 0.0,
+    "stop": "call_budget_exhausted"
+  },
+  {
+    "arm": "descend_fast",
+    "directive": "Descend as fast as possible. Find the down staircase and take it immediately. Do not explore, do not fight anything you can walk around.",
+    "served_nodes_with_directive": 1,
+    "first_decision": "np_move_to(x=8, y=4)",
+    "action_mix": {
+      "request_map": 2,
+      "np_move_to": 2,
+      "np_explore_level": 7
+    },
+    "n_attacks": 0,
+    "n_explore": 7,
+    "descent_count": 0.0,
+    "max_dlvl": 1.0,
+    "max_xl": 1.0,
+    "skill_calls": 10.0,
+    "died": 0.0,
+    "stop": "call_budget_exhausted"
+  },
+  {
+    "arm": "no_descend_long",
+    "directive": "Do NOT descend this attempt. Explore this level, fight only weak monsters, and reach XL 3 before taking any staircase.",
+    "served_nodes_with_directive": 1,
+    "first_decision": "np_melee_attack(x=27, y=8)",
+    "action_mix": {
+      "request_map": 4,
+      "np_melee_attack": 7,
+      "np_explore_level": 1,
+      "np_move_to": 5,
+      "np_press_key": 8,
+      "np_kick": 1
+    },
+    "n_attacks": 7,
+    "n_explore": 1,
+    "descent_count": 0.0,
+    "max_dlvl": 1.0,
+    "max_xl": 1.0,
+    "skill_calls": 25.0,
+    "died": 0.0,
+    "stop": "call_budget_exhausted"
+  },
+  {
+    "arm": "descend_fast_long",
+    "directive": "Descend as fast as possible. Find the down staircase and take it immediately. Do not explore, do not fight anything you can walk around.",
+    "served_nodes_with_directive": 1,
+    "first_decision": "np_move_to(x=8, y=4)",
+    "action_mix": {
+      "request_map": 4,
+      "np_move_to": 6,
+      "np_explore_level": 15,
+      "np_melee_attack": 1
+    },
+    "n_attacks": 1,
+    "n_explore": 15,
+    "descent_count": 0.0,
+    "max_dlvl": 1.0,
+    "max_xl": 1.0,
+    "skill_calls": 25.0,
+    "died": 0.0,
+    "stop": "call_budget_exhausted"
+  }
+]

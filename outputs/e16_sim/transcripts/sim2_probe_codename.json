@@ -1,0 +1,85 @@
+{
+  "prompt": "Reply with only your strategy codename.",
+  "thinking": [],
+  "tool_calls": [],
+  "assistant_texts": [
+    "HEALGATE DESCENT"
+  ],
+  "final_text": "HEALGATE DESCENT",
+  "usage": {
+    "input": 14876,
+    "output": 8,
+    "cacheRead": 0,
+    "cacheWrite": 0,
+    "cost_usd": 0.025033919999999998,
+    "assistant_messages": 1
+  },
+  "records": [
+    {
+      "type": "message",
+      "id": "00c3680f",
+      "parentId": "d8e3580e",
+      "timestamp": "2026-08-28T10:45:19.074Z",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Reply with only your strategy codename."
+          }
+        ],
+        "timestamp": 1787913919058
+      }
+    },
+    {
+      "type": "message",
+      "id": "91aad187",
+      "parentId": "00c3680f",
+      "timestamp": "2026-08-28T10:45:21.693Z",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "HEALGATE DESCENT"
+          }
+        ],
+        "api": "openai-completions",
+        "provider": "prime-inference",
+        "model": "z-ai/glm-5.2",
+        "usage": {
+          "input": 14876,
+          "output": 8,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 14884,
+          "cost": {
+            "input": 0.02499168,
+            "output": 4.224e-05,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0.025033919999999998
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 1787913919081,
+        "responseId": "a322b9caab8f2970-HEL"
+      }
+    },
+    {
+      "type": "session_state",
+      "id": "63ff4708",
+      "parentId": "91aad187",
+      "timestamp": "2026-08-28T10:54:32.399Z",
+      "state": {
+        "status": "active"
+      }
+    }
+  ],
+  "tag": "sim2_probe_codename",
+  "session_file": "01a047da-c6d0-73b7-8e1f-0b72c8ad50ce.jsonl",
+  "session_header_id": "01a047da-c7a0-757e-851c-de1bf8c7f9d5",
+  "session_file_bytes": 99400,
+  "model": "z-ai/glm-5.2",
+  "provider": "prime-inference"
+}

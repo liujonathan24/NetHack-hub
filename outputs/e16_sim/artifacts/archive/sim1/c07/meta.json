@@ -1,0 +1,20 @@
+{
+  "id": "c07",
+  "parent": "c03",
+  "name": "mines-entrance",
+  "note": "At the Gnomish Mines branch staircase on D3, full HP. Saved before choosing Mines vs main dungeon.",
+  "dlvl": 3,
+  "xl": 2,
+  "hp": 21,
+  "max_hp": 21,
+  "gameturn": 1044,
+  "score": 388,
+  "balrog": 0.062,
+  "balrog_min": 0.062,
+  "attempts_from": 2,
+  "visits": 2,
+  "created_by": "save",
+  "created_at": 1787894263.7197027,
+  "dungeon_number": 0,
+  "level_number": 3
+}
