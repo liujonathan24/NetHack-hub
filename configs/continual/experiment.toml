@@ -14,7 +14,7 @@
 #   # edit this file + the reflection prompt + (optionally) the skill package
 #   tools/cli_harness_eval/run_e13.sh
 
-id = "e16-s6-noreflect"
+id = "e16-s6-reflect"
 replicate = 1
 
 # How many reflect -> play rounds. Each round is len(corpus_seeds) games.
