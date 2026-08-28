@@ -2808,3 +2808,29 @@ def test_decide_only_refuses_the_scripted_selector(tmp_path):
     orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult())
     with pytest.raises(ValueError, match="needs the LLM selector"):
         orch.run_decide_only([{"outcome": "died"}])
+
+
+def test_the_orchestrator_is_told_not_to_prescribe_keystrokes():
+    """It does not know the player's tool surface, so commands it invents may not exist.
+
+    Observed across four runs: directives said "search walls by pressing s",
+    "use #terrain or _> to reveal hidden stairs", and -- worst -- "engrave
+    Elbereth (press E, then -, then type Elbereth)", where the `-` key is gated
+    off in the base tool surface entirely, so that instruction cannot execute at
+    all. Players act through high-level skills; the orchestrator's job is the
+    strategy those skills should serve.
+    """
+    import e16_orchestrator as E
+    rp = E.Orchestrator.ROUND_PROMPT
+    op = E.Orchestrator.OPENING_PROMPT
+    rflat = " ".join(rp.split())
+    assert "Do NOT prescribe keystrokes" in rflat
+    assert "press s" in rflat and "#terrain" in rflat     # the concrete examples
+    assert "Name the OUTCOME you want" in rflat
+    assert "next ~20 decisions" in rflat                  # the cadence framing
+    flat = " ".join(op.split())          # the prompt is hard-wrapped; match on words
+    assert "Never prescribe keystrokes or command syntax." in flat
+    assert "do not know the exact skill names" in flat
+    assert "Players do NOT type NetHack keys" in flat
+    # and the freedom of form survives alongside the new constraint
+    assert "There is NO required form." in rflat

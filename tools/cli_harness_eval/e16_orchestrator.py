@@ -3802,8 +3802,13 @@ THE SETUP
   Seed {seed}, character {character}, every attempt on the same dungeon. This
   is a single-seed study by design: you are meant to learn this one dungeon
   deeply, and what you learn about it is expected to be specific to it.
-  Players have: the standard action surface, rollback(n), save(label, note),
-  and wiki(page|query|section) over the same two curated pages you have.
+  Players do NOT type NetHack keys. They act through high-level skills that
+  each perform many keystrokes -- move to a coordinate, explore the level,
+  attack a target, rest, search, descend -- plus rollback(n), save(label,
+  note), and wiki(page|query|section) over the same two curated pages you
+  have. You do not know the exact skill names or the key bindings, and you do
+  not need to: the player already sees its own tools. Never prescribe
+  keystrokes or command syntax.
 
 YOUR KNOWLEDGE BASE (read it now, before deciding anything)
   {wiki_dir}
@@ -3834,10 +3839,19 @@ Choose the checkpoint the next player resumes from, and write it a DIRECTIVE:
 one or two sentences of concrete instruction for THIS attempt. The directive is
 served to the player verbatim at the top of its first observation.
 
-There is NO required form. Say the strategy you actually want followed, in
-whatever terms express it -- go and kill the thing you know is on that level,
-avoid it entirely, farm here until XL 5 and then take it on, take this route
-down. You are not writing for a grader; you are steering a player.
+There is NO required form. STAY AT THE LEVEL OF STRATEGY: the useful question
+is what this player's next ~20 decisions should be FOR. Say the strategy you want
+followed, in whatever terms express it -- go and kill the thing you know is on
+that level, avoid it entirely, farm here until XL 5 and then take it on, get
+down two floors without fighting anything. You are not writing for a grader;
+you are steering a player.
+
+Do NOT prescribe keystrokes, key sequences or command syntax -- no "press s",
+no "engrave with E then -", no "#terrain". You do not have the player's tool
+list and some of the raw keys you might name are not even reachable through
+it; an instruction the player cannot execute is worse than no instruction,
+because it spends the attempt discovering that. Name the OUTCOME you want and
+let the player choose how.
 
 Any checkpoint id in the archive above is a legal choice.
 
