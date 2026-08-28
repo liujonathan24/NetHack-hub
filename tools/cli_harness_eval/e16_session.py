@@ -179,6 +179,11 @@ DEFAULT_MODEL = os.environ.get("ORCH_MODEL", "z-ai/glm-5.2")
 #: this).
 _SEED_FILES = ("settings.json", "auth.json", "models.json")
 
+#: How much of a round's raw stdout is kept on the record. Generous, because
+#: the thing it exists to preserve is the evidence for an extraction failure,
+#: and one pilot round's stdout was 2.6 MB of it.
+RAW_STDOUT_CAP = 200_000
+
 
 @dataclass
 class RoundResult:
@@ -213,6 +218,13 @@ class RoundResult:
     #: 0.0 when the session file carried no cost, which is reported as
     #: unavailable rather than as free.
     cost_usd_reported: float = 0.0
+    #: The subprocess's RAW stdout, capped. Kept because `text` is the output
+    #: of a parser, and every failure this module has actually had was a
+    #: disagreement between the two: the E16 pilot's round-1 directive was in
+    #: stdout and not in `text`, and its opening plan was 11,478 chars in
+    #: stdout and 2,656,190 chars in `text`. When extraction fails, the bytes
+    #: it failed on are the evidence, so they go on the record.
+    raw_stdout: str = ""
 
 
 class RoundTimeout(RuntimeError):
@@ -379,6 +391,14 @@ class SessionBase:
             "session_cwd": res.session_cwd, "session_file": res.session_file,
             "cost_usd_reported": round(res.cost_usd_reported, 6),
             "argv": res.argv, "prompt": prompt, "reply": res.text,
+            # THE TWO LENGTHS, ALWAYS. `reply` is a parser's output; when it
+            # disagrees with the bytes it was parsed from, that disagreement is
+            # the whole story, and reading it out of the log should not require
+            # re-running the parser. The pilot's round-1 stdout was 1,104 chars
+            # and its `reply` 678; its opening stdout was ~2.7 MB and its
+            # `reply` 2,656,190. Either number alone hides both failures.
+            "reply_chars": len(res.text or ""),
+            "raw_stdout_chars": len(res.raw_stdout or ""),
             "sent_chars_cumulative": self.sent_chars, "t": time.time(),
         }
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -673,8 +693,12 @@ class PrimeAgentSession(SessionBase):
         res.wall_s = time.time() - t0
         res.exit_code = rc
         res.stderr = stderr or ""
-        header, text, usage = parse_json_mode_stdout(stdout or "")
+        # PARSED ACCORDING TO THE MODE THAT WAS ACTUALLY REQUESTED. Handing
+        # plain `--print` output to the json record parser is what deleted the
+        # pilot's directive line -- see `parse_round_stdout`.
+        header, text, usage = parse_round_stdout(stdout or "", json_mode)
         res.text = text
+        res.raw_stdout = (stdout or "")[:RAW_STDOUT_CAP]
         res.usage = usage
         if rc != 0 and not res.error:
             res.error = f"prime-agent exited {rc}: {(stderr or '')[:300]}"
@@ -785,6 +809,104 @@ class PrimeAgentSession(SessionBase):
         }
 
 
+#: WHERE ASSISTANT TEXT MAY BE READ FROM IN ``--mode json``, narrowest first,
+#: and ONLY ONE OF THEM IS EVER READ.
+#:
+#: Everything else in that stream is a partial: ``message_update`` re-emits the
+#: WHOLE message on every text delta (``docs/json.md``, "Output Format"). And
+#: even the complete ones overlap -- ``turn_end`` repeats the message
+#: ``message_end`` just delivered, ``agent_end`` repeats the whole conversation
+#: -- so a parser that reads more than one tier double-counts BOTH the text and
+#: the usage that rides with it. The first tier carrying any assistant text
+#: wins; the rest are ignored. ``loose`` is the session-file/legacy shape,
+#: which has no event types at all, plus any line that was not JSON.
+#:
+#: MEASURED, not feared. The E16 GE-wiki pilot's opening round produced ONE
+#: 11,478-char plan -- the session file has it once, at
+#: ``sessions/01a04847-…jsonl`` record 44 -- and the old parser, which
+#: concatenated the text of every record, turned it into 2,656,190 chars: 533
+#: cumulative prefixes of the same plan, 589 unique lines out of 18,088. The
+#: run read that as the model stuck in a repetition loop and threw the opening
+#: plan away. The model was fine; the parser was not.
+_TEXT_TIERS = ("message_end", "turn_end", "agent_end", "loose")
+
+_USAGE_FIELDS = (
+    ("prompt_tokens", ("prompt_tokens", "input_tokens")),
+    ("completion_tokens", ("completion_tokens", "output_tokens")),
+    ("cached_input_tokens", ("cached_input_tokens", "cache_read_input_tokens",
+                             "cached_tokens")),
+)
+
+
+def _collapse_stream_texts(texts: list) -> list:
+    """Drop cumulative prefixes and exact repeats from a streamed text list.
+
+    A BACKSTOP, deliberately kept even though `_TEXT_TIERS` already excludes
+    the partials that cause the blow-up. The protocol this
+    reads is third-party and has already changed version once; if a future
+    shape streams partials under a type this module does not know, the failure
+    should be a slightly odd reply, not a 2.6 MB one that reads as a model
+    defect.
+    """
+    out: list = []
+    for t in texts:
+        if not t:
+            continue
+        if out:
+            last = out[-1]
+            if t.startswith(last):      # this chunk supersedes the last one
+                out[-1] = t
+                continue
+            if last.startswith(t):      # a shorter re-emission of the same text
+                continue
+        if t in out:
+            continue
+        out.append(t)
+    return out
+
+
+def _accumulate_usage(into: dict, rec) -> bool:
+    u = _find_usage(rec)
+    if not u:
+        return False
+    for dst, srcs in _USAGE_FIELDS:
+        for s in srcs:
+            if u.get(s) is not None:
+                into[dst] += int(u[s] or 0)
+                break
+    return True
+
+
+def parse_round_stdout(stdout: str, json_mode: bool) -> tuple:
+    """``(header, assistant_text, usage)`` for ONE round, given its mode.
+
+    THE BUG THIS CLOSES, and it is the one that cost the E16 pilot its central
+    mechanism. Plain ``--print`` writes assistant text and nothing else
+    (``dist/modes/print-mode.js:80-95``) -- there are no records to parse. Every
+    round after the discovery round runs in that mode (see
+    :meth:`PrimeAgentSession.use_json_mode`), and this module used to hand that
+    plain text to the json-mode record parser anyway. The parser reads
+    LINE BY LINE and treats any line that is a JSON object as a protocol record;
+    a record with no assistant role and no usage is skipped as unrecognised.
+
+    The orchestrator's round prompt asks for exactly that shape: "a short
+    rationale and then EXACTLY this JSON object ON ITS OWN LINE". So the
+    decision line -- ``{"checkpoint": "1", "directive": "…"}`` -- was parsed as
+    a record, recognised as nothing, and DELETED, leaving only the rationale
+    prose. `parse_decision` then found no decision, and the run fell back to
+    the scripted selector with no directive. Measured in the pilot: the model's
+    reply was 1,104 chars ending in a well-formed decision object; the round
+    log recorded 678 chars ending at the blank line before it, and attempt 1
+    was launched with "(orchestrator produced no directive for this attempt)".
+
+    A directive-carrying experiment that silently serves no directive is its
+    own control. Text mode is therefore parsed as text.
+    """
+    if not json_mode:
+        return None, (stdout or "").strip(), {}
+    return parse_json_mode_stdout(stdout)
+
+
 def parse_json_mode_stdout(stdout: str) -> tuple:
     """``(session_header, assistant_text, usage)`` from ``--mode json`` output.
 
@@ -794,11 +916,19 @@ def parse_json_mode_stdout(stdout: str) -> tuple:
     header says ``"version":3``). Anything it cannot recognise is skipped
     rather than guessed at, and unavailable usage comes back as ``{}`` so the
     caller reports it as unavailable instead of as zero.
+
+    Assistant text is taken from the NARROWEST tier of records that carries
+    any: terminal message events first, then ``agent_end``'s batch, then --
+    for the session-file/legacy shape, which has no event types at all -- every
+    record. Usage is summed over the SAME tier, because the streaming partials
+    repeat their message's usage as well as its text.
     """
     header = None
-    texts: list = []
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "cached_input_tokens": 0}
-    found_usage = False
+    texts = {t: [] for t in _TEXT_TIERS}
+    tier_usage = {t: {f: 0 for f, _ in _USAGE_FIELDS} for t in _TEXT_TIERS}
+    tier_found = {t: False for t in _TEXT_TIERS}
+    all_usage = {f: 0 for f, _ in _USAGE_FIELDS}
+    all_found = False
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line:
@@ -808,29 +938,35 @@ def parse_json_mode_stdout(stdout: str) -> tuple:
         except json.JSONDecodeError:
             # Text that is not a record: keep it, so a mode that degrades to
             # plain text still yields the reply instead of nothing.
-            texts.append(line)
+            texts["loose"].append(line)
             continue
         if not isinstance(rec, dict):
             continue
         if header is None and rec.get("type") == "session":
             header = rec
             continue
-        u = _find_usage(rec)
-        if u:
-            found_usage = True
-            for dst, srcs in (("prompt_tokens", ("prompt_tokens", "input_tokens")),
-                              ("completion_tokens", ("completion_tokens", "output_tokens")),
-                              ("cached_input_tokens", ("cached_input_tokens",
-                                                       "cache_read_input_tokens",
-                                                       "cached_tokens"))):
-                for s in srcs:
-                    if u.get(s) is not None:
-                        usage[dst] += int(u[s] or 0)
-                        break
-        txt = _assistant_text(rec)
-        if txt:
-            texts.append(txt)
-    return header, "\n".join(texts).strip(), (usage if found_usage else {})
+        rtype = rec.get("type")
+        tier = rtype if rtype in _TEXT_TIERS else "loose"
+        if tier == "agent_end":
+            msgs = rec.get("messages")
+            got = ([_assistant_text({"message": m}) for m in msgs]
+                   if isinstance(msgs, list) else [_assistant_text(rec)])
+        else:
+            got = [_assistant_text(rec)]
+        texts[tier].extend(t for t in got if t)
+        if _accumulate_usage(tier_usage[tier], rec):
+            tier_found[tier] = True
+        if _accumulate_usage(all_usage, rec):
+            all_found = True
+
+    for tier in _TEXT_TIERS:
+        collapsed = _collapse_stream_texts(texts[tier])
+        if not collapsed:
+            continue
+        usage = tier_usage[tier] if tier_found[tier] else (
+            all_usage if all_found else {})
+        return header, "\n".join(collapsed).strip(), usage
+    return header, "", (all_usage if all_found else {})
 
 
 def _assistant_text(rec: dict) -> str:
@@ -1006,6 +1142,7 @@ __all__ = [
     "JSON_MODE_POLICIES",
     "PRIME_AGENT_BIN",
     "PrimeAgentSession",
+    "RAW_STDOUT_CAP",
     "ReplaySession",
     "RoundResult",
     "RoundTimeout",
@@ -1013,5 +1150,6 @@ __all__ = [
     "SessionCwdMismatch",
     "parse_decision",
     "parse_json_mode_stdout",
+    "parse_round_stdout",
     "seed_agent_dir",
 ]

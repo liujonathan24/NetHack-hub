@@ -406,6 +406,32 @@ NO_TEXT_REASONING_UNAVAILABLE = (
 )
 
 
+def _auto_checkpoint_record(state) -> dict:
+    """This turn's view of the E16 automatic-checkpoint bookkeeping.
+
+    ``None`` -- and the caller then omits the key entirely -- when this rollout
+    has no checkpoint archive, i.e. it is not an E16 rollout. Every optional
+    field in a turn record is conditional for the same reason: an
+    unconditional key changes the trace bytes of every arm, including the
+    frozen controls this tree diffs against.
+
+    When there IS an archive the block is always present and carries
+    ``enabled``, so "the feature was off" and "the feature was on and saved
+    nothing" are distinguishable -- which they were not in the GE-wiki pilot,
+    where the archive simply never grew and nothing said why.
+    """
+    auto = state.get("_auto_ck") if hasattr(state, "get") else None
+    if not auto or not auto.get("configured"):
+        return None
+    return {
+        "enabled": bool(auto.get("enabled")),
+        "saved": list(auto.get("saved") or []),
+        "pending": [lbl for lbl, _why in (auto.get("pending") or [])],
+        "deferrals": int(auto.get("deferrals") or 0),
+        "errors": list(auto.get("errors") or []),
+    }
+
+
 def _reasoning_block(assistant_msg, dispatch_route: str) -> dict:
     """The `reasoning` block for a record written live by the harness.
 
@@ -529,6 +555,13 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
             "hp": status.get("hitpoints"),
             "max_hp": status.get("max_hitpoints"),
             "max_dlvl_reached": state.get("max_dlvl_reached"),
+            # E16 automatic checkpointing, per turn. `Trace.metrics` is written
+            # in the DRIVER process from `NetHackState`, which never sees the
+            # env's state dict, so this NDJSON is the only place the harness
+            # can say what its own auto-saves did. Recorded every turn --
+            # including the deferrals, which are the interesting half: a
+            # trigger that fired on a `--More--` and landed two calls later is
+            # a different archive than one that landed on entry.
             "continual_life": state.get("_continual_life", 1),
             "rendered_user_message": obs_text,
             "rendered_user_content": _capture_user_content(
@@ -564,6 +597,17 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
         # what the teacher changed this turn.
         if state.get("_ch_last_edits"):
             entry["ch_edits"] = state["_ch_last_edits"]
+        # E16 automatic checkpointing, per turn. `Trace.metrics` is written in
+        # the DRIVER process from `NetHackState`, which never sees the env's
+        # state dict, so this NDJSON is the only place the harness can say what
+        # its own auto-saves did -- including the deferrals, which are the
+        # interesting half: a trigger that fired on a `--More--` and landed two
+        # calls later is a different archive than one that landed on entry.
+        # Present only on rollouts that HAVE an archive, so every other arm's
+        # trace stays byte-identical.
+        _auto_ck = _auto_checkpoint_record(state)
+        if _auto_ck is not None:
+            entry["auto_checkpoint"] = _auto_ck
         # E14 crisis directive: which heuristic fired this turn ("hp" |
         # "pacing" | "hp+pacing"), stamped on the turn trace by
         # _apply_tool_call_inner. Gated on `applied` so the end-of-rollout

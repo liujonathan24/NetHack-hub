@@ -917,3 +917,266 @@ def test_one_unreadable_meta_does_not_make_the_whole_archive_unlistable(tmp_path
         checkpoint_meta(tmp_path / "c2")
     with pytest.raises(CheckpointIntegrityError):
         checkpoint_meta(tmp_path / "c404")
+
+
+# --------------------------------------------------------------------------- #
+# AUTOMATIC CHECKPOINTS -- the archive grows without the model's cooperation
+#
+# THE MEASUREMENT THAT FORCED THIS SECTION. The E16 GE-wiki pilot ran one real
+# attempt: 187 skill calls, Dlvl 1 -> 3, $13.36. It called `save` ZERO times.
+# `attempts.jsonl` recorded `new_checkpoints: []`, and round 2 of the
+# orchestrator was handed the same one-row archive round 1 had seen. Go-Explore
+# without archive growth is not Go-Explore; it is repeated restarts from the
+# seed state at $13 each. Nothing in the harness had ever written a checkpoint
+# on its own -- the design named level entry, level-up and every 150 game turns,
+# and none of the three existed in code.
+# --------------------------------------------------------------------------- #
+
+def _auto(state):
+    return state.get("_auto_ck") or {}
+
+
+def _archive_ids(root):
+    from nethack_harness.checkpoints import checkpoint_list
+    return sorted(p.name for p in checkpoint_list(root))
+
+
+def test_auto_checkpoint_is_off_unless_an_archive_is_configured(tmp_path):
+    """No arm outside E16 acquires this by having it default to on."""
+    env, state, _ = _env_with(tmp_path)
+    assert _auto(state)["enabled"] is False
+
+
+def test_the_first_call_seeds_the_watermarks_and_saves_nothing(tmp_path):
+    """A rollout RESUMED at Dlvl 4 must not re-save Dlvl 4 on call one.
+
+    The state it resumed from is already in the archive; firing "entered
+    Dlvl 4" would duplicate it and put a second row on the frontier that is the
+    same state.
+    """
+    archive = tmp_path / "archive"
+    env, state, _ = _env_with(tmp_path, checkpoint_archive=str(archive))
+    assert _auto(state)["enabled"] is True
+    asyncio.run(env._apply_tool_call(state, "search", {"times": 1}))
+    assert _archive_ids(archive) == []
+    assert _auto(state)["seen_dlvl"] == {1}
+    assert _auto(state)["saved"] == []
+
+
+def test_a_periodic_auto_checkpoint_fires_on_game_turns(tmp_path):
+    """The 150-game-turn trigger, driven by the real engine clock.
+
+    This is the trigger for a rollout that is making progress the depth and XL
+    triggers cannot see -- wandering a large level for hundreds of turns. The
+    interval is shortened here so the check costs seconds instead of minutes;
+    the production default is 150.
+    """
+    archive = tmp_path / "archive"
+    env, state, _ = _env_with(tmp_path, checkpoint_archive=str(archive),
+                              auto_checkpoint_turn_interval=20)
+    for _ in range(10):
+        asyncio.run(env._apply_tool_call(state, "np_explore_level", {}))
+        if _auto(state)["saved"]:
+            break
+    saved = _auto(state)["saved"]
+    assert saved, (
+        f"no periodic auto-checkpoint after "
+        f"{state['structured_obs'].status.get('time')} game turns")
+    assert saved[0]["trigger"].startswith("turn_")
+    ids = _archive_ids(archive)
+    assert ids, "the trigger fired but nothing reached the archive"
+
+    # IT IS A REAL, RESTORABLE CHECKPOINT, audited the same way every other
+    # restore in this tree is -- an archive row that cannot be resumed is worse
+    # than no row, because the selector will choose it.
+    meta = checkpoint_meta(archive / ids[0])
+    assert meta["created_by"] == "auto"
+    restored, rmeta = checkpoint_restore(archive / ids[0])
+    assert rmeta["restore_fidelity"]["ok"]
+    restored.close()
+
+
+def test_auto_checkpoints_grow_the_archive_WHEN_THE_ROLLOUT_DESCENDS(tmp_path):
+    """The pilot's exact scenario, with the fix: a real descent, real growth.
+
+    THE DESCENT IS REAL AND THE PATH IS REAL. `goto_depth` is the engine's own
+    level transition -- the same one a staircase runs, used here because
+    walking a seed until it happens to find stairs makes a launch gate that
+    costs minutes and can time out. Everything AFTER it is production code:
+    the hook runs inside `_apply_tool_call`, off the same shaped observation
+    the model is served, and the checkpoint is written by the same
+    `checkpoint_save` the `save` skill calls.
+
+    `save` is never called. The pilot ended this scenario -- 187 calls,
+    Dlvl 1 -> 3 -- with `new_checkpoints: []` and a one-row archive.
+    """
+    archive = tmp_path / "archive"
+    env, state, _ = _env_with(tmp_path, checkpoint_archive=str(archive))
+    inner = state["env"]
+    asyncio.run(env._apply_tool_call(state, "search", {"times": 1}))  # seed
+    start = int(state["structured_obs"].status.get("depth") or 1)
+    assert _archive_ids(archive) == [], "nothing may be saved before the descent"
+
+    # ESC first: a pending combat `--More--` eats the wait keystroke
+    # `goto_depth` uses to run its deferred goto, and the transition would
+    # silently not happen (test_persistent_checkpoint.py:170-175).
+    from nethack_harness.checkpoints import _engine_of, _raw_of
+    _raw_of(_engine_of(inner)).step(27)
+    _raw_of(_engine_of(inner)).goto_depth(start + 1)
+    # The model's next call is what the harness sees the new depth on -- and
+    # right after a level transition the game is commonly parked on a
+    # `--More--`, which is the case the deferral exists for. Give it a few
+    # quiescent calls, exactly as a real rollout would have.
+    for _ in range(6):
+        asyncio.run(env._apply_tool_call(state, "search", {"times": 1}))
+        if _auto(state)["saved"]:
+            break
+
+    auto = _auto(state)
+    assert int(state["structured_obs"].status.get("depth")) == start + 1
+    assert auto["saved"], (
+        f"the rollout descended to Dlvl "
+        f"{state['structured_obs'].status.get('depth')} and the archive is "
+        f"still empty -- this is the pilot's failure, unfixed. "
+        f"pending={auto['pending']} errors={auto['errors']}")
+    entry = [x for x in auto["saved"] if x["trigger"].startswith("level_entry_")]
+    assert entry, f"no level-entry checkpoint among {auto['saved']}"
+    assert entry[0]["dlvl"] == start + 1
+
+    ids = _archive_ids(archive)
+    assert ids, "auto-checkpoint reported a save that is not in the archive"
+    metas = [checkpoint_meta(archive / i) for i in ids]
+    # The player never called `save`. That is the whole point.
+    assert all(mt["created_by"] == "auto" for mt in metas), \
+        [mt["created_by"] for mt in metas]
+    assert any(mt["dlvl"] == start + 1 for mt in metas)
+
+    # AND IT IS A CHECKPOINT A LATER ATTEMPT CAN ACTUALLY RESUME, audited the
+    # way every restore in this tree is. An archive row that will not restore
+    # is worse than no row, because the selector will choose it.
+    deep = next(i for i, mt in zip(ids, metas) if mt["dlvl"] == start + 1)
+    restored, rmeta = checkpoint_restore(archive / deep)
+    assert rmeta["restore_fidelity"]["ok"]
+    assert int(rmeta["dlvl"]) == start + 1
+    restored.close()
+
+
+def test_a_trigger_blocked_by_a_pending_prompt_is_DEFERRED_not_dropped(tmp_path):
+    """The guard interaction the design note called out, tested directly.
+
+    `checkpoint_save` refuses while the game is parked on a `--More--`, and it
+    is right to: meta.json is built from blstats while the bundle serializes
+    the live heap, and over a deferred level transition the two disagree
+    (measured: meta said Dlvl 4 for a state that restores to Dlvl 2). But a
+    `--More--` is MOST likely exactly when the most important trigger fires,
+    because descending prints one. Dropping the save there would systematically
+    lose the checkpoints the frontier is made of.
+    """
+    import nethack as mod
+    from nethack_harness.checkpoints import CheckpointSavepointError
+
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    env, state, _ = _env_with(tmp_path, checkpoint_archive=str(archive))
+    asyncio.run(env._apply_tool_call(state, "search", {"times": 1}))  # seed
+
+    calls = {"n": 0}
+    real = mod._maybe_auto_checkpoint.__globals__  # noqa: SLF001
+
+    import nethack_harness.checkpoints as ckmod
+    original = ckmod.checkpoint_save
+
+    def refusing(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise CheckpointSavepointError("refusing: --More-- is up")
+        return original(*a, **kw)
+
+    ckmod.checkpoint_save = refusing
+    try:
+        auto = _auto(state)
+        auto["pending"].append(("level_entry_d2", "entered Dlvl 2"))
+        mod._maybe_auto_checkpoint(state)
+        assert auto["deferrals"] == 1
+        assert [p[0] for p in auto["pending"]] == ["level_entry_d2"], (
+            "a save refused because of a pending prompt was DROPPED; the "
+            "checkpoints that matter most are the ones taken at level entry, "
+            "which is when a --More-- is most likely to be up")
+        assert auto["saved"] == []
+
+        # ...and it lands on the next quiescent call, still labelled with the
+        # trigger that earned it.
+        mod._maybe_auto_checkpoint(state)
+        assert auto["pending"] == []
+        assert len(auto["saved"]) == 1
+        assert auto["saved"][0]["trigger"] == "level_entry_d2"
+        assert _archive_ids(archive)
+    finally:
+        ckmod.checkpoint_save = original
+
+
+def test_auto_checkpoints_appear_in_the_turn_trace(tmp_path):
+    """`Trace.metrics` is written in the driver process from `NetHackState`,
+    which never sees the env's state dict. The turn NDJSON is the only place
+    the harness can report what its own auto-saves did.
+
+    TWO PROPERTIES, and the second is a constraint this tree imposes on every
+    optional turn-record field. (1) On a rollout WITH an archive the block is
+    always present and carries `enabled`, so "off" is distinguishable from "on
+    and saved nothing". (2) On a rollout WITHOUT one -- every arm outside E16,
+    including the frozen E14/E15 controls this tree diffs against -- the key is
+    ABSENT, so their traces stay byte-identical."""
+    archive = tmp_path / "archive"
+    env, state, trace_dir = _env_with(tmp_path,
+                                      checkpoint_archive=str(archive),
+                                      auto_checkpoint_turn_interval=20)
+    for _ in range(6):
+        asyncio.run(env._apply_tool_call(state, "np_explore_level", {}))
+    records = [json.loads(l) for f in trace_dir.glob("*.ndjson")
+               for l in f.read_text().splitlines() if l.strip()]
+    assert records
+    blocks = [r.get("auto_checkpoint") for r in records]
+    assert all(b is not None for b in blocks), (
+        "auto-checkpoint bookkeeping is missing from the turn trace")
+    assert blocks[-1]["enabled"] is True
+
+    env2, state2, dir2 = _env_with(tmp_path / "off")
+    asyncio.run(env2._apply_tool_call(state2, "search", {"times": 1}))
+    recs2 = [json.loads(l) for f in dir2.glob("*.ndjson")
+             for l in f.read_text().splitlines() if l.strip()]
+    # NO ARCHIVE -> NO KEY. This is what keeps every non-E16 arm's turn trace
+    # byte-identical to what it wrote before this feature existed.
+    assert recs2 and "auto_checkpoint" not in recs2[-1]
+
+    # ...but an E16 rollout that DISABLED it still says so, rather than looking
+    # like an arm that never had the feature.
+    env3, state3, dir3 = _env_with(tmp_path / "disabled",
+                                   checkpoint_archive=str(tmp_path / "arch3"),
+                                   auto_checkpoint=False)
+    asyncio.run(env3._apply_tool_call(state3, "search", {"times": 1}))
+    recs3 = [json.loads(l) for f in dir3.glob("*.ndjson")
+             for l in f.read_text().splitlines() if l.strip()]
+    assert recs3 and recs3[-1]["auto_checkpoint"]["enabled"] is False
+    assert recs3[-1]["auto_checkpoint"]["saved"] == []
+
+
+def test_the_trigger_policy_without_an_engine():
+    """The three conditions, and the watermarks that stop them re-firing."""
+    auto = {"seen_dlvl": {1}, "last_xl": 1, "last_periodic_turn": 0,
+            "interval": 150}
+    T = m._auto_checkpoint_triggers
+
+    assert T(auto, 1, 1, 10) == []                     # nothing happened
+    assert [t[0] for t in T(auto, 2, 1, 20)] == ["level_entry_d2"]
+    assert T(auto, 2, 1, 30) == []                     # not again for Dlvl 2
+    assert [t[0] for t in T(auto, 2, 2, 40)] == ["level_up_xl2"]
+    assert T(auto, 2, 2, 60) == []
+    assert [t[0] for t in T(auto, 2, 2, 160)] == ["turn_160"]
+    # The clock advances by WHOLE intervals, so one 400-turn call does not
+    # reset the phase to an arbitrary point.
+    assert auto["last_periodic_turn"] == 150
+    assert [t[0] for t in T(auto, 2, 2, 460)] == ["turn_460"]
+    assert auto["last_periodic_turn"] == 450
+    # Going back UP a level is not a new level, and losing XL is not a level-up.
+    assert T(auto, 1, 2, 460) == []
+    assert T(auto, 1, 1, 460) == []

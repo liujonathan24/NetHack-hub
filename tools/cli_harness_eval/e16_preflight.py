@@ -125,8 +125,9 @@ else:
         fh.write(json.dumps({"type": "session", "version": 3,
                              "id": header_id, "cwd": cwd}) + "\n")
 
+reply = os.environ.get("E16_STUB_REPLY", "stub reply")
 msg = {"type": "message", "id": str(uuid.uuid4()),
-       "message": {"role": "assistant", "content": "stub reply",
+       "message": {"role": "assistant", "content": reply,
                    "usage": {"input": 1000, "output": 100, "cacheRead": 50,
                              "cacheWrite": 0,
                              "cost": {"total": 0.001234}}}}
@@ -138,7 +139,12 @@ if "--mode" in argv and argv[argv.index("--mode") + 1] == "json":
                       "cwd": cwd}))
     print(json.dumps(msg))
 else:
-    print("stub reply")
+    # Plain `--print` writes assistant text and NOTHING else -- no header, no
+    # records (dist/modes/print-mode.js:80-95). Reproducing that exactly is
+    # what makes `directive_survives_text_round` a real check: a stub that
+    # answered json here would drive the record parser on a text round, which
+    # is precisely the substitution that hid the pilot's directive bug.
+    print(reply)
 '''
 
 
@@ -466,6 +472,69 @@ def check_provenance_records_the_mitigations(root: Path) -> dict:
                       f"reseed_on_restore={prov['reseed_on_restore']}"}
 
 
+#: The E16 GE-wiki pilot's round-1 reply: an ABRIDGED rationale followed by the
+#: decision object VERBATIM, on its own line, as the round prompt demands. Read
+#: out of the orchestrator's session file
+#: (`gewiki_pilot/orchestrator/agent/sessions/01a04847-...jsonl`, record 49).
+#: The unabridged 1,104-char original is the fixture behind
+#: `tests/test_e16_orchestrator.py::test_THE_PILOT_DIRECTIVE_survives_a_text_mode_round`;
+#: it is shortened here only to keep this module free of a data file.
+PILOT_ROUND1_REPLY = (
+    "**Rationale:** We have only the D1 entrance checkpoint. The first "
+    "priority is to establish a checkpoint lineage.\n\n"
+    '{"checkpoint": "1", "directive": "Take the down-stairs on each level as '
+    'soon as you find them and save a checkpoint at every new depth you '
+    'reach. Do not fight any monster while your HP is below half of its '
+    'maximum.", "rationale": "Fresh D1 start."}'
+)
+
+
+def check_directive_survives_a_text_round(root: Path, stub: Path) -> dict:
+    """THE PILOT'S FAILURE, as a launch gate.
+
+    A directive-carrying experiment that silently serves no directive is its
+    own control, and that is what shipped: the orchestrator wrote a well-formed
+    decision, the round ran in text mode, and the driver handed plain text to
+    the json RECORD parser, which read the decision line as an unrecognised
+    protocol record and dropped it. The reply on the record was the rationale
+    alone; the attempt was launched with a placeholder and $13.36 was spent
+    measuring the control arm under a treatment label.
+
+    So the gate is end-to-end and on the RESUMED round specifically -- the one
+    every round after the first is.
+    """
+    work = root / "directive"
+    (work / "agent" / S.SESSIONS_SUBDIR).mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["E16_STUB_SESSIONS"] = str(work / "agent" / S.SESSIONS_SUBDIR)
+    env["E16_STUB_REPLY"] = PILOT_ROUND1_REPLY
+    sess = S.PrimeAgentSession(work_dir=work / "orch", agent_dir=work / "agent",
+                               binary=str(stub), env=env, timeout_s=20.0)
+    sess.ask("discovery", kind="opening")          # json mode
+    r2 = sess.ask("ROUND 1 ...", kind="round1")    # text mode -- the real one
+    if r2.json_mode:
+        return {"status": FAIL,
+                "detail": "the decision round ran in json mode; this check is "
+                          "about the TEXT round every real round after the "
+                          "first takes"}
+    if (r2.text or "").strip() != PILOT_ROUND1_REPLY.strip():
+        return {"status": FAIL,
+                "detail": f"the reply was altered in transit: "
+                          f"{len(r2.text or '')} of "
+                          f"{len(PILOT_ROUND1_REPLY)} chars survived. The "
+                          f"decision line is what gets dropped."}
+    dec = S.parse_decision(r2.text, ["1"])
+    if not dec.valid or not dec.directive.strip():
+        return {"status": FAIL,
+                "detail": f"no directive could be extracted from a well-formed "
+                          f"reply ({dec.fallback_reason!r}); every attempt "
+                          f"would launch as an unlabelled control"}
+    return {"status": PASS,
+            "detail": f"text round returned all {len(r2.text)} chars; "
+                      f"checkpoint {dec.checkpoint_id!r}, directive "
+                      f"{dec.directive[:48]!r}..."}
+
+
 CHECKS = (
     ("hang1_cwd_guard", "a --resume from a foreign cwd is refused before any "
                         "subprocess exists", check_cwd_guard_refuses_before_launching),
@@ -476,6 +545,9 @@ CHECKS = (
     ("hang3_json_mode", "json mode runs only on the discovery round; resumed "
                         "rounds are text and still carry id, usage and cost",
      check_json_mode_only_on_discovery),
+    ("directive_extraction", "a decision written on a TEXT round survives "
+                             "extraction; a run that loses it is its own "
+                             "control", check_directive_survives_a_text_round),
     ("backstop_hard_timeout", "any call that blocks dies at its deadline, "
                               "process group and all",
      check_hard_timeout_kills_the_process_group),

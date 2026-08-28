@@ -142,6 +142,9 @@ STOP_STALL = "no_new_frontier"
 STOP_MILESTONE = "milestone"
 STOP_MAX_ATTEMPTS = "max_attempts"
 STOP_EMPTY_ARCHIVE = "empty_archive"
+#: The orchestrator itself failed -- no usable opening plan, or no usable
+#: directive after its bounded retries. NOT a normal stop: the run also raises.
+STOP_ORCHESTRATOR_FAILED = "orchestrator_failed"
 
 #: NetHack numbers its branches in dungeon.def order. Sokoban is 4.
 SOKOBAN_DUNGEON_NUMBER = 4
@@ -262,6 +265,15 @@ class OrchestratorConfig:
     orchestrator_model: str = ""
     #: Per-round wall-clock cap on one orchestrator turn.
     orchestrator_timeout_s: float = 900.0
+    #: BOUNDED retries when a selection round produces no usable decision, and
+    #: when the opening round produces no usable plan. After these, the run
+    #: RAISES (`DirectiveExtractionFailed` / `OpeningPlanUnusable`) rather than
+    #: continuing without its treatment -- see `OrchestratorRoundFailed`.
+    #: Bounded rather than unbounded because a model that has answered wrongly
+    #: twice in one session usually keeps doing it, and each retry is a paid
+    #: round against the same ceiling.
+    directive_retries: int = 2
+    opening_retries: int = 2
     #: CONTROL MODE, RUN-WIDE. Launch every player with no directive at all --
     #: same archive, same selection, no instructions.
     #:
@@ -751,6 +763,117 @@ def render_prefix(checkpoint_dir, max_chars: int = 1500) -> str:
     body = "\n".join(parts)[:max_chars]
     return ("THE PLAN THAT WAS LIVE WHEN THIS STATE WAS SAVED (quoted from that "
             "session, not your own memory):\n" + body)
+
+
+# --------------------------------------------------------------------------- #
+# the orchestrator's own failures, which are LOUD by construction
+# --------------------------------------------------------------------------- #
+
+class OrchestratorRoundFailed(RuntimeError):
+    """Base: a round that was supposed to steer the run did not.
+
+    WHY THESE RAISE INSTEAD OF FALLING BACK. E16's treatment is the directive
+    channel and the opening plan. When either one silently degrades to "no
+    instruction", the run does not become a slightly worse go_explore run -- it
+    becomes its own control, launching real money at attempts that measure the
+    thing the experiment was going to compare against. That is the E15 silent-
+    substitution class exactly, and it happened here: the GE-wiki pilot's
+    round 1 produced a well-formed directive, the driver's parser deleted the
+    line carrying it, and attempt 1 was launched at $13.36 with
+    "(orchestrator produced no directive for this attempt)" served in its place.
+    Nothing in the run said anything was wrong.
+
+    A run that cannot get a directive out of its orchestrator must stop and say
+    so. The evidence -- the raw bytes the extraction failed on -- is written to
+    the run directory before the exception leaves.
+    """
+
+
+class DirectiveExtractionFailed(OrchestratorRoundFailed):
+    """A selection round yielded no usable checkpoint+directive decision."""
+
+
+class OpeningPlanUnusable(OrchestratorRoundFailed):
+    """The opening round produced no usable plan (empty, or degenerate)."""
+
+
+# --------------------------------------------------------------------------- #
+# degeneration detection
+# --------------------------------------------------------------------------- #
+
+#: A reply shorter than this cannot be a strategy, whatever it says.
+DEGEN_MIN_CHARS = 400
+
+#: Below this many non-blank lines the ratio test is not meaningful -- a short
+#: reply legitimately repeats itself (a table, a list of ids).
+DEGEN_MIN_LINES = 24
+
+#: unique non-blank lines / non-blank lines. Below this the reply is looping.
+#:
+#: CALIBRATED ON THE PILOT, both sides. The GE-wiki pilot's opening round as
+#: the driver recorded it: 18,088 non-blank lines, 589 unique -> 0.033. The
+#: SAME round's actual model output, read off the session file: 73 non-blank
+#: lines, 70 unique -> 0.959. Two orders of magnitude apart, so the threshold
+#: is not a fine judgement.
+DEGEN_UNIQUE_LINE_RATIO = 0.35
+
+#: One line repeated at least this often is a loop even if the ratio survives
+#: (a long reply can bury a tight loop in otherwise varied text).
+DEGEN_MAX_LINE_REPEATS = 25
+
+
+def detect_degeneration(text: str, *, min_chars: int = DEGEN_MIN_CHARS,
+                        min_lines: int = DEGEN_MIN_LINES,
+                        unique_ratio: float = DEGEN_UNIQUE_LINE_RATIO,
+                        max_line_repeats: int = DEGEN_MAX_LINE_REPEATS) -> dict:
+    """Is this reply a usable answer, or is the model (or the pipe) looping?
+
+    Returns the VERDICT AND ITS INPUTS -- ``{"degenerate", "reason", "chars",
+    "lines", "unique_lines", "unique_line_ratio", "max_line_repeats",
+    "most_repeated_line"}`` -- because a bounded retry that fires on a
+    judgement nobody can re-derive is not auditable. The numbers go on the
+    round record whether the verdict was "fine" or not.
+
+    Cheap and text-only on purpose: it runs on every orchestrator reply, it
+    must never itself cost inference, and its two failure modes are asymmetric.
+    A false NEGATIVE costs one wasted round; a false POSITIVE costs a retry.
+    Neither can silently change what a player is told, which is the property
+    that matters.
+    """
+    text = text or ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    counts: dict = {}
+    for ln in lines:
+        counts[ln] = counts.get(ln, 0) + 1
+    n_lines = len(lines)
+    n_unique = len(counts)
+    ratio = (n_unique / n_lines) if n_lines else 1.0
+    top_line, top_n = "", 0
+    if counts:
+        top_line, top_n = max(counts.items(), key=lambda kv: (kv[1], len(kv[0])))
+    out = {
+        "degenerate": False, "reason": "",
+        "chars": len(text), "lines": n_lines, "unique_lines": n_unique,
+        "unique_line_ratio": round(ratio, 4),
+        "max_line_repeats": top_n,
+        "most_repeated_line": top_line[:200],
+    }
+    if len(text.strip()) < min_chars:
+        out["degenerate"] = True
+        out["reason"] = (f"reply is {len(text.strip())} chars, under the "
+                         f"{min_chars}-char floor for a usable answer")
+        return out
+    if n_lines >= min_lines and ratio < unique_ratio:
+        out["degenerate"] = True
+        out["reason"] = (f"repetition loop: {n_unique} unique lines out of "
+                         f"{n_lines} ({ratio:.3f} < {unique_ratio}); most "
+                         f"repeated {top_n}x: {top_line[:120]!r}")
+        return out
+    if n_lines >= min_lines and top_n >= max_line_repeats:
+        out["degenerate"] = True
+        out["reason"] = (f"repetition loop: one line repeated {top_n}x "
+                         f"(>= {max_line_repeats}): {top_line[:120]!r}")
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1743,6 +1866,12 @@ class Orchestrator:
         self.opened = False
         self.llm_fallbacks = 0
         self._pair_counter = 0
+        #: Per-attempt verdicts from the opening round's degeneration check.
+        self.opening_attempts: list = []
+        #: Set when an :class:`OrchestratorRoundFailed` ended the run. It goes
+        #: into the summary before the exception is re-raised, so the run
+        #: directory names its own cause of death.
+        self.orchestrator_error: str = ""
         #: Phrasing warnings raised on the last directive, fed back into the
         #: next orchestrator round. A lint nobody reads changes nothing.
         self._last_lint: list = []
@@ -1885,6 +2014,26 @@ Only ids that appear in the table are accepted; anything else falls back to the
 scripted selector and is recorded as your round having failed to decide.
 """
 
+    OPENING_RETRY_PROMPT = """\
+Your last reply was not usable: {reason}
+
+Write the opening discussion again, once, as a single coherent plan. Do not
+repeat yourself and do not restate sections you have already written.
+"""
+
+    DIRECTIVE_RETRY_PROMPT = """\
+Your last reply could not be used: {reason}
+
+Reply again. Prose first if you want it, then EXACTLY this JSON object alone on
+the final line, with an id that appears in the table above ({ids}):
+{{"checkpoint": "<id>", "directive": "<your instruction>", "rationale": "<one line>"}}
+
+The directive must be a non-empty instruction. This attempt cannot be launched
+without one: an attempt served no directive is indistinguishable from the
+control arm, and would be recorded as a failure of this round rather than as a
+player result.
+"""
+
     COMPACTION_PROMPT = """\
 Your context is getting long, so this conversation will be continued in a new
 one seeded only with what you write now. Write the hand-off: at most {cap}
@@ -1908,11 +2057,60 @@ you intend to do next. Write it for yourself. No JSON this round.
             wiki_dir=self.cfg.wiki_dir,
             wiki_tool=self.cfg.orchestrator_dir / "wiki_tool.py",
         )
-        res = self.session.ask(prompt, kind="opening")
-        self.budget.add_orchestrator(res.spend_usd)
+        tries: list = []
+        res = None
+        degen: dict = {}
+        for i in range(max(0, int(self.cfg.opening_retries)) + 1):
+            kind = "opening" if i == 0 else f"opening_retry{i}"
+            res = self.session.ask(
+                prompt if i == 0 else self.OPENING_RETRY_PROMPT.format(
+                    reason=degen.get("reason", "unusable reply")),
+                kind=kind)
+            self.budget.add_orchestrator(res.spend_usd)
+            # THE RAW REPLY IS RECORDED BEFORE IT IS JUDGED, every attempt, so
+            # a rejected round leaves the evidence it was rejected on. The
+            # pilot's opening was thrown away as a repetition loop when the
+            # bytes would have shown the loop was in the reader.
+            self._record_raw(f"opening_attempt{i + 1}", res)
+            degen = detect_degeneration(res.text or "")
+            tries.append({"kind": kind, "error": res.error,
+                          "session_id": res.session_id, "degeneration": degen})
+            if not degen["degenerate"] and not res.error:
+                break
         self.opened = True
+        self.opening_attempts = tries
         atomic_write(self.cfg.orchestrator_dir / "opening_plan.txt", res.text or "")
-        return {"text": res.text, "error": res.error, "session_id": res.session_id}
+        atomic_write(self.cfg.orchestrator_dir / "opening_degeneration.json",
+                     json.dumps(tries, indent=2, sort_keys=True) + "\n")
+        if degen["degenerate"]:
+            # HARD ERROR. Every later round is anchored on this plan and every
+            # attempt is steered by directives written against it; proceeding
+            # without one is proceeding without the strategy the arm is named
+            # for, and there would be nothing in the output tree to say so.
+            raise OpeningPlanUnusable(
+                f"the orchestrator's opening round produced no usable plan "
+                f"after {len(tries)} attempt(s): {degen['reason']}. Raw replies "
+                f"are in {self.cfg.orchestrator_dir}/raw/ and the verdicts in "
+                f"opening_degeneration.json. Refusing to launch players with no "
+                f"opening strategy -- an arm whose plan is missing is not the "
+                f"arm it reports being."
+            )
+        return {"text": res.text, "error": res.error, "session_id": res.session_id,
+                "degeneration": degen, "attempts": tries}
+
+    def _record_raw(self, label: str, res) -> Path:
+        """Write one round's RAW stdout (and its parsed reply) to the run dir.
+
+        Separate from `orchestrator_rounds.jsonl` on purpose: the log carries
+        the parsed reply, and the whole class of failure this exists for is the
+        parsed reply disagreeing with the bytes it came from.
+        """
+        raw_dir = self.cfg.orchestrator_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        path = raw_dir / f"{label}.stdout.txt"
+        atomic_write(path, getattr(res, "raw_stdout", "") or "")
+        atomic_write(raw_dir / f"{label}.reply.txt", getattr(res, "text", "") or "")
+        return path
 
     def decide(self, rows: list) -> dict:
         """Who goes next and what they are told. Validated, then recorded.
@@ -1974,11 +2172,56 @@ you intend to do next. Write it for yourself. No JSON this round.
             last_block=last_block,
             ledger=render_ledger(rows, self.cfg, attempts=self.attempts),
         )
-        res = self.session.ask(prompt, kind=f"round{n}")
-        self.budget.add_orchestrator(res.spend_usd)
-
         from e16_session import parse_decision
-        dec = parse_decision(res.text, [r.id for r in rows])
+        ids = [r.id for r in rows]
+
+        # BOUNDED RETRY, THEN RAISE. A round that produces no decision used to
+        # fall through to the scripted selector with an empty directive, and
+        # the run continued looking like a go_explore run. It was not one: the
+        # attempt it launched was a control. See `OrchestratorRoundFailed`.
+        tries: list = []
+        res = None
+        dec = None
+        for i in range(max(0, int(self.cfg.directive_retries)) + 1):
+            kind = f"round{n}" if i == 0 else f"round{n}_retry{i}"
+            if i == 0:
+                ask_text = prompt
+            else:
+                reason = (dec.fallback_reason or "no decision found") \
+                    if dec is not None else "no reply"
+                if dec is not None and dec.valid and not dec.directive.strip():
+                    reason = ("the JSON object parsed but its `directive` was "
+                              "empty")
+                ask_text = self.DIRECTIVE_RETRY_PROMPT.format(
+                    reason=reason, ids=", ".join(ids))
+            res = self.session.ask(ask_text, kind=kind)
+            self.budget.add_orchestrator(res.spend_usd)
+            self._record_raw(f"decide_a{n}_attempt{i + 1}", res)
+            dec = parse_decision(res.text, ids)
+            # NO LENGTH FLOOR ON A DECISION ROUND. The opening round is a plan
+            # and a 200-char one is not a plan; a decision round is one line of
+            # rationale plus a JSON object, and a terse one is a good one. What
+            # still disqualifies it is the LOOP -- the reply repeating itself
+            # around a decision the model never finished.
+            degen = detect_degeneration(res.text or "", min_chars=0)
+            # Under `--no-directive` the round only has to name a CHECKPOINT:
+            # the empty directive is the treatment there, not a failure, and
+            # discarding the LM's choice would silently turn the control arm
+            # into a scripted-selector arm as well.
+            usable = (dec.valid and not degen["degenerate"]
+                      and (bool(dec.directive.strip()) or self.cfg.no_directive))
+            tries.append({
+                "kind": kind, "parsed": dec.parsed, "valid": dec.valid,
+                "fallback_reason": dec.fallback_reason,
+                "directive_empty": dec.valid and not dec.directive.strip(),
+                "degeneration": degen,
+                "reply_chars": len(res.text or ""),
+                "raw_stdout_chars": len(getattr(res, "raw_stdout", "") or ""),
+                "error": res.error,
+            })
+            if usable:
+                break
+
         out["decision"] = {
             "parsed": dec.parsed, "valid": dec.valid,
             "fallback_reason": dec.fallback_reason,
@@ -1986,14 +2229,37 @@ you intend to do next. Write it for yourself. No JSON this round.
             "session_id": res.session_id,
             "continuity_broken": res.continuity_broken,
             "error": res.error,
+            "attempts": tries,
         }
-        if dec.valid:
+        if dec.valid and (dec.directive.strip() or self.cfg.no_directive):
             out["checkpoint_id"] = dec.checkpoint_id
             out["directive"] = dec.directive
             out["source"] = "llm"
+        elif self.cfg.no_directive:
+            # The one legal empty directive is the explicit run-wide control,
+            # and it is handled above. Reaching here in that mode means the
+            # round named no valid CHECKPOINT either -- a selection failure,
+            # recorded as a fallback. It does not raise: no directive was ever
+            # going to be served, so nothing about the treatment is misreported.
+            self.llm_fallbacks += 1
+            out["source"] = "scripted_fallback"
         else:
             self.llm_fallbacks += 1
             out["source"] = "scripted_fallback"
+            atomic_write(self.cfg.orchestrator_dir /
+                         f"failed_decision_attempt{n}.json",
+                         json.dumps({"attempts": tries, "valid_ids": ids},
+                                    indent=2, sort_keys=True) + "\n")
+            raise DirectiveExtractionFailed(
+                f"attempt {n}: the orchestrator produced no usable directive "
+                f"after {len(tries)} round(s). Last reason: "
+                f"{tries[-1].get('fallback_reason') or tries[-1]}. Raw stdout "
+                f"and parsed replies for every attempt are in "
+                f"{self.cfg.orchestrator_dir}/raw/. Refusing to launch a "
+                f"directive attempt with no directive: it would be recorded as "
+                f"a go_explore treatment and would in fact be a control, which "
+                f"is the substitution that invalidated E15."
+            )
         if self.cfg.no_directive:
             out["directive"] = ""  # the explicit control mode
         return out
@@ -2177,13 +2443,26 @@ you intend to do next. Write it for yourself. No JSON this round.
                             else classify_directive_kind(directive)),
             reseed=self.reseed_for(chosen_id, n),
         )
-        if not directive and not cfg.no_directive and pair_role != ROLE_CONTROL:
-            # The contract says every launch carries a directive. An empty one
-            # outside --no-directive means the orchestrator failed to produce
-            # one, and that must be visible rather than looking like the
-            # control arm.
-            ctx.directive = ("(orchestrator produced no directive for this "
-                             "attempt; play as you judge best)")
+        if not directive and not cfg.no_directive and pair_role != ROLE_CONTROL \
+                and cfg.selector == "llm":
+            # THE LAST GATE, and it refuses rather than substitutes.
+            #
+            # This used to serve "(orchestrator produced no directive for this
+            # attempt; play as you judge best)" -- visible in the record, yes,
+            # but only to someone reading it, and the attempt still ran. In the
+            # GE-wiki pilot it ran for $13.36 and 187 calls, and what it
+            # measured was the no-directive control while every artifact
+            # labelled it a go_explore treatment. `decide` now raises before
+            # reaching here, so this is defence in depth against a future
+            # caller assembling a context by hand.
+            raise DirectiveExtractionFailed(
+                f"attempt {n}: refusing to launch a treatment attempt from "
+                f"c{chosen_id} with an empty directive. The directive IS the "
+                f"treatment; an attempt served none is a control, and running "
+                f"it under a treatment label is the substitution that "
+                f"invalidated E15. Use --no-directive if a control is what was "
+                f"wanted."
+            )
         atomic_write(out_dir / "ledger_served.txt", ledger_text)
         atomic_write(out_dir / "directive_served.txt", ctx.directive)
         self._decision_of_attempt = choice
@@ -2648,6 +2927,14 @@ you intend to do next. Write it for yourself. No JSON this round.
             "stop_reason": self.stop_reason,
             "frontier_advances": self.frontier_advances,
             "luck": self.luck(),
+            # The orchestrator's OWN health, reported next to the run's, so a
+            # run that stopped because its steering broke does not have to be
+            # diagnosed from the round log.
+            "orchestrator_error": self.orchestrator_error,
+            "opening_plan": ({"attempts": len(self.opening_attempts),
+                              "degeneration":
+                                  self.opening_attempts[-1]["degeneration"]}
+                             if self.opening_attempts else None),
         }
         if best is not None:
             # COMPARABILITY: the best-state claim NEVER travels alone.
@@ -2687,7 +2974,18 @@ you intend to do next. Write it for yourself. No JSON this round.
         limit = max_attempts if max_attempts is not None else self.cfg.max_attempts
         # ROUND 1 IS DISCUSSION. The plan goes on the record before any player
         # is launched, so "did it follow its own strategy?" stays answerable.
-        self.open_discussion()
+        #
+        # AN ORCHESTRATOR FAILURE STOPS THE RUN AND IS WRITTEN DOWN. It is
+        # re-raised, never converted into a stop_reason and swallowed -- the
+        # caller has to see it -- but the summary is flushed first, so the run
+        # directory says WHY it stopped instead of just ending mid-file.
+        try:
+            self.open_discussion()
+        except OrchestratorRoundFailed as exc:
+            self.stop_reason = STOP_ORCHESTRATOR_FAILED
+            self.orchestrator_error = f"{type(exc).__name__}: {exc}"
+            self.write_summary()
+            raise
         while len(self.attempts) < limit:
             rows = self.rows()
             stop = self.should_stop(rows)
@@ -2699,6 +2997,11 @@ you intend to do next. Write it for yourself. No JSON this round.
             except BudgetExceeded:
                 self.stop_reason = STOP_BUDGET
                 break
+            except OrchestratorRoundFailed as exc:
+                self.stop_reason = STOP_ORCHESTRATOR_FAILED
+                self.orchestrator_error = f"{type(exc).__name__}: {exc}"
+                self.write_summary()
+                raise
         else:
             self.stop_reason = self.stop_reason or STOP_MAX_ATTEMPTS
         self.finish()
@@ -3130,7 +3433,19 @@ def main(argv=None) -> int:
         print(f"[e16] seeded archive: {target}")
         if args.seed_archive:
             return 0
-    summary = orch.run()
+    try:
+        summary = orch.run()
+    except OrchestratorRoundFailed as exc:
+        # LOUD AND NON-ZERO. `run` has already flushed the summary with
+        # stop_reason=orchestrator_failed and the error on it, and the raw
+        # replies are under orchestrator/raw/. What must not happen is the
+        # driver treating "the orchestrator produced nothing usable" as a
+        # completed run: the E15 lesson is that a substitution nobody exits
+        # non-zero on is a substitution nobody notices.
+        print(f"[e16] ORCHESTRATOR FAILED: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        print(json.dumps(orch.summary(), indent=2, sort_keys=True, default=str))
+        return 3
     print(json.dumps(summary, indent=2, sort_keys=True, default=str))
     return 0
 

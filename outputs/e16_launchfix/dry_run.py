@@ -82,14 +82,48 @@ class StubPlayer:
                              not spec["died"]}})
 
 
+#: The opening plan the scripted orchestrator "writes". Long and varied enough
+#: to pass `detect_degeneration` -- which is the point of it being here rather
+#: than a one-liner: a dry run whose opening plan would be REFUSED by the real
+#: loop is not exercising the real loop.
+DRY_RUN_PLAN = """\
+PLAN for this seed.
+
+Prefer the deepest checkpoint whose HP is healthy over the deepest checkpoint
+outright: resuming into a fight already lost spends the whole attempt.
+
+The wiki's early-game rules I will steer on: flee at half HP, never melee a
+floating eye, stay unburdened, do not eat old corpses.
+
+The wall on this seed is the mid-game gap, so the archive should be dense
+early -- cheap states are cheap to re-reach -- and I will re-select a state
+that has been tried twice without an advance only if nothing shallower looks
+better.
+
+What I will watch: whether outcome prohibitions are followed more often than
+tool prohibitions, and whether depth per attempt falls off as we go deeper.
+"""
+
+
 def scripted_runner(directives):
+    """A stand-in for `prime-agent --print`, FAITHFUL TO THE MODE IT IS ASKED FOR.
+
+    THE UNFAITHFULNESS THIS FIXES, and it is why this dry run passed while the
+    real launch broke. This stub used to emit `--mode json` records on every
+    round. The session only runs json mode on the DISCOVERY round; every round
+    after it is plain text, and plain `--print` writes assistant text and
+    nothing else. So the dry run drove the json record parser on rounds the
+    real run drives as text, and the text path -- where the pilot's directive
+    JSON was silently eaten as an unrecognised protocol record -- was never
+    exercised by anything but production.
+    """
     it = iter(directives)
     n = {"i": 0}
 
     def runner(argv, env, cwd, timeout_s):
         n["i"] += 1
         if n["i"] == 1:
-            body = "PLAN: prefer healthy deep states; the wraith is the wall."
+            body = DRY_RUN_PLAN
         else:
             try:
                 d = next(it)
@@ -97,6 +131,8 @@ def scripted_runner(directives):
                 d = "hold position and search the walls"
             body = "Choosing the deepest healthy state.\n" + json.dumps(
                 {"checkpoint": "1", "directive": d, "rationale": "deepest"})
+        if "--mode" not in argv or argv[argv.index("--mode") + 1] != "json":
+            return body + "\n", "", 0
         return ("\n".join([
             json.dumps({"type": "session", "version": 3, "id": "dryrun-sess",
                         "cwd": cwd}),
@@ -207,6 +243,46 @@ def main(out: Path) -> int:
                      "luck.json", "provenance.json", "restore_fidelity.jsonl"):
             p = cfg.run_dir / name
             assert p.is_file() and p.stat().st_size > 0, f"{label}: missing {name}"
+
+        # THE DIRECTIVE ACTUALLY ARRIVED, checked from the record rather than
+        # inferred from the loop having run. This is the pilot's failure, and
+        # this dry run used to pass straight through it: with a stub that
+        # answered json on every round the directive JSON was never parsed out
+        # of a TEXT round, which is what every round after the first is.
+        if cfg.selector == "llm":
+            attempts = [json.loads(l) for l in
+                        cfg.attempts_path.read_text().splitlines() if l.strip()]
+            treatments = [a for a in attempts if a["pair_role"] != "control"]
+            assert treatments, f"{label}: no treatment attempts"
+            for a in treatments:
+                assert a["selection_source"] == "llm", (
+                    f"{label}: attempt {a['attempt']} fell back to the scripted "
+                    f"selector -- the LM decided nothing "
+                    f"({(a.get('orchestrator_decision') or {}).get('fallback_reason')})")
+                assert "orchestrator produced no directive" not in a["directive"], (
+                    f"{label}: attempt {a['attempt']} was served the "
+                    f"no-directive placeholder; this arm is its own control")
+                assert a["directive_kind"] != "none", \
+                    f"{label}: attempt {a['attempt']} carried no scoreable directive"
+            print(f"  directive served    : {treatments[0]['directive'][:60]!r} "
+                  f"(kind {treatments[0]['directive_kind']})")
+            # ...and the opening plan was checked for degeneration, either way.
+            degen = json.loads(
+                (cfg.orchestrator_dir / "opening_degeneration.json").read_text())
+            assert not degen[-1]["degeneration"]["degenerate"]
+            print(f"  opening plan        : "
+                  f"{degen[-1]['degeneration']['chars']} chars, "
+                  f"unique-line ratio "
+                  f"{degen[-1]['degeneration']['unique_line_ratio']} "
+                  f"(degenerate: "
+                  f"{degen[-1]['degeneration']['degenerate']})")
+            report_extra = {
+                "all_selections_llm": True,
+                "opening_degeneration": degen[-1]["degeneration"],
+            }
+        else:
+            report_extra = {}
+        report[label].update(report_extra)
 
     # THE COMPARISON THE NULL ARM EXISTS FOR.
     a, c = report["A_go_explore"], report["C_matched_restart"]

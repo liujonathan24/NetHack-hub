@@ -646,6 +646,24 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # differ only in what the model chose to do -- which is what makes a
         # directive's effect attributable to the directive.
         reseed: Optional[list] = None,
+        # ---- E16 automatic checkpointing ------------------------------------
+        # WHY THIS EXISTS. Go-Explore is the archive: selection, directives and
+        # the frontier are all functions of what got saved. Before this, the
+        # ONLY way a checkpoint was written mid-rollout was the model choosing
+        # to call `save`. The GE-wiki pilot measured what that is worth: 187
+        # calls, D1 -> D3, `save` called ZERO times, archive still one row at
+        # the end. An archive that only grows when the player remembers to grow
+        # it is not an archive, and the run degenerates into repeated restarts
+        # from the seed state at $13 a try.
+        #
+        # So the harness saves at the states the design named -- level entry,
+        # level-up, and every `auto_checkpoint_turn_interval` game turns -- and
+        # the model's `save` becomes an addition to that rather than the whole
+        # mechanism. Off unless `checkpoint_archive` is configured, so no arm
+        # outside E16 acquires it.
+        auto_checkpoint: bool = True,
+        #: Game turns (not LM calls) between periodic auto-checkpoints.
+        auto_checkpoint_turn_interval: int = 150,
         **kwargs,
     ):
         self.interface = interface
@@ -659,6 +677,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._directive = directive or None
         self._fidelity_log = fidelity_log or None
         self._reseed = _parse_reseed(reseed)
+        # env_args arrive as dotted-scalar STRINGS through the eval CLI, and
+        # bool("false") is True -- the same trap `auto_dismiss` fell into.
+        if isinstance(auto_checkpoint, str):
+            auto_checkpoint = auto_checkpoint.strip().lower() not in (
+                "false", "0", "no", "off", "")
+        self._auto_checkpoint = bool(auto_checkpoint)
+        self._auto_checkpoint_turn_interval = int(auto_checkpoint_turn_interval or 0)
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         # env_args flow through the eval CLI as dotted-scalar STRINGS, so
@@ -915,6 +940,33 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             setattr(env, _CK_ATTR, self._checkpoint_archive)
         if self._wiki_dir:
             setattr(env, _WIKI_ATTR, self._wiki_dir)
+
+        # ---- E16: automatic checkpointing, seeded from the START state ------
+        # Seeded from where this rollout BEGINS, not from zero: a rollout
+        # resumed at Dlvl 4 / game turn 900 must not fire "new level" and
+        # "150 turns elapsed" on its first call for a state it just restored
+        # and that is already in the archive.
+        state["_auto_ck"] = {
+            # `configured` means "this is an E16 rollout with an archive", and
+            # it gates the TURN TRACE key. Every optional field in that record
+            # is conditional for one reason -- adding an unconditional key
+            # changes the trace bytes of every arm, including the frozen
+            # E14/E15 controls this tree diffs against -- so a rollout with no
+            # archive writes exactly the bytes it wrote before.
+            "configured": bool(self._checkpoint_archive),
+            "enabled": bool(self._auto_checkpoint and self._checkpoint_archive),
+            "interval": self._auto_checkpoint_turn_interval,
+            "seen_dlvl": set(),
+            "last_xl": None,
+            "last_periodic_turn": None,
+            # Triggers the savepoint guard deferred. NOT dropped: a `--More--`
+            # is most likely exactly when a trigger fires (level entry prints
+            # one), so a dropped trigger loses the checkpoints that matter most.
+            "pending": [],
+            "saved": [],
+            "deferrals": 0,
+            "errors": [],
+        }
 
         from nethack_harness.tools.skills import bootstrap_character
         character = bootstrap_character(env)
@@ -2171,6 +2223,16 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         except Exception:
             pass
 
+        # E16: the archive grows on the HARNESS's schedule, not on whether the
+        # model remembered to call `save`. Placed here -- after the terminal
+        # detectors, the forced revive and the max_dlvl update -- so it sees
+        # the settled state of the turn and never checkpoints a corpse. Not
+        # wrapped in a bare `except`: a CheckpointIntegrityError from this path
+        # means the game is broken, and that must end the rollout exactly as it
+        # does everywhere else. `_maybe_auto_checkpoint` handles its own
+        # ordinary failures.
+        _maybe_auto_checkpoint(state)
+
         state["turn_count"] = state.get("turn_count", 0) + 1
         if self.belief_state_interval > 0 and state["turn_count"] > 0 and state["turn_count"] % self.belief_state_interval == 0:
             _maybe_belief_state_summary(state)
@@ -2797,6 +2859,140 @@ def _record_scout_and_visited(state: dict, obs) -> None:
 FRONTIER_STUCK_TURNS = 3      # adjacency turns w/o new tiles before blacklist
 FRONTIER_APPROACH_RADIUS = 1  # Chebyshev distance counting as "approached"
 NEEDS_HIDDEN_TURNS = 5        # zero-scout streak that triggers needs-hidden
+
+
+def _auto_checkpoint_triggers(auto: dict, dlvl: int, xl: int,
+                              gameturn: int) -> list:
+    """Which of the design's three automatic-save conditions fired this call.
+
+    Pure and side-effect-free apart from advancing `auto`'s watermarks, so the
+    trigger policy is testable without an engine.
+    """
+    fired = []
+    if dlvl and dlvl not in auto["seen_dlvl"]:
+        auto["seen_dlvl"].add(dlvl)
+        fired.append((f"level_entry_d{dlvl}", f"entered Dlvl {dlvl}"))
+    if xl and auto["last_xl"] is not None and xl > auto["last_xl"]:
+        fired.append((f"level_up_xl{xl}", f"reached XL {xl}"))
+    if xl:
+        auto["last_xl"] = max(int(auto["last_xl"] or 0), int(xl))
+    interval = int(auto.get("interval") or 0)
+    if interval > 0 and gameturn is not None:
+        last = auto["last_periodic_turn"]
+        if last is None:
+            auto["last_periodic_turn"] = gameturn
+        elif gameturn - last >= interval:
+            # Advance by whole intervals rather than to `gameturn`, so a skill
+            # that burns 400 turns in one call does not silently reset the
+            # clock to an arbitrary phase.
+            auto["last_periodic_turn"] = last + interval * (
+                (gameturn - last) // interval)
+            fired.append((f"turn_{gameturn}", f"{interval} game turns elapsed "
+                          f"(turn {gameturn})"))
+    return fired
+
+
+def _maybe_auto_checkpoint(state: dict) -> None:
+    """Write the automatic checkpoints Go-Explore's archive is built from.
+
+    RUNS AFTER EVERY TOOL CALL, on the harness's side of the tool boundary, so
+    the archive grows whether or not the model ever calls `save`. The GE-wiki
+    pilot is the measurement that forced this: 187 calls, D1 -> D3, `save`
+    called zero times, `new_checkpoints: []`, and the orchestrator's second
+    round choosing from the same one-row archive it started with.
+
+    THE `--More--` PROBLEM, WHICH IS NOT AN EDGE CASE HERE. `checkpoint_save`
+    refuses to write while the game is parked on a prompt, because meta.json is
+    built from `raw.blstats` (refreshed only by an engine step) while the
+    bundle serializes the live heap, and over a deferred level transition the
+    two disagree -- measured: meta said Dlvl 4 for a state that restored to
+    Dlvl 2. That refusal is correct and is not relaxed here. But the single
+    most important trigger, level entry, is also the moment a `--More--` is
+    most likely to be up: descending prints one. Dropping the save on that
+    refusal would systematically lose exactly the checkpoints the frontier is
+    made of.
+
+    So a refused trigger is DEFERRED, not dropped: it goes on `pending` and is
+    retried on the next call, and the next, until the game is quiescent. The
+    reason is carried with it, so the checkpoint that eventually lands still
+    says it was written for entering Dlvl 3 even if it was written two calls
+    later. `deferrals` counts how often this happened, because "the archive
+    grew" and "the archive grew where we meant it to" are different claims.
+
+    Never raises for a save that could not be written -- except a checkpoint
+    INTEGRITY error, which means the game is broken and must not be
+    checkpointed or continued as if it were not. Ordinary failures land in
+    `errors`, which the turn trace publishes (`helpers._auto_checkpoint_record`),
+    because bookkeeping that breaks a rollout is worse than bookkeeping that
+    reports itself.
+    """
+    auto = state.get("_auto_ck")
+    if not auto or not auto.get("enabled"):
+        return
+    # Never checkpoint a finished game: a dead or ascended state is not a
+    # place any later attempt can resume from.
+    if state.get("died") or state.get("ascended") or state.get("terminated"):
+        return
+    env = state.get("env")
+    status = (state.get("structured_obs").status or {}) if \
+        state.get("structured_obs") is not None else {}
+    dlvl = int(status.get("depth") or 0)
+    xl = int(status.get("experience_level") or 0)
+    gameturn = status.get("time")
+    gameturn = int(gameturn) if gameturn is not None else None
+
+    # FIRST CALL SEEDS THE WATERMARKS AND SAVES NOTHING. A rollout resumed at
+    # Dlvl 4 on turn 900 has that state in the archive already; firing
+    # "entered Dlvl 4" on call one would duplicate it.
+    if not auto["seen_dlvl"] and auto["last_xl"] is None:
+        if dlvl:
+            auto["seen_dlvl"].add(dlvl)
+        auto["last_xl"] = xl or None
+        auto["last_periodic_turn"] = gameturn
+        return
+
+    auto["pending"].extend(_auto_checkpoint_triggers(auto, dlvl, xl, gameturn))
+    if not auto["pending"]:
+        return
+
+    from nethack_harness.checkpoints import (
+        CheckpointIntegrityError as _CkIntegrity,
+        CheckpointSavepointError as _CkSavepoint,
+        checkpoint_save,
+    )
+    from nethack_harness.tools.skills import (
+        CHECKPOINT_ARCHIVE_ATTR as _CK_ATTR, _next_checkpoint_dir,
+    )
+    root = getattr(env, _CK_ATTR, None)
+    if root is None:
+        auto["enabled"] = False
+        return
+
+    still_pending: list = []
+    for label, why in auto["pending"]:
+        try:
+            meta = checkpoint_save(
+                env, _next_checkpoint_dir(root),
+                name=f"auto {label}",
+                note=f"automatic checkpoint: {why}",
+                created_by="auto")
+        except _CkSavepoint:
+            # The prompt case, and the whole reason this loop exists. Keep it
+            # and try again next call, when auto-dismiss will normally have
+            # cleared the --More--.
+            auto["deferrals"] += 1
+            still_pending.append((label, why))
+            continue
+        except _CkIntegrity:
+            raise  # a broken game must never be silently checkpointed
+        except Exception as exc:  # pragma: no cover - defensive
+            auto["errors"].append(f"{label}: {type(exc).__name__}: {exc}")
+            continue
+        auto["saved"].append({
+            "id": meta["id"], "trigger": label, "why": why,
+            "dlvl": meta["dlvl"], "xl": meta["xl"], "gameturn": meta["gameturn"],
+        })
+    auto["pending"] = still_pending
 
 
 def _update_frontier_blacklist(state: dict) -> None:

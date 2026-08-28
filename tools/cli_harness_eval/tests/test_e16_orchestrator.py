@@ -275,23 +275,92 @@ def test_orchestrator_narration_cannot_alter_a_recorded_metric(tmp_path):
     assert "500000" not in ledger and "0.99" not in ledger
 
 
-def test_an_invented_checkpoint_id_falls_back_and_is_recorded_as_a_fallback(tmp_path):
-    cfg = cfg_for(tmp_path, selector="llm")
+def test_an_invented_checkpoint_id_is_retried_and_then_RAISES(tmp_path):
+    """A round that cannot decide must stop the run, not quietly become one.
+
+    THE OLD CONTRACT, and why it is gone. This used to assert
+    ``source == "scripted_fallback"`` and carry on: the scripted selector chose
+    the checkpoint and the player was launched with an empty directive. The
+    GE-wiki pilot ran exactly that path for $13.36 and 187 calls and recorded it
+    as a go_explore attempt; what it actually measured was the no-directive
+    control. The fallback is still COMPUTED and still recorded -- it is what the
+    ablation would have done -- but it no longer gets to launch a player.
+    """
+    cfg = cfg_for(tmp_path, selector="llm", directive_retries=2)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
     rows = [mkrow(1, dlvl=2, xl=1, score=10)]
 
     class FakeSession(S.SessionBase):
         kind = "fake"
 
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.asked = []
+
         def ask(self, prompt, *, kind="round"):
+            self.asked.append(kind)
             return S.RoundResult(text='{"checkpoint": "c99", "directive": "go"}')
 
-    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(),
-                          session=FakeSession(work_dir=tmp_path / "orch"))
-    choice = orch.decide(rows)
-    assert choice["source"] == "scripted_fallback"
-    assert choice["checkpoint_id"] == "1"          # the scripted selector's pick
-    assert "not in the archive" in choice["decision"]["fallback_reason"]
+    sess = FakeSession(work_dir=tmp_path / "orch")
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(), session=sess)
+    with pytest.raises(E.DirectiveExtractionFailed) as exc:
+        orch.decide(rows)
+    assert "not in the archive" in str(exc.value)
+    # BOUNDED: the first round plus exactly `directive_retries` retries.
+    assert sess.asked == ["round1", "round1_retry1", "round1_retry2"]
     assert orch.llm_fallbacks == 1
+    failed = json.loads(
+        (cfg.orchestrator_dir / "failed_decision_attempt1.json").read_text())
+    assert len(failed["attempts"]) == 3
+    assert all(a["valid"] is False for a in failed["attempts"])
+    # The raw bytes of every attempt are on disk, because the reason a reply
+    # could not be parsed is only answerable from the reply.
+    raw = cfg.orchestrator_dir / "raw"
+    assert (raw / "decide_a1_attempt1.reply.txt").is_file()
+    assert (raw / "decide_a1_attempt3.reply.txt").is_file()
+
+
+def test_a_bad_first_round_is_recovered_by_the_bounded_retry(tmp_path):
+    """The retry exists so a recoverable round does not cost the run."""
+    cfg = cfg_for(tmp_path, selector="llm", directive_retries=2)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+    rows = [mkrow(1, dlvl=2, xl=1, score=10)]
+
+    class FlakySession(S.SessionBase):
+        kind = "fake"
+
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.n = 0
+
+        def ask(self, prompt, *, kind="round"):
+            self.n += 1
+            if self.n == 1:
+                return S.RoundResult(text="I think c1 looks promising.\n")
+            return S.RoundResult(text=(
+                'Choosing c1.\n{"checkpoint": "1", "directive": "descend to '
+                'D3 and save at each new depth", "rationale": "lineage"}'))
+
+    sess = FlakySession(work_dir=tmp_path / "orch")
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(), session=sess)
+    choice = orch.decide(rows)
+    assert choice["source"] == "llm"
+    assert choice["checkpoint_id"] == "1"
+    assert "descend to D3" in choice["directive"]
+    assert sess.n == 2
+    assert orch.llm_fallbacks == 0
+    assert [a["valid"] for a in choice["decision"]["attempts"]] == [False, True]
+
+
+def test_an_empty_directive_can_never_be_served_as_a_treatment(tmp_path):
+    """Defence in depth: the launch path refuses too, not only `decide`."""
+    cfg = cfg_for(tmp_path, selector="llm")
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult())
+    with pytest.raises(E.DirectiveExtractionFailed) as exc:
+        orch._launch_one([], "1", None, "", {}, pair_id=None,
+                         pair_role=E.ROLE_SOLO)
+    assert "empty directive" in str(exc.value)
 
 
 def test_parse_decision_accepts_prose_around_json_and_rejects_prose_alone():
@@ -492,12 +561,72 @@ def test_directive_kind_separates_a_prohibition_from_its_own_verb():
 # 8. the orchestrator's session mechanism (no inference: injected runner)
 # --------------------------------------------------------------------------- #
 
+#: A plausible opening plan. Long and varied enough to pass
+#: `detect_degeneration` -- which is the point: a stub that hands the
+#: orchestrator two sentences is testing a run that would now, correctly, be
+#: refused for having no strategy.
+_STUB_PLAN = """\
+Round 1 plan for this seed.
+
+WHAT THE WIKI SAYS ABOUT THE EARLY GAME. Descend steadily; do not clear levels
+for their own sake. Flee at half HP rather than trading blows. Never melee a
+floating eye. Keep the inventory unburdened.
+
+THE HAZARD LADDER I EXPECT. Shallow levels are cheap to re-reach, so the
+archive should be dense early and sparse later. The first real wall is the
+mid-game gap where a single bad fight ends a lineage that took many attempts to
+build.
+
+HOW I WILL SPEND ATTEMPTS. Prefer the deepest checkpoint whose HP is healthy
+over the deepest checkpoint outright: resuming into a fight already lost wastes
+the whole attempt. Re-select a state that has been tried twice without an
+advance only if nothing shallower is promising.
+
+WHAT I WILL WATCH. Whether directives that prohibit an outcome are followed
+more often than directives that prohibit a tool, and whether depth gained per
+attempt falls off as the archive deepens.
+"""
+
+
+def _stub_stdout(argv, cwd, body, *, session_id="sess-1", usage=None):
+    """prime-agent stdout for `body`, IN THE MODE `argv` ASKED FOR.
+
+    Plain `--print` writes assistant text and nothing else; `--mode json`
+    writes the session header and records. Every stub in this file goes through
+    here, because a stub that answers json on a text round is what let the
+    pilot's directive-extraction bug reach production green.
+    """
+    if "--mode" not in argv or argv[argv.index("--mode") + 1] != "json":
+        return body + "\n"
+    rec = {"type": "message", "message": {"role": "assistant", "content": body}}
+    if usage:
+        rec["usage"] = usage
+    return "\n".join([
+        json.dumps({"type": "session", "version": 3, "id": session_id,
+                    "cwd": cwd}),
+        json.dumps(rec)]) + "\n"
+
+
 def _fake_prime_agent(session_id="019f-aaaa", reply="hello"):
-    """Stands in for `prime-agent --print --mode json`."""
+    """Stands in for `prime-agent --print`, IN WHICHEVER MODE IT WAS ASKED FOR.
+
+    THE UNFAITHFULNESS THIS FIXES, because it is the reason nothing in this
+    suite caught the E16 pilot's central failure. This stub used to emit
+    ``--mode json`` records on EVERY round, including the resumed rounds the
+    session deliberately runs as plain text. So every test drove the json
+    record parser, and the text path -- the one every round after the first
+    actually takes -- was never exercised by anything but production.
+
+    Plain ``--print`` writes assistant text and nothing else
+    (``dist/modes/print-mode.js:80-95``): no session header, no usage, no
+    records. That is what this returns when ``--mode json`` is absent.
+    """
     seen = []
 
     def runner(argv, env, cwd, timeout_s):
         seen.append({"argv": list(argv), "env": dict(env), "cwd": cwd})
+        if "--mode" not in argv or argv[argv.index("--mode") + 1] != "json":
+            return reply + "\n", "", 0
         out = [json.dumps({"type": "session", "version": 3, "id": session_id,
                            "cwd": cwd}),
                json.dumps({"type": "message", "id": "aa", "parentId": None,
@@ -546,7 +675,14 @@ def test_session_argv_omits_no_session_and_resumes_by_id_from_round_two(tmp_path
 
     assert r1.session_id == r2.session_id == "019f-aaaa"
     assert not r2.continuity_broken
-    assert sess.usage_available and sess.usage_total["prompt_tokens"] == 2000
+    # ONLY THE DISCOVERY ROUND CARRIES USAGE IN STDOUT. Text `--print` writes
+    # assistant text and nothing else, so a resumed round's usage comes from
+    # the SESSION FILE (`_scan_session_files`), never from stdout. A stub that
+    # returned json records on a text round would report 2000 here and would be
+    # lying about where the number came from.
+    assert sess.usage_available and sess.usage_total["prompt_tokens"] == 1000
+    # The reply still arrives on the text round -- verbatim, unparsed.
+    assert r1.text == r2.text == "hello"
     assert sess.spend_usd > 0
 
 
@@ -675,13 +811,16 @@ def test_session_detects_a_silent_fork(tmp_path):
     ids = iter(["id-A", "id-B"])
 
     def runner(argv, env, cwd, timeout_s):
-        out = json.dumps({"type": "session", "version": 3, "id": next(ids)})
-        msg = json.dumps({"type": "message",
-                          "message": {"role": "assistant", "content": "ok"}})
-        return out + "\n" + msg + "\n", "", 0
+        return _stub_stdout(argv, cwd, "ok", session_id=next(ids)), "", 0
 
+    # json mode on BOTH rounds, so the stdout header is the id source under
+    # test. Under the default `discovery_only` policy a resumed round is plain
+    # text and carries no header at all -- the fork would then be caught by the
+    # SESSION FILE scan instead, which is a different mechanism with its own
+    # test and needs real files on disk to exercise.
     sess = S.PrimeAgentSession(work_dir=tmp_path / "o", agent_dir=tmp_path / "a",
-                               runner=runner)
+                               runner=runner,
+                               json_mode_policy=S.JSON_MODE_ALWAYS)
     sess.ask("one")
     r2 = sess.ask("two")
     assert r2.continuity_broken
@@ -731,6 +870,221 @@ def test_compaction_triggers_on_the_context_bound(tmp_path):
     assert (cfg.orchestrator_dir / "handoff_1.txt").read_text() == "handoff text"
     # A fresh session is started, and the chain is kept.
     assert len(sess.session_ids) >= 1
+
+
+FIXTURES = HERE.parent / "fixtures"
+
+
+def test_THE_PILOT_DIRECTIVE_survives_a_text_mode_round(tmp_path):
+    """THE REGRESSION, on the pilot's own bytes.
+
+    `fixtures/pilot_round1_print_stdout.txt` is the assistant text of the E16
+    GE-wiki pilot's round-1 turn, copied verbatim out of the orchestrator's
+    prime-agent session file
+    (`gewiki_pilot/orchestrator/agent/sessions/01a04847-35f7-70b8-b336-5496c599c569.jsonl`,
+    record 49). Plain `--print` writes exactly that text to stdout and nothing
+    else, so this IS what the driver read.
+
+    What the driver then did with it: handed it to the json-mode RECORD parser,
+    which walks stdout line by line and treats any line that parses as a JSON
+    object as a protocol record. The reply's last line is the decision object
+    the round prompt demanded ("EXACTLY this JSON object on its own line"). It
+    parsed, matched no record shape, and was dropped. The recorded reply was
+    678 of 1,104 chars -- the rationale, minus the decision -- and attempt 1
+    launched with "(orchestrator produced no directive for this attempt)".
+    """
+    raw = (FIXTURES / "pilot_round1_print_stdout.txt").read_text()
+
+    # 1. The bytes really do carry a well-formed decision.
+    assert '"checkpoint": "1"' in raw and '"directive"' in raw
+
+    # 2. THE OLD PATH, reproduced exactly: the json record parser eats it.
+    _h, eaten, _u = S.parse_json_mode_stdout(raw)
+    assert len(eaten) == 678, "the pilot recorded 678 chars; fixture drifted"
+    assert not S.parse_decision(eaten, ["1"]).valid
+
+    # 3. THE FIX: a text-mode round is parsed as text.
+    _h, text, _u = S.parse_round_stdout(raw, json_mode=False)
+    assert text == raw.strip()
+    dec = S.parse_decision(text, ["1"])
+    assert dec.valid and dec.checkpoint_id == "1"
+    assert dec.directive.startswith("Take the down-stairs on each level")
+    assert "HP is below half of its maximum" in dec.directive
+
+    # 4. END TO END through a real session and a real `decide`: the directive
+    #    the pilot's orchestrator actually wrote reaches the player context.
+    cfg = cfg_for(tmp_path / "run", selector="llm")
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+
+    def runner(argv, env, cwd, timeout_s):
+        # Round 1 is the discovery round (json); the decision round is text --
+        # which is the mode the bug lived in.
+        body = _STUB_PLAN if "--mode" in argv else raw.strip()
+        return _stub_stdout(argv, cwd, body), "", 0
+
+    sess = S.PrimeAgentSession(work_dir=cfg.orchestrator_dir,
+                               agent_dir=cfg.orchestrator_dir / "agent",
+                               log_path=cfg.orchestrator_log, runner=runner)
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(), session=sess)
+    orch.open_discussion()
+    choice = orch.decide([mkrow(1, dlvl=1, xl=1)])
+    assert choice["source"] == "llm"
+    assert choice["checkpoint_id"] == "1"
+    assert choice["directive"].startswith("Take the down-stairs on each level")
+    assert orch.llm_fallbacks == 0
+    # And the classifier can see what KIND of directive it is, which the
+    # pilot's "(orchestrator produced no directive…)" placeholder could not be.
+    assert E.classify_directive_kind(choice["directive"]) != "none"
+
+
+def test_json_mode_stream_is_not_multiplied_by_its_own_deltas():
+    """The pilot's 11,478-char opening plan came back as 2,656,190 chars.
+
+    `--mode json` re-emits the WHOLE message on every text delta
+    (`message_update`, docs/json.md). The old parser appended the text of every
+    record, so a message streamed in N chunks was concatenated N times as
+    cumulative prefixes. The run read the result -- 589 unique lines in 18,088
+    -- as the model stuck in a repetition loop, threw the opening plan away,
+    and had no strategy on the record.
+
+    The TEXT here is the pilot's real assistant output, read out of its session
+    file; only the event framing is reconstructed, from docs/json.md.
+    """
+    parts = json.loads((FIXTURES / "pilot_opening_assistant_text.json").read_text())
+    plan = parts[-1]
+    assert len(plan) == 11478
+
+    lines = [json.dumps({"type": "session", "version": 3, "id": "s", "cwd": "/w"}),
+             json.dumps({"type": "message_start",
+                         "message": {"role": "assistant", "content": []}})]
+    # 60 cumulative prefixes, the same shape the provider streamed.
+    for i in range(1, 61):
+        cut = max(1, len(plan) * i // 60)
+        lines.append(json.dumps({
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "text_delta"},
+            "message": {"role": "assistant",
+                        "content": [{"type": "text", "text": plan[:cut]}]}}))
+    final = {"role": "assistant",
+             "content": [{"type": "text", "text": plan}],
+             "usage": {"input_tokens": 24662, "output_tokens": 2576}}
+    lines.append(json.dumps({"type": "message_end", "message": final}))
+    lines.append(json.dumps({"type": "turn_end", "message": final,
+                             "toolResults": []}))
+    lines.append(json.dumps({"type": "agent_end", "messages": [final]}))
+    stdout = "\n".join(lines) + "\n"
+    assert len(stdout) > 20 * len(plan), "fixture must reproduce the blow-up"
+
+    _h, text, usage = S.parse_json_mode_stdout(stdout)
+    assert text == plan, "the reply must be the plan, once"
+    # Usage is counted once too: `message_update` repeats it as well.
+    assert usage["prompt_tokens"] == 24662 and usage["completion_tokens"] == 2576
+
+    # The plan that comes out is usable; the 2.6 MB that used to come out is not.
+    assert E.detect_degeneration(text)["degenerate"] is False
+
+
+def test_degeneration_detector_flags_the_pilots_recorded_opening_plan():
+    """`gewiki_pilot/orchestrator/opening_plan.txt` as the run wrote it.
+
+    Rebuilt here from the same plan rather than vendored, because the file is
+    2.6 MB. Both sides of the threshold are the pilot's own numbers: the
+    recorded plan scored 0.033 unique lines, the real one 0.959.
+    """
+    parts = json.loads((FIXTURES / "pilot_opening_assistant_text.json").read_text())
+    plan = parts[-1]
+    recorded = "\n".join(plan[:max(1, len(plan) * i // 533)]
+                         for i in range(1, 534))
+
+    bad = E.detect_degeneration(recorded)
+    assert bad["degenerate"] and "repetition loop" in bad["reason"]
+    assert bad["unique_line_ratio"] < 0.1
+
+    good = E.detect_degeneration(plan)
+    assert not good["degenerate"]
+    assert good["unique_line_ratio"] > 0.9
+
+    # A short reply is not a plan, whatever it says.
+    assert E.detect_degeneration("Plan: descend.")["degenerate"]
+    # ...but the same reply IS a fine decision round, which has no length floor.
+    assert not E.detect_degeneration("Plan: descend.", min_chars=0)["degenerate"]
+
+
+def test_an_unusable_opening_plan_is_retried_and_then_RAISES(tmp_path):
+    """No strategy on the record is a hard error, not a quiet start."""
+    cfg = cfg_for(tmp_path / "run", selector="llm", opening_retries=1)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+    looped = "\n".join(["Now I have a complete picture. Let me synthesize "
+                        "everything."] * 400)
+    asked = []
+
+    def runner(argv, env, cwd, timeout_s):
+        asked.append(argv[-1])
+        return _stub_stdout(argv, cwd, looped), "", 0
+
+    sess = S.PrimeAgentSession(work_dir=cfg.orchestrator_dir,
+                               agent_dir=cfg.orchestrator_dir / "agent",
+                               log_path=cfg.orchestrator_log, runner=runner)
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(), session=sess)
+    with pytest.raises(E.OpeningPlanUnusable):
+        orch.open_discussion()
+
+    # BOUNDED: the opening plus exactly `opening_retries` retries, and the
+    # retry told the model what was wrong with the last one.
+    assert len(asked) == 2 and "not usable" in asked[1]
+    # THE RAW REPLY IS KEPT EITHER WAY -- both attempts, before the verdict.
+    raw = cfg.orchestrator_dir / "raw"
+    assert (raw / "opening_attempt1.stdout.txt").is_file()
+    assert (raw / "opening_attempt2.stdout.txt").is_file()
+    verdicts = json.loads(
+        (cfg.orchestrator_dir / "opening_degeneration.json").read_text())
+    assert len(verdicts) == 2
+    assert all(v["degeneration"]["degenerate"] for v in verdicts)
+
+
+def test_a_failed_opening_stops_the_run_and_says_so_in_the_summary(tmp_path):
+    """The exception escapes, but not before the run directory records why."""
+    cfg = cfg_for(tmp_path / "run", selector="llm", opening_retries=0,
+                  budget_ceiling_usd=1000.0, milestone_dlvl=99,
+                  milestone_dungeon=-1)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+
+    def runner(argv, env, cwd, timeout_s):
+        return _stub_stdout(argv, cwd, "ok"), "", 0
+
+    sess = S.PrimeAgentSession(work_dir=cfg.orchestrator_dir,
+                               agent_dir=cfg.orchestrator_dir / "agent",
+                               log_path=cfg.orchestrator_log, runner=runner)
+    launched = []
+    orch = E.Orchestrator(cfg, lambda ctx: launched.append(ctx), session=sess)
+    orch.prepare()
+    E.seed_archive(cfg)
+    with pytest.raises(E.OpeningPlanUnusable):
+        orch.run(max_attempts=2)
+    assert launched == [], "no player may be launched without an opening plan"
+    summary = json.loads(cfg.summary_path.read_text())
+    assert summary["stop_reason"] == E.STOP_ORCHESTRATOR_FAILED
+    assert "OpeningPlanUnusable" in summary["orchestrator_error"]
+
+
+def test_round_log_carries_both_lengths(tmp_path):
+    """`reply` is a parser's output; the raw byte count is the check on it."""
+    raw = (FIXTURES / "pilot_round1_print_stdout.txt").read_text()
+
+    def runner(argv, env, cwd, timeout_s):
+        return _stub_stdout(argv, cwd, raw.strip()), "", 0
+
+    log = tmp_path / "rounds.jsonl"
+    sess = S.PrimeAgentSession(work_dir=tmp_path / "o", agent_dir=tmp_path / "a",
+                               log_path=log, runner=runner)
+    sess.ask("discovery")   # json mode
+    sess.ask("decision")    # text mode
+    recs = [json.loads(l) for l in log.read_text().splitlines() if l.strip()]
+    assert len(recs) == 2
+    text_round = recs[1]
+    assert text_round["json_mode"] is False
+    assert text_round["reply_chars"] == len(raw.strip())
+    assert text_round["raw_stdout_chars"] == len(raw.strip()) + 1  # trailing \n
 
 
 def test_json_mode_parser_reads_header_text_and_usage():
@@ -964,19 +1318,16 @@ def test_dry_run_with_the_llm_orchestrator_records_directives_and_two_budget_lin
     def runner(argv, env, cwd, timeout_s):
         calls["n"] += 1
         if calls["n"] == 1:                     # the opening discussion
-            body = "My plan: prefer healthy deep states; avoid the wraith."
+            body = _STUB_PLAN
         else:
             body = ('Choosing the deepest healthy state.\n'
                     + json.dumps({"checkpoint": "1",
                                   "directive": next(directives),
                                   "rationale": "deepest healthy"}))
-        out = [json.dumps({"type": "session", "version": 3, "id": "sess-1"}),
-               json.dumps({"type": "message",
-                           "message": {"role": "assistant", "content": body},
-                           "usage": {"prompt_tokens": 4000,
-                                     "completion_tokens": 300,
-                                     "cached_input_tokens": 2000}})]
-        return "\n".join(out) + "\n", "", 0
+        return _stub_stdout(argv, cwd, body,
+                            usage={"prompt_tokens": 4000,
+                                   "completion_tokens": 300,
+                                   "cached_input_tokens": 2000}), "", 0
 
     session = S.PrimeAgentSession(
         work_dir=cfg.orchestrator_dir, agent_dir=cfg.orchestrator_dir / "agent",
@@ -988,7 +1339,14 @@ def test_dry_run_with_the_llm_orchestrator_records_directives_and_two_budget_lin
     summary = orch.run(max_attempts=3)
 
     # The opening discussion happened, BEFORE any launch, and is on disk.
-    assert (cfg.orchestrator_dir / "opening_plan.txt").read_text().startswith("My plan")
+    assert (cfg.orchestrator_dir / "opening_plan.txt").read_text() \
+        .startswith("Round 1 plan for this seed.")
+    # The opening was CHECKED for degeneration, and the verdict is on the
+    # record next to the plan -- so "the plan was fine" is a measurement rather
+    # than the absence of a complaint.
+    degen = json.loads(
+        (cfg.orchestrator_dir / "opening_degeneration.json").read_text())
+    assert len(degen) == 1 and degen[0]["degeneration"]["degenerate"] is False
     rounds = [json.loads(l) for l in cfg.orchestrator_log.read_text().splitlines() if l.strip()]
     assert rounds[0]["kind"] == "opening"
 
@@ -1118,19 +1476,15 @@ def test_paired_control_runs_each_directive_against_its_own_control(tmp_path):
     def runner(argv, env, cwd, timeout_s):
         nth["n"] += 1
         if nth["n"] == 1:                       # the opening discussion
-            body = "my plan"
+            body = _STUB_PLAN
         else:
             body = ("plan\n" + json.dumps({"checkpoint": "1",
                                            "directive": next(directives),
                                            "rationale": "x"}))
-        return ("\n".join([
-            json.dumps({"type": "session", "version": 3, "id": "s1",
-                        "cwd": cwd}),
-            json.dumps({"type": "message",
-                        "message": {"role": "assistant", "content": body},
-                        "usage": {"prompt_tokens": 100,
-                                  "completion_tokens": 10,
-                                  "cached_input_tokens": 0}})]) + "\n", "", 0)
+        return _stub_stdout(argv, cwd, body, session_id="s1",
+                            usage={"prompt_tokens": 100,
+                                   "completion_tokens": 10,
+                                   "cached_input_tokens": 0}), "", 0
 
     session = S.PrimeAgentSession(work_dir=cfg.orchestrator_dir,
                                   agent_dir=cfg.orchestrator_dir / "agent",
