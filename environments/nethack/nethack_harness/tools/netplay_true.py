@@ -127,6 +127,20 @@ NETPLAY_TRUE_SKILL_NAMES = tuple(NETPLAY_SKILL_REPOSITORY.skills.keys())
 # hand-written skills of the same name (`move_to`, `eat`, `pray`, ...).
 TOOL_PREFIX = "np_"
 
+#: Consecutive executed actions a netplay skill may take without the game
+#: clock advancing or the player moving before `run_netplay_skill` breaks the
+#: macro. This is the ONLY bound on a skill that keeps re-issuing an action the
+#: game refuses: upstream's loop counts in-game turns, and a refused action
+#: costs none, so without this the loop is infinite (see the livelock interrupt
+#: in `run_netplay_skill` for the measured case).
+#:
+#: Sized against what legitimately takes engine steps at a frozen clock: menu
+#: paging, `--More--` acknowledgement, and typing an engraving are all tens of
+#: keystrokes. 200 is far above every one of those and ~2 orders of magnitude
+#: below the 18,000+ steps the measured livelock reached before its tool call
+#: was abandoned.
+NO_PROGRESS_STEP_LIMIT = 200
+
 
 # ---------------------------------------------------------------------------
 # Observation adapter: CoreObservation (dataclass) -> NLE-style mapping.
@@ -608,7 +622,34 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
         except Exception:
             return None, None
 
+    def _progress_key():
+        """`(game turn, x, y)` -- the three numbers a real action must move.
+
+        `None` when unreadable, which the livelock guard below treats as
+        "cannot tell", never as "stalled".
+        """
+        try:
+            bl = getattr(wrapped.last_raw, "blstats", None)
+            if bl is None:
+                return None
+            return int(bl[20]), int(bl[0]), int(bl[1])  # time, x, y
+        except Exception:
+            return None
+
+    def _last_message():
+        try:
+            msg = getattr(wrapped.last_raw, "message", None)
+            if msg is None:
+                return ""
+            return "".join(chr(int(c)) for c in msg if int(c)).strip()
+        except Exception:
+            return ""
+
     hp_start, _mx = _hp_now()
+    # THE LIVELOCK GUARD. See NO_PROGRESS_STEP_LIMIT: a netplay skill's only
+    # bound is in-game turns, and a refused action costs zero of them.
+    _stall_key = _progress_key()
+    _stall_n = 0
     try:
         # netplay_telemetry gates the severity filter (c1a0bec). Off = the
         # vendored blanket NewGlyphEvent interrupt the baseline was measured
@@ -624,6 +665,51 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                 thoughts.append(str(step.thoughts))
             if step.executed_action() and step.step_data.done:
                 break
+            # --- livelock interrupt (E16) --------------------------------
+            # THE ONLY BOUND A NETPLAY SKILL HAS IS IN-GAME TURNS:
+            # `_execute_skill_filtered` (and upstream's own loop) stop when
+            # `blstats.time - start_ingame_time >= max_skill_gamesteps`. An
+            # action the GAME REFUSES costs zero in-game turns, so a skill that
+            # keeps re-issuing one never terminates -- the delta stays 0
+            # forever and no other counter is consulted. The engine env accepts
+            # a `no_progress_timeout` but never reads it, so there is no
+            # backstop underneath this either.
+            #
+            # MEASURED, not hypothetical. Resuming E16 checkpoint `c2` puts the
+            # player on an intact doorway at (26,10); `explore_level`'s first
+            # pathfinding step out of it is diagonal, NetHack answers "You
+            # can't move diagonally out of an intact doorway", and the position
+            # and clock never change. The rollout burned 18,000+ engine steps
+            # at 100% CPU inside ONE tool call and was still spinning when the
+            # agent's MCP client gave up at 300s -- which reached the operator
+            # as a stalled rollout with no error anywhere, because nothing had
+            # failed: a loop was simply running forever.
+            #
+            # So: bound the loop by something a refused action cannot fake.
+            # `(time, x, y)` is exactly that -- the three numbers a real action
+            # has to move. Only executed actions count, and the game's own
+            # refusal is quoted back so the agent can choose differently
+            # instead of re-issuing the same call.
+            if step.executed_action():
+                _k = _progress_key()
+                if _k is not None and _k == _stall_key:
+                    _stall_n += 1
+                    if _stall_n >= NO_PROGRESS_STEP_LIMIT:
+                        _why = _last_message()
+                        thoughts.append(
+                            f"[INTERRUPTED: this skill took "
+                            f"{NO_PROGRESS_STEP_LIMIT} actions in a row without "
+                            f"the game clock advancing or your position "
+                            f"changing (still at {_k[1]},{_k[2]} on turn "
+                            f"{_k[0]}). The game is refusing the move it keeps "
+                            f"retrying"
+                            + (f": {_why!r}" if _why else "")
+                            + ". Do something different -- a different "
+                            f"direction, or a different tool.]")
+                        break
+                else:
+                    _stall_key = _k
+                    _stall_n = 0
             # --- spoiling-food interrupt ---------------------------------
             # Closed-loop skills run to completion regardless of what happens
             # inside them; `np_explore_level` alone burns up to 100 game turns
