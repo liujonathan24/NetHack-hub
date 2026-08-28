@@ -184,3 +184,42 @@ def test_v1_pipeline_never_stops_until_third_death():
     s = toolset.state
     assert s.died is True and s.terminated is True
     assert _v1_stop(toolset) is True  # third death: game_over fires at once
+
+
+# --------------------- deaths_per_level dose arm (cap=5) -------------------- #
+
+def test_cap5_deaths_one_through_four_revive_with_n_of_5_lines():
+    env, state = _v0_env_and_state()
+    env.deaths_per_level = 5  # tier contract: [p3_revive_d5.contract] deaths_per_level = 5
+    for _ in range(3):
+        _call(env, state)
+    for k in (1, 2, 3, 4):
+        text = str(_kill(env, state))
+        assert state["died"] is False, f"death {k} should revive under cap 5"
+        assert f"(death {k}/5 on this dungeon level -- the fifth is final)" in text
+        _call(env, state)  # push a fresh live snapshot between deaths
+    assert asyncio.run(env.is_completed(state)) is False
+
+
+def test_cap5_death_five_is_final_game_over():
+    env, state = _v0_env_and_state()
+    env.deaths_per_level = 5
+    for _ in range(3):
+        _call(env, state)
+    for _ in range(4):
+        _kill(env, state)
+        _call(env, state)
+    text = str(_kill(env, state))         # 5/5 -> final
+    assert state["died"] is True and state["terminated"] is True
+    assert "death 5/5 on this dungeon level; the game is over for good" in text
+    assert asyncio.run(env.is_completed(state)) is True
+
+
+def test_cap_default_is_three_and_ctor_parses_strings():
+    env, state = _v0_env_and_state()
+    assert env.deaths_per_level == 3      # default: fix2 arm unchanged
+    env2 = m0.load_environment(
+        task_spec="full_nle", skill_set=_P3_SKILLS, n_examples=1,
+        explicit_seeds=[0], character="Val-hum-neu-fem", deaths_per_level="5",
+    )
+    assert env2.deaths_per_level == 5     # CLI strings coerce

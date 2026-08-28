@@ -474,6 +474,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # (once per dungeon level: XL below the human arrival norm). Pure
         # decision/format logic in prompt/crisis_directive.py.
         crisis_directive: str = "off",
+        # E15 P3 forced revive: per-dungeon-level death budget. On death with
+        # the rollback tool published, the env restores the newest live
+        # snapshot; the N-th death on one level is final. 3 reproduces the
+        # fix2 arm byte-for-byte (default); the deaths-cap dose arm raises it.
+        deaths_per_level: int = 3,
         # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
         # "descend_pacing"). Prompt-only; published tool schemas untouched.
         mechanic_hints: str = "",
@@ -526,6 +531,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
         self.crisis_directive = str(crisis_directive or "off").strip().lower()
+        self.deaths_per_level = max(1, int(deaths_per_level or 3))
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
         # E9b: append the reflection prompt to every turn. Off (default) leaves
         # every arm byte-identical. Any truthy value enables it.
@@ -1800,14 +1806,18 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             attr = state.get("_death_attribution") or f"{skill_name}(...)"
             from nethack_harness.tools.skills import _rollback_ring
             ring = _rollback_ring(env)
-            if n_here >= 3 or not ring:
-                # Final death (3rd on this level) or nothing to restore into:
-                # the rollout genuinely ends. Mark the (dormant) fix1 window
-                # spent so every stop layer fires immediately.
+            # Configurable budget (deaths_per_level; default 3 = fix2 arm,
+            # byte-identical served lines). _ORDINALS keeps the cap-3 wording
+            # ("the third is final") stable while rendering any other cap.
+            cap = self.deaths_per_level
+            if n_here >= cap or not ring:
+                # Final death (cap-th on this level) or nothing to restore
+                # into: the rollout genuinely ends. Mark the (dormant) fix1
+                # window spent so every stop layer fires immediately.
                 state["_death_window_spent"] = True
                 state["_forced_revive_note"] = (
                     f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
-                    + ("This is death 3/3 on this dungeon level; the game is over for good.]"
+                    + (f"This is death {n_here}/{cap} on this dungeon level; the game is over for good.]"
                        if ring else "No snapshot was available to rewind to; the game is over.]")
                 )
             else:
@@ -1835,11 +1845,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                     state.pop("_death_attribution", None)
                     state.pop("_death_window_spent", None)
                     _gt_now = (state["structured_obs"].status or {}).get("time")
+                    _ord = {1: "first", 2: "second", 3: "third", 4: "fourth",
+                            5: "fifth", 6: "sixth", 7: "seventh", 8: "eighth",
+                            9: "ninth", 10: "tenth"}.get(cap, f"{cap}th")
                     state["_forced_revive_note"] = (
                         f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
                         f"The game has been rewound to game turn "
                         f"{_gt_now if _gt_now is not None else _gt}. "
-                        f"(death {n_here}/3 on this dungeon level -- the third is final) "
+                        f"(death {n_here}/{cap} on this dungeon level -- the {_ord} is final) "
                         f"Choose differently this time.]"
                     )
                 else:

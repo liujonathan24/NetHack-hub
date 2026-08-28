@@ -122,6 +122,14 @@ skill_doc_coords = false
 [p3_rollback.contract]
 skill_set = "np_core,request_map,search,rollback"
 
+[p3_revive_d5] # P3 dose arm: forced revive with a 5-death budget per level
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+deaths_per_level = 5
+[p3_revive_d5.contract]
+skill_set = "np_core,request_map,search,rollback"
+
 [c1_doors]     # C1: no locked doors (engine generation knob; mklev.c)
 netplay_telemetry = false
 melee_hints = false
