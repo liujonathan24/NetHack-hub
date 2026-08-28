@@ -75,6 +75,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -118,10 +119,19 @@ CENSOR_EMPTY_COMPLETION = "empty_completion"
 CENSOR_BUDGET_STOP = "budget_stop"
 CENSOR_INTEGRITY = "integrity_error"
 CENSOR_UNKNOWN = "unknown"
+#: The ORCHESTRATOR process died while this attempt was in flight -- signal,
+#: crash, or the box going away -- and the attempt was finalized afterwards
+#: from what it had already written to disk. Distinct from every reason above
+#: because it is the only one whose numbers are a LOWER BOUND recovered from
+#: partial evidence rather than a rollout's own report: `spend_usd` on such a
+#: row is what the trace file proved, and `spend_known: false` says when even
+#: that was unavailable. Pooling these with completed attempts understates
+#: spend and depth simultaneously.
+CENSOR_INTERRUPTED = "interrupted"
 
 CENSOR_REASONS = frozenset({
     CENSOR_WALL_CLOCK, CENSOR_HARNESS_ERROR, CENSOR_EMPTY_COMPLETION,
-    CENSOR_BUDGET_STOP, CENSOR_INTEGRITY, CENSOR_UNKNOWN,
+    CENSOR_BUDGET_STOP, CENSOR_INTEGRITY, CENSOR_UNKNOWN, CENSOR_INTERRUPTED,
 })
 
 #: `stop_condition` strings the eval CLI writes for an infrastructure stop.
@@ -347,9 +357,37 @@ class OrchestratorConfig:
     def wiki_dir(self) -> Path:
         return self.run_dir / "wiki"
 
+    #: Seconds between :class:`AttemptProgressMonitor` samples. The monitor is
+    #: the ONLY live signal a running attempt emits -- the orchestrator is
+    #: blocked in `subprocess.run` for the whole rollout, so without it the run
+    #: is unobservable except by reading the archive.
+    progress_interval_s: float = 15.0
+
     @property
     def attempts_path(self) -> Path:
         return self.run_dir / "attempts.jsonl"
+
+    @property
+    def journal_path(self) -> Path:
+        """Append-only attempt LIFECYCLE log: one `open` and one `close` each.
+
+        `attempts.jsonl` carries FINAL rows only, and every reader in this tree
+        (`pairs`, `luck`, the aggregators) assumes that. The journal is where
+        an attempt exists between its launch and its result, so a run that dies
+        mid-attempt leaves a record saying which attempt was in flight, from
+        which checkpoint, under which directive, at which pid -- which is
+        exactly what `reconcile_run` needs to finalize it afterwards.
+        """
+        return self.run_dir / "attempts_journal.jsonl"
+
+    @property
+    def progress_path(self) -> Path:
+        """`tail -f` this. One line per sample while an attempt plays."""
+        return self.run_dir / "progress.jsonl"
+
+    @property
+    def recovery_path(self) -> Path:
+        return self.run_dir / "recovery.json"
 
     @property
     def selection_path(self) -> Path:
@@ -1655,6 +1693,777 @@ def calls_from_turns(out_dir) -> list:
 
 
 # --------------------------------------------------------------------------- #
+# durability: write as we play
+# --------------------------------------------------------------------------- #
+#
+# THE FAILURE THIS SECTION EXISTS FOR, in one paragraph.
+#
+# The `mechcheck` pilot ran one attempt for 26 minutes. It restored c1, played
+# 249 LM turns to Dlvl 8 / XL 4, and wrote 23 auto-checkpoints into the archive
+# -- every one of them a valid, restorable bundle. Then the orchestrator's view
+# of it stopped: `attempts.jsonl` was never created, `summary.json` was never
+# written, and no spend was ever attributed. The checkpoints were durable; the
+# BOOKKEEPING was not, because every record of an attempt was written at the
+# END of `ingest`, which only runs after `launch_cell.sh` returns. An attempt
+# that never returns therefore leaves side effects in the archive with no row
+# to attribute them to -- 24 checkpoints and no attempt -- which is precisely
+# the "censored is indistinguishable from died, spend is unaccounted" corruption
+# class this experiment was built to make impossible.
+#
+# Three mechanisms, in the order they run:
+#
+#   1. THE JOURNAL (`attempts_journal.jsonl`). One `open` line BEFORE the
+#      player launches, one `close` line after it is finalized. An attempt that
+#      exists only as an `open` is an attempt that was interrupted, and the
+#      `open` carries everything needed to finalize it later.
+#   2. THE PROGRESS STREAM (`progress.jsonl`). A background sampler appends the
+#      attempt's live state every `progress_interval_s` while it plays. The
+#      orchestrator is blocked in `subprocess.run` for the whole rollout, so
+#      this is the only thing that makes a running attempt observable -- and
+#      its `idle_s` column is the signal that would have shown the mechcheck
+#      run was not dead but sitting in a 12-minute harness relaunch gap.
+#   3. RECONCILIATION (`reconcile_run`). On startup, orphaned checkpoints are
+#      attributed to the attempts whose windows contain them, interrupted
+#      attempts are finalized as `censored:interrupted`, and anything that
+#      cannot be attributed is REPORTED rather than quietly absorbed.
+
+
+class RunInterrupted(BaseException):
+    """A signal ended the run. Deliberately NOT an ``Exception``.
+
+    It inherits ``BaseException`` so that no ``except Exception`` anywhere in
+    the loop can swallow an operator's SIGTERM and convert a killed run into a
+    censored attempt that then continues -- while still unwinding the stack, so
+    the ``finally`` that finalizes the in-flight attempt actually runs. A bare
+    default SIGTERM would skip all of that: Python's default disposition
+    terminates the process without running a single cleanup handler, which is
+    exactly how mechcheck's bookkeeping would have been lost even if the
+    process HAD been signalled.
+    """
+
+    def __init__(self, signame: str, signum: int):
+        super().__init__(f"run interrupted by {signame}")
+        self.signame = signame
+        self.signum = signum
+
+
+def _now_iso(ts: Optional[float] = None) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts if ts is not None else time.time(),
+                                  timezone.utc).isoformat(timespec="seconds")
+
+
+def tail_turn_record(path, max_bytes: int = 1 << 20) -> Optional[dict]:
+    """The last COMPLETE turn record in an NDJSON file, read from the tail.
+
+    Reading from the tail rather than parsing the file is what makes sampling
+    cheap enough to do every 15 seconds: mechcheck's turn file reached 6 MB in
+    26 minutes, and a monitor that re-read it each sample would cost more than
+    the thing it is monitoring. A partial final line (the writer is appending
+    underneath us) is skipped, not repaired.
+    """
+    try:
+        path = Path(path)
+        size = path.stat().st_size
+        if not size:
+            return None
+        with open(path, "rb") as fh:
+            start = max(0, size - max_bytes)
+            fh.seek(start)
+            blob = fh.read()
+        if start:
+            blob = blob.split(b"\n", 1)[-1]  # drop the partial first line
+        for line in reversed(blob.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # the writer is mid-append; the line before is whole
+            if isinstance(rec, dict):
+                return rec
+        return None
+    except OSError:
+        return None
+
+
+#: Where a turn record keeps the engine's blstats. `helpers._write_trace_entry`
+#: writes them under `status`; `applied` in that schema is a BOOLEAN. Reading
+#: the wrong one is silent -- it yields an empty dict and every recovered
+#: number defaults, which is how a mechcheck row first came back claiming XL 1
+#: on a game whose own record says XL 4. Both names are tried, in this order,
+#: and only a dict is accepted.
+_BLSTATS_KEYS = ("status", "blstats", "applied")
+
+
+def _turn_blstats(rec: dict) -> dict:
+    for key in _BLSTATS_KEYS:
+        val = rec.get(key)
+        if isinstance(val, dict):
+            return val
+    return {}
+
+
+def _turn_files(turns_dir) -> list:
+    try:
+        return sorted(Path(turns_dir).glob("*.ndjson"),
+                      key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return []
+
+
+def sample_attempt(turns_dir, archive_dir, *, baseline: frozenset = frozenset()
+                   ) -> dict:
+    """One observation of an attempt in flight, from ITS OWN files.
+
+    Every number here is read off the harness's per-turn record or off the
+    archive directory -- there is no channel through which a running player
+    could report a number about itself into this stream.
+    """
+    files = _turn_files(turns_dir)
+    now = time.time()
+    out: dict = {
+        "turn_files": len(files),
+        "turn_file": files[-1].name if files else "",
+        "idle_s": None,
+        "lm_turn": None, "game_turn": None, "dlvl": None,
+        "max_dlvl": None, "xl": None, "hp": None, "max_hp": None,
+        "score": None, "tool_calls_last_turn": None,
+        "checkpoints_total": 0, "checkpoints_new": [],
+    }
+    if files:
+        newest = files[-1]
+        try:
+            out["idle_s"] = round(now - newest.stat().st_mtime, 1)
+        except OSError:
+            pass
+        rec = tail_turn_record(newest)
+        if rec:
+            blstats = _turn_blstats(rec)
+            out["lm_turn"] = rec.get("turn")
+            out["game_turn"] = blstats.get("time") or rec.get("lm_turn")
+            out["dlvl"] = rec.get("dlvl") or blstats.get("depth")
+            out["max_dlvl"] = rec.get("max_dlvl_reached")
+            out["xl"] = blstats.get("experience_level")
+            out["hp"] = rec.get("hp", blstats.get("hitpoints"))
+            out["max_hp"] = rec.get("max_hp", blstats.get("max_hitpoints"))
+            out["score"] = blstats.get("score")
+            out["tool_calls_last_turn"] = [
+                (c.get("name") if isinstance(c, dict) else str(c))
+                for c in (rec.get("tool_calls") or [])]
+    try:
+        names = {p.name for p in checkpoint_list(archive_dir)}
+    except Exception:
+        names = set()
+    out["checkpoints_total"] = len(names)
+    out["checkpoints_new"] = sorted(names - set(baseline), key=_id_key_name)
+    return out
+
+
+def _id_key_name(name: str) -> tuple:
+    return _id_key(str(name).lstrip("c"))
+
+
+class AttemptProgressMonitor:
+    """A daemon thread that makes a running attempt tail-able.
+
+    NOT a watchdog: it kills nothing and decides nothing. It only writes, which
+    is why it is safe to run beside the real stall watchdog. Every sample is
+    wrapped -- a monitor that raised would take down the run it was there to
+    observe, which is strictly worse than a missing line.
+    """
+
+    def __init__(self, *, paths: list, attempt: int, turns_dir, archive_dir,
+                 interval_s: float = 15.0, baseline: frozenset = frozenset(),
+                 started_at: Optional[float] = None,
+                 extra: Optional[dict] = None):
+        import threading
+        self.paths = [Path(p) for p in paths]
+        self.attempt = attempt
+        self.turns_dir = Path(turns_dir)
+        self.archive_dir = Path(archive_dir)
+        self.interval_s = max(1.0, float(interval_s))
+        self.baseline = frozenset(baseline)
+        self.started_at = started_at or time.time()
+        self.extra = dict(extra or {})
+        self.samples = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="e16-progress",
+                                        daemon=True)
+
+    # -- writing ----------------------------------------------------------- #
+
+    def emit(self, record: dict) -> None:
+        for path in self.paths:
+            try:
+                _append_jsonl(path, record)
+            except Exception:
+                pass
+
+    def sample(self, event: str = "progress", **extra) -> dict:
+        rec = {"event": event, "attempt": self.attempt, "ts": time.time(),
+               "iso": _now_iso(), "wall_s": round(time.time() - self.started_at, 1),
+               **self.extra}
+        try:
+            rec.update(sample_attempt(self.turns_dir, self.archive_dir,
+                                      baseline=self.baseline))
+        except Exception as exc:
+            rec["sample_error"] = f"{type(exc).__name__}: {exc}"
+        rec.update(extra)
+        self.samples += 1
+        self.emit(rec)
+        return rec
+
+    # -- lifecycle --------------------------------------------------------- #
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.interval_s):
+            self.sample()
+
+    def start(self) -> "AttemptProgressMonitor":
+        self._thread.start()
+        return self
+
+    def stop(self, event: str = "attempt_end", **extra) -> dict:
+        self._stop.set()
+        try:
+            self._thread.join(timeout=5)
+        except Exception:
+            pass
+        return self.sample(event, **extra)
+
+
+# --------------------------------------------------------------------------- #
+# reconciliation: attributing what an interrupted attempt left behind
+# --------------------------------------------------------------------------- #
+
+#: How long after an attempt's last measured byte a checkpoint may still be
+#: attributed to it. A rollout's final `save` lands after its final turn
+#: record, and an interrupted attempt's "last byte" is whatever the kill left
+#: behind -- so the window is held open past it. It is never held open into the
+#: NEXT attempt's window: two attempts must never be able to claim one
+#: checkpoint, which is the double-counting this whole path exists to prevent.
+ATTRIBUTION_SLACK_S = 300.0
+
+
+def _pid_alive(pid: int) -> bool:
+    """True only for a RUNNING process; a zombie counts as dead."""
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            raw = fh.read()
+        return raw[raw.rindex(")") + 2:].split()[0] != "Z"
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def _pid_start_time(pid: int) -> Optional[float]:
+    """Wall-clock start time of `pid`, or None. Guards against PID REUSE.
+
+    A stale lock file naming a pid the kernel has since handed to something
+    else must not read as "the run is live" -- that would make a crashed run
+    permanently unrecoverable. The pid AND its start time have to match.
+    """
+    try:
+        with open(f"/proc/{pid}/stat") as fh:
+            raw = fh.read()
+        tail = raw[raw.rindex(")") + 2:].split()
+        with open("/proc/stat") as fh:
+            btime = next(float(l.split()[1]) for l in fh if l.startswith("btime "))
+        return btime + float(tail[19]) / (os.sysconf("SC_CLK_TCK") or 100)
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def run_lock_path(run_dir) -> Path:
+    return Path(run_dir) / "orchestrator.pid"
+
+
+def write_run_lock(run_dir) -> dict:
+    """Stamp the run directory with the pid that owns it, and when it started."""
+    pid = os.getpid()
+    rec = {"pid": pid, "start_time": _pid_start_time(pid), "iso": _now_iso(),
+           "argv": list(sys.argv)}
+    try:
+        atomic_write(run_lock_path(run_dir),
+                     json.dumps(rec, indent=2, sort_keys=True) + "\n")
+    except Exception:
+        pass
+    return rec
+
+
+def clear_run_lock(run_dir) -> None:
+    try:
+        run_lock_path(run_dir).unlink()
+    except OSError:
+        pass
+
+
+def read_run_lock(run_dir) -> Optional[int]:
+    """The pid the lock names, if that exact process is still running."""
+    try:
+        rec = json.loads(run_lock_path(run_dir).read_text())
+    except Exception:
+        return None
+    pid = rec.get("pid")
+    if not isinstance(pid, int) or pid == os.getpid() or not _pid_alive(pid):
+        return None
+    want = rec.get("start_time")
+    got = _pid_start_time(pid)
+    if isinstance(want, (int, float)) and isinstance(got, (int, float)) \
+            and abs(want - got) > 2.0:
+        return None      # the pid was recycled; the run is dead after all
+    return pid
+
+
+def live_orchestrator_pids(run_dir) -> list:
+    """PIDs of orchestrator processes that currently hold ``run_dir``.
+
+    THE GUARD THAT KEEPS RECOVERY FROM BECOMING THE CORRUPTION. Reconciliation
+    finalizes the in-flight attempt and stamps ownership onto archive
+    checkpoints; doing that to a run that is still playing would write a
+    `censored` row for a live attempt and hand its future checkpoints to it.
+    On a shared box this is not hypothetical -- the mechcheck run that
+    motivated all of this was still alive, still writing, and looked dead from
+    its file timestamps alone.
+
+    TWO INDEPENDENT SIGNALS, unioned, because either alone has a blind spot:
+    the lock file this code writes (which a run predating it does not have),
+    and a scan of every process's argv for this run directory (which misses a
+    holder launched through a wrapper that does not name it). A false positive
+    costs a wait; a false negative costs the run.
+    """
+    want = str(Path(run_dir).resolve())
+    out = []
+    locked = read_run_lock(run_dir)
+    if locked is not None:
+        out.append(locked)
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return out
+    # OUR OWN ANCESTORS ARE NOT HOLDERS. `timeout`, `nohup` and every shell
+    # wrapper re-expose the wrapped command line as their own argv, so a plain
+    # `timeout 300 e16_orchestrator.py RUN --reconcile` would otherwise report
+    # its own launcher as a live orchestrator and refuse to do anything.
+    skip = set()
+    anc = os.getpid()
+    for _ in range(64):
+        skip.add(anc)
+        try:
+            with open(f"/proc/{anc}/stat") as fh:
+                raw = fh.read()
+            anc = int(raw[raw.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+        if anc <= 1:
+            break
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid in skip:
+            continue
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                argv = fh.read().split(b"\0")
+        except OSError:
+            continue
+        parts = [a.decode(errors="replace") for a in argv if a]
+        if not any("e16_orchestrator" in p for p in parts):
+            continue
+        if any(os.path.realpath(p) == want for p in parts if p.startswith("/")):
+            out.append(pid)
+    return sorted(set(out))
+
+
+def read_jsonl(path) -> list:
+    out = []
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # a torn final line survives as a skipped line, never a crash
+        if isinstance(rec, dict):
+            out.append(rec)
+    return out
+
+
+def _attempt_dir_evidence(out_dir: Path) -> dict:
+    """What an attempt directory proves about itself with no journal at all.
+
+    The recovery path for a run that predates the journal -- mechcheck is
+    exactly this case: 24 checkpoints, an `attempts/a001/` full of served bytes
+    and turn records, and nothing that says an attempt ever existed.
+    """
+    ev: dict = {"out_dir": str(out_dir), "started_at": None, "ended_at": None,
+                "directive": "", "turns": 0, "calls": 0,
+                "max_dlvl": 0, "max_xl": 1, "game_turn": 0}
+    try:
+        served = out_dir / "directive_served.txt"
+        if served.is_file():
+            ev["directive"] = served.read_text(errors="replace").strip()
+            ev["started_at"] = served.stat().st_mtime
+    except OSError:
+        pass
+    files = _turn_files(out_dir / "turns")
+    if files:
+        try:
+            ev["started_at"] = min([ev["started_at"] or files[0].stat().st_mtime,
+                                    files[0].stat().st_mtime])
+            ev["ended_at"] = max(p.stat().st_mtime for p in files)
+        except OSError:
+            pass
+        rec = tail_turn_record(files[-1])
+        if rec:
+            ev["turns"] = int(rec.get("turn") or 0)
+            blstats = _turn_blstats(rec)
+            ev["game_turn"] = int(blstats.get("time") or 0)
+            ev["max_xl"] = int(blstats.get("experience_level")
+                               or rec.get("max_xp_level") or 1)
+    ev["calls"] = len(calls_from_turns(out_dir))
+    ev["max_dlvl"] = int(_max_dlvl_from_turns(out_dir) or 0)
+    if ev["ended_at"] is None:
+        try:
+            ev["ended_at"] = out_dir.stat().st_mtime
+        except OSError:
+            ev["ended_at"] = ev["started_at"]
+    return ev
+
+
+def _partial_spend(out_dir: Path) -> tuple:
+    """``(usd, known)`` for an interrupted attempt.
+
+    `traces.jsonl` is written when the ROLLOUT finishes, so an interrupted
+    attempt usually has a zero-byte one and there is no honest number to put
+    on the row. Reporting 0.0 as if measured would understate the run's spend
+    against a hard ceiling, so the row carries `spend_known: false` and the
+    summary carries the count of such rows. A budget that silently forgets
+    money it spent is the same class of bug as an attempt that vanishes.
+    """
+    try:
+        res = read_trace_result(out_dir)
+        if res.spend_usd:
+            return float(res.spend_usd), True
+    except Exception:
+        pass
+    return 0.0, False
+
+
+def interrupted_record(*, attempt: int, opened: dict, evidence: dict,
+                       reason: str, detail: str = "") -> dict:
+    """A FINAL attempt row built from an interrupted attempt's own leftovers.
+
+    Same shape as `Orchestrator.ingest`'s row -- same keys, same types -- so
+    every existing reader works on it unchanged, and three extra keys say it
+    was recovered rather than reported: `recovered`, `spend_known`,
+    `recovery_detail`.
+    """
+    spend, spend_known = _partial_spend(Path(evidence["out_dir"]))
+    started = opened.get("ts") or evidence.get("started_at") or 0.0
+    ended = evidence.get("ended_at") or started
+    # The journal's copy first, then the bytes actually SERVED to the player.
+    # `directive_served.txt` is the last-resort source and the most literal one:
+    # it is what the player read, whatever anyone else recorded.
+    directive = opened.get("directive") or evidence.get("directive") or ""
+    return {
+        "attempt": attempt,
+        "from_checkpoint": opened.get("from_checkpoint"),
+        "directive": directive,
+        "directive_compliance": {"class": COMPLY_UNKNOWN,
+                                 "reason": "attempt interrupted before it "
+                                           "reported; not scored"},
+        "experiment_arm": opened.get("experiment_arm") or ARM_GO_EXPLORE,
+        "pair_id": opened.get("pair_id"),
+        "pair_role": opened.get("pair_role") or ROLE_SOLO,
+        "directive_kind": opened.get("directive_kind")
+                          or classify_directive_kind(directive),
+        "directive_lint": lint_directive(directive),
+        "reseed": opened.get("reseed"),
+        "selection_source": opened.get("selection_source"),
+        "orchestrator_decision": None,
+        "outcome": OUTCOME_CENSORED,
+        "censored": True,
+        "censor_reason": CENSOR_INTERRUPTED,
+        "stop_condition": "orchestrator_interrupted",
+        "error": detail or reason,
+        "calls": int(evidence.get("calls") or 0),
+        "spend_usd": round(spend, 6),
+        "spend_known": spend_known,
+        "wall_s": round(max(0.0, float(ended) - float(started)), 2),
+        "max_dlvl": int(evidence.get("max_dlvl") or 0),
+        "depth_disagreement": None,
+        "max_xl": int(evidence.get("max_xl") or 1),
+        "new_checkpoints": list(evidence.get("new_checkpoints") or []),
+        "frontier_advanced": None,
+        "attempts_since_frontier_advance": None,
+        "cumulative_calls": None,
+        "cumulative_spend_usd": None,
+        "cumulative_wall_s": None,
+        "model_text": {"summary": "", "lesson": ""},
+        "out_dir": evidence["out_dir"],
+        "recovered": True,
+        "recovery_detail": detail or reason,
+        "lm_turns_written": int(evidence.get("turns") or 0),
+        "game_turn_reached": int(evidence.get("game_turn") or 0),
+    }
+
+
+class RunStillLive(RuntimeError):
+    """Refusing to reconcile a run directory another orchestrator still holds."""
+
+
+def reconcile_run(cfg: OrchestratorConfig, *, apply: bool = True,
+                  force: bool = False) -> dict:
+    """Reconcile the archive and the attempt records. Idempotent.
+
+    Three questions, answered in order, from files only -- no session, no
+    model, no spend:
+
+      1. Which attempts were left in flight? (a journal `open` with no `close`,
+         or an `attempts/aNNN/` directory with no row at all.) Each is finalized
+         as `censored:interrupted` and appended to `attempts.jsonl`.
+      2. Which archive checkpoints belong to no attempt? Each is attributed to
+         the attempt whose [start, end] window contains its harness-written
+         `created_at`, and its `meta.json` is stamped `created_in_attempt` /
+         `attributed_by: recovery`.
+      3. What is left over? REPORTED, in `unattributed_checkpoints`, and never
+         silently absorbed -- a checkpoint nobody can attribute is a fact about
+         the run, and the one place it can be noticed is here.
+    """
+    live = live_orchestrator_pids(cfg.run_dir)
+    if live and not force:
+        raise RunStillLive(
+            f"REFUSING to reconcile {cfg.run_dir}: orchestrator pid(s) "
+            f"{live} are still holding it. Reconciliation finalizes the "
+            f"in-flight attempt and stamps ownership onto archive "
+            f"checkpoints; doing that under a live run would write a "
+            f"`censored` row for an attempt that is still playing and hand "
+            f"its future checkpoints to it. Wait for the run to end (or stop "
+            f"it) and reconcile then -- it is idempotent, so nothing is lost "
+            f"by waiting.")
+
+    rows = read_jsonl(cfg.attempts_path)
+    finalized = {int(r["attempt"]) for r in rows if isinstance(r.get("attempt"), int)}
+    events = read_jsonl(cfg.journal_path)
+    opened: dict = {}
+    closed: set = set()
+    for ev in events:
+        n = ev.get("attempt")
+        if not isinstance(n, int):
+            continue
+        if ev.get("event") == "open":
+            opened[n] = ev
+        elif ev.get("event") == "close":
+            closed.add(n)
+
+    # (1) in-flight attempts, from the journal and then from the directories.
+    interrupted = sorted(n for n in opened if n not in closed and n not in finalized)
+    dirs = {}
+    attempts_root = cfg.run_dir / "attempts"
+    if attempts_root.is_dir():
+        for p in sorted(attempts_root.glob("a[0-9]*")):
+            try:
+                dirs[int(p.name.lstrip("a"))] = p
+            except ValueError:
+                continue
+    # SELECTION.JSONL IS ALSO A PRE-LAUNCH RECORD. It is appended in
+    # `run_attempt` before the launch and names the checkpoint chosen and the
+    # directive written for each attempt -- so a run that predates the journal
+    # still has an authoritative source for both. Without it a recovered
+    # mechcheck row came back with `from_checkpoint: null`, which would have
+    # left 23 checkpoints attributed to an attempt that started from nowhere.
+    selections = {}
+    for s in read_jsonl(cfg.selection_path):
+        if isinstance(s.get("attempt"), int):
+            selections[s["attempt"]] = s
+    for n in sorted(dirs):
+        if n not in finalized and n not in opened:
+            # No journal at all -- a run from before the journal existed, or one
+            # killed between mkdir and the first append. The directory is still
+            # evidence, and refusing to read it is how mechcheck lost an attempt.
+            opened[n] = {"attempt": n, "event": "open", "recovered_from": "dir",
+                         "out_dir": str(dirs[n]), "ts": None}
+            interrupted.append(n)
+    # Fill every gap in an `open` record from the selection log. Journal first,
+    # selection second: the journal is what the launch actually used.
+    for n, op in opened.items():
+        sel = selections.get(n)
+        if not sel:
+            continue
+        if not op.get("from_checkpoint"):
+            op["from_checkpoint"] = sel.get("chosen_id")
+        if not op.get("directive"):
+            op["directive"] = sel.get("directive") or ""
+        if not op.get("directive_kind"):
+            op["directive_kind"] = sel.get("directive_kind") or ""
+        if not op.get("selection_source"):
+            op["selection_source"] = sel.get("source")
+    interrupted = sorted(set(interrupted))
+    # An attempt whose recorded pid is STILL RUNNING is not interrupted, it is
+    # in flight. Its window is still used for attribution (so its checkpoints
+    # are not handed to the attempt before it) but no row is written for it:
+    # a `censored` row for a live attempt is a lie the dataset would keep.
+    still_live: list = []
+    for n in list(interrupted):
+        p = opened[n].get("pid")
+        if isinstance(p, int) and _pid_alive(p) and not force:
+            still_live.append({"attempt": n, "pid": p})
+            interrupted.remove(n)
+    open_attempts = sorted(set(interrupted) | {s["attempt"] for s in still_live})
+
+    new_rows: list = []
+    windows: list = []  # (attempt, start_ts, end_ts, from_checkpoint)
+    for r in rows:
+        n = r.get("attempt")
+        od = Path(r.get("out_dir") or (attempts_root / f"a{n:03d}"))
+        ev = _attempt_dir_evidence(od) if od.is_dir() else {}
+        windows.append((n, ev.get("started_at"), ev.get("ended_at"),
+                        r.get("from_checkpoint"), r))
+    for n in open_attempts:
+        op = opened[n]
+        od = Path(op.get("out_dir") or (attempts_root / f"a{n:03d}"))
+        ev = _attempt_dir_evidence(od)
+        start = op.get("ts") or ev.get("started_at")
+        windows.append((n, start, ev.get("ended_at"), op.get("from_checkpoint"),
+                        None))
+
+    # (2) orphaned checkpoints -> the attempt whose window contains them.
+    seed_ids = set()
+    orphans: list = []
+    for path in checkpoint_list(cfg.archive_dir):
+        try:
+            meta = checkpoint_meta(path)
+        except Exception:
+            continue
+        if meta.get("created_by") == "orchestrator":
+            # The seed state, written by `seed_archive` before any attempt
+            # existed. It is not an orphan and must never be attributed to one.
+            seed_ids.add(path.name)
+            continue
+        if meta.get("created_in_attempt"):
+            continue
+        orphans.append((path, meta))
+
+    # NON-OVERLAPPING WINDOWS, in start order. Attempts run strictly one after
+    # another, so an attempt's window closes where the next one opens -- and
+    # without that clamp the slack below lets a finished attempt swallow the
+    # next attempt's checkpoints, which is a worse failure than not attributing
+    # them at all (it would put one attempt's evidence on another's row).
+    windows = [w for w in windows if w[1] is not None]
+    windows.sort(key=lambda w: float(w[1]))
+    clamped: list = []
+    for i, (n, start, end, parent, _row) in enumerate(windows):
+        end = float(end or start)
+        # A checkpoint can land after the attempt's last TURN record -- the
+        # save is the last thing a dying rollout does -- so the window is held
+        # open past it, but never into the next attempt.
+        end = max(end, float(start)) + ATTRIBUTION_SLACK_S
+        if i + 1 < len(windows):
+            end = min(end, float(windows[i + 1][1]))
+        clamped.append((n, float(start), end, parent))
+
+    attributed: list = []
+    unattributed: list = []
+    held_by_live: list = []
+    per_attempt_new: dict = {}
+    for path, meta in orphans:
+        created = meta.get("created_at")
+        if not isinstance(created, (int, float)):
+            try:
+                created = path.stat().st_mtime
+            except OSError:
+                created = None
+        owner = None
+        if created is not None:
+            # The LAST attempt that had started when this checkpoint was
+            # written. Reading it that way rather than as "the first window
+            # that matches" is what keeps the answer stable when two windows'
+            # measured ends disagree by a second.
+            for n, start, end, parent in clamped:
+                if start - 1.0 <= float(created) <= end:
+                    owner = (n, parent)
+        if owner is None:
+            unattributed.append({"checkpoint": path.name, "created_at": created,
+                                 "created_by": meta.get("created_by"),
+                                 "why": "no attempt window contains its created_at"})
+            continue
+        n, parent = owner
+        if any(s["attempt"] == n for s in still_live):
+            # It belongs to an attempt that is STILL PLAYING. `ingest` will
+            # stamp it when that attempt finishes; stamping it here would race
+            # a live writer for no benefit.
+            held_by_live.append({"checkpoint": path.name, "attempt": n})
+            continue
+        per_attempt_new.setdefault(n, []).append(path.name)
+        attributed.append({"checkpoint": path.name, "attempt": n,
+                           "created_at": created})
+        if apply:
+            meta["created_in_attempt"] = n
+            if meta.get("parent") is None and parent:
+                meta["parent"] = parent
+            meta["attributed_by"] = "recovery"
+            atomic_write(path / META_JSON,
+                         json.dumps(meta, indent=2, sort_keys=True) + "\n")
+
+    # (1b) now that attribution is known, write the finalized rows.
+    for n in interrupted:
+        op = opened[n]
+        od = Path(op.get("out_dir") or (attempts_root / f"a{n:03d}"))
+        ev = _attempt_dir_evidence(od)
+        ev["new_checkpoints"] = sorted(per_attempt_new.get(n, []), key=_id_key_name)
+        detail = op.get("interrupt_reason") or (
+            "the orchestrator process ended while this attempt was in flight; "
+            "the row was reconstructed from the attempt's own turn records and "
+            "the archive checkpoints inside its window")
+        rec = interrupted_record(attempt=n, opened=op, evidence=ev,
+                                 reason=CENSOR_INTERRUPTED, detail=detail)
+        new_rows.append(rec)
+        if apply:
+            _append_jsonl(cfg.attempts_path, rec)
+            _append_jsonl(cfg.journal_path,
+                          {"event": "close", "attempt": n, "ts": time.time(),
+                           "iso": _now_iso(), "outcome": OUTCOME_CENSORED,
+                           "censor_reason": CENSOR_INTERRUPTED,
+                           "recovered": True})
+
+    # An already-final row that gained checkpoints (the crash landed between
+    # the archive write and the row) has them added to its recovery note rather
+    # than to the row: attempts.jsonl stays append-only.
+    late = {n: names for n, names in per_attempt_new.items()
+            if n in finalized}
+
+    report = {
+        "ts": time.time(), "iso": _now_iso(), "run_dir": str(cfg.run_dir),
+        "applied": bool(apply),
+        "forced": bool(force),
+        "live_orchestrator_pids": live,
+        "attempts_still_live": still_live,
+        "checkpoints_held_by_live_attempts": held_by_live,
+        "attempts_already_final": sorted(finalized),
+        "attempts_finalized_now": [r["attempt"] for r in new_rows],
+        "checkpoints_total": len(checkpoint_list(cfg.archive_dir)),
+        "seed_checkpoints": sorted(seed_ids, key=_id_key_name),
+        "checkpoints_attributed": attributed,
+        "checkpoints_attributed_to_already_final_attempts": late,
+        "unattributed_checkpoints": unattributed,
+        "spend_unknown_attempts": [r["attempt"] for r in new_rows
+                                   if not r.get("spend_known")],
+    }
+    if apply:
+        atomic_write(cfg.recovery_path,
+                     json.dumps(report, indent=2, sort_keys=True, default=str) + "\n")
+    return report
+
+
+# --------------------------------------------------------------------------- #
 # provenance
 # --------------------------------------------------------------------------- #
 
@@ -1875,6 +2684,20 @@ class Orchestrator:
         #: Phrasing warnings raised on the last directive, fed back into the
         #: next orchestrator round. A lint nobody reads changes nothing.
         self._last_lint: list = []
+        #: THE IN-FLIGHT ATTEMPT, or None. Set from the journal `open` line
+        #: written BEFORE the player launches and cleared only when the row is
+        #: final. Anything that unwinds the stack -- an exception, a signal,
+        #: `main`'s last-resort handler -- finalizes whatever is in here, so an
+        #: attempt can no longer leave checkpoints in the archive with no row.
+        self._open: Optional[dict] = None
+        #: The live progress sampler for the in-flight attempt.
+        self._monitor: Optional[AttemptProgressMonitor] = None
+        #: What `reconcile_run` found at startup. Carried into the summary so a
+        #: recovered run says out loud that it was recovered.
+        self.recovery: dict = {}
+        self.resumed = False
+        #: Set by the signal handlers; named on the finalized attempt row.
+        self.interrupted_by: str = ""
 
     # -- setup ------------------------------------------------------------- #
 
@@ -1902,6 +2725,10 @@ class Orchestrator:
                 Path(self.cfg.orchestrator_agent_dir
                      or (self.cfg.orchestrator_dir / "agent")) / "tmp")
         Path(self.cfg.orchestrator_tmpdir).mkdir(parents=True, exist_ok=True)
+        # WHO OWNS THIS DIRECTORY, written down. Recovery and resume both refuse
+        # to touch a run another orchestrator is still holding, and the only way
+        # to know that reliably is for the holder to say so.
+        write_run_lock(self.cfg.run_dir)
         hashes = install_wiki(self.cfg.wiki_src, self.cfg.wiki_dir)
         # The orchestrator reads the SAME bytes the players are served, through
         # a tiny CLI over the same WikiKB. Two knowledge bases with the same
@@ -2470,14 +3297,160 @@ you intend to do next. Write it for yourself. No JSON this round.
         before = {p.name for p in checkpoint_list(cfg.archive_dir)}
         before_front = self.frontier_ids(rows)
         t0 = time.time()
+        # THE PROVISIONAL ROW, BEFORE THE LAUNCH. From here until `ingest`
+        # returns, this attempt exists on disk: which checkpoint it resumed,
+        # what it was told, when it started and under which pid. Everything the
+        # player writes into the archive from now on is attributable even if
+        # this process never runs another line of Python.
+        self.open_attempt(ctx, before, t0)
         try:
             result = self.launcher(ctx)
         except Exception as exc:  # a launcher blow-up is a CENSORED attempt
             result = PlayerResult(stop_condition="error", error=f"{type(exc).__name__}: {exc}",
                                   wall_s=time.time() - t0)
+        except BaseException as exc:
+            # A SIGNAL, or anything else that is not an ordinary error. The row
+            # is finalized HERE, before the exception continues on its way --
+            # mechcheck's 24 orphaned checkpoints are what happens when this
+            # path does not exist. The attempt is `censored:interrupted`, never
+            # `died`: the character was alive when the infrastructure stopped.
+            detail = (f"{type(exc).__name__}: {exc}" if str(exc)
+                      else type(exc).__name__)
+            self.finalize_interrupted(ctx, detail=detail, t0=t0)
+            raise
         if not result.wall_s:
             result.wall_s = time.time() - t0
         return self.ingest(ctx, result, before, before_front)
+
+    # -- durability: the in-flight attempt ---------------------------------- #
+
+    def open_attempt(self, ctx: PlayerContext, before: set, t0: float) -> dict:
+        """Journal one attempt as OPEN and start its progress stream."""
+        cfg = self.cfg
+        rec = {
+            "event": "open",
+            "attempt": ctx.attempt,
+            "attempt_id": f"a{ctx.attempt:03d}",
+            "ts": t0,
+            "iso": _now_iso(t0),
+            "pid": os.getpid(),
+            "from_checkpoint": ctx.checkpoint_id,
+            "checkpoint_dir": (str(ctx.checkpoint_dir)
+                               if ctx.checkpoint_dir else None),
+            "directive": ctx.directive,
+            "directive_kind": ctx.directive_kind,
+            "experiment_arm": ctx.experiment_arm,
+            "pair_id": ctx.pair_id,
+            "pair_role": ctx.pair_role,
+            "reseed": (list(ctx.reseed) if ctx.reseed else None),
+            "selection_source": (getattr(self, "_decision_of_attempt", None)
+                                 or {}).get("source"),
+            "out_dir": str(ctx.out_dir),
+            "archive_before": sorted(before, key=_id_key_name),
+            "cumulative_spend_usd_before": round(self.budget.spent_usd, 6),
+            "cumulative_calls_before": self.cum_calls,
+        }
+        self._open = rec
+        _append_jsonl(cfg.journal_path, rec)
+        # A SECOND COPY, inside the attempt's own directory. The journal can be
+        # lost with the run directory's top level (or predate this code); an
+        # attempt that carries its own open record is recoverable from the
+        # directory alone, which is the shape mechcheck was left in.
+        try:
+            atomic_write(ctx.out_dir / "attempt_open.json",
+                         json.dumps(rec, indent=2, sort_keys=True, default=str) + "\n")
+        except Exception:
+            pass
+        self._monitor = AttemptProgressMonitor(
+            paths=[cfg.progress_path, ctx.out_dir / "progress.jsonl"],
+            attempt=ctx.attempt, turns_dir=ctx.out_dir / "turns",
+            archive_dir=cfg.archive_dir, interval_s=cfg.progress_interval_s,
+            baseline=frozenset(before), started_at=t0,
+            extra={"from_checkpoint": ctx.checkpoint_id,
+                   "directive_kind": ctx.directive_kind,
+                   "pair_role": ctx.pair_role,
+                   "cumulative_spend_usd_before": round(self.budget.spent_usd, 6)})
+        self._monitor.sample("attempt_start", directive=ctx.directive)
+        self._monitor.start()
+        # summary.json now exists from the FIRST launch rather than from the
+        # first completed attempt, and says which attempt is in flight.
+        self.write_summary()
+        return rec
+
+    def close_attempt(self, record: dict) -> None:
+        """Journal an attempt as CLOSED and stop its progress stream."""
+        if self._monitor is not None:
+            try:
+                self._monitor.stop("attempt_end", outcome=record.get("outcome"),
+                                   censor_reason=record.get("censor_reason"),
+                                   spend_usd=record.get("spend_usd"),
+                                   cumulative_spend_usd=record.get("cumulative_spend_usd"),
+                                   new_checkpoints=record.get("new_checkpoints"))
+            except Exception:
+                pass
+            self._monitor = None
+        _append_jsonl(self.cfg.journal_path, {
+            "event": "close", "attempt": record.get("attempt"),
+            "ts": time.time(), "iso": _now_iso(),
+            "outcome": record.get("outcome"),
+            "censor_reason": record.get("censor_reason"),
+            "spend_usd": record.get("spend_usd"),
+            "new_checkpoints": record.get("new_checkpoints"),
+        })
+        self._open = None
+
+    def finalize_interrupted(self, ctx: Optional[PlayerContext] = None, *,
+                             detail: str = "", t0: Optional[float] = None) -> Optional[dict]:
+        """Finalize the in-flight attempt as ``censored:interrupted``. Never raises.
+
+        Called from the launch path's ``except BaseException``, from ``run``'s
+        ``finally``, and from ``main``'s last-resort handler -- three chances,
+        because the one that matters is whichever one the failure allows to
+        run. It is idempotent: `self._open` is cleared by the first.
+        """
+        opened = self._open
+        if opened is None:
+            return None
+        try:
+            n = int(opened.get("attempt") or (ctx.attempt if ctx else 0))
+            out_dir = Path(opened.get("out_dir")
+                           or (ctx.out_dir if ctx else self.cfg.run_dir))
+            ev = _attempt_dir_evidence(out_dir)
+            if t0:
+                ev["started_at"] = t0
+            after = {p.name for p in checkpoint_list(self.cfg.archive_dir)}
+            ev["new_checkpoints"] = sorted(
+                after - set(opened.get("archive_before") or []), key=_id_key_name)
+            reason = detail or self.interrupted_by or "interrupted"
+            rec = interrupted_record(attempt=n, opened=opened, evidence=ev,
+                                     reason=CENSOR_INTERRUPTED, detail=reason)
+            # Spend and calls STILL move the run's counters. An interrupted
+            # attempt that cost money and is not charged for it is a budget
+            # that lies, which is the same defect as an attempt that vanishes.
+            self.budget.add_player(rec["spend_usd"])
+            self.cum_calls += rec["calls"]
+            self.cum_wall += rec["wall_s"]
+            rec["cumulative_calls"] = self.cum_calls
+            rec["cumulative_spend_usd"] = round(self.budget.spent_usd, 4)
+            rec["cumulative_wall_s"] = round(self.cum_wall, 1)
+            for p in checkpoint_list(self.cfg.archive_dir):
+                if p.name in rec["new_checkpoints"] and ctx is not None:
+                    try:
+                        self._stamp_new_checkpoint(p, ctx, PlayerResult())
+                    except Exception:
+                        pass
+            self.attempts.append(rec)
+            _append_jsonl(self.cfg.attempts_path, rec)
+            self.close_attempt(rec)
+            self.write_summary()
+            return rec
+        except Exception:
+            # Last resort: leave the journal entry OPEN and clear only the
+            # in-memory handle. An `open` with no `close` is exactly what
+            # `reconcile_run` finalizes on the next start, so failing here
+            # degrades to "recovered one start later", never to "lost".
+            self._open = None
+            return None
 
     # -- the null arm ------------------------------------------------------- #
 
@@ -2725,6 +3698,10 @@ you intend to do next. Write it for yourself. No JSON this round.
         }
         self.attempts.append(record)
         _append_jsonl(cfg.attempts_path, record)
+        # The row is final: close the journal entry and stop the progress
+        # stream BEFORE the summary, so a crash between them leaves a closed
+        # attempt with a stale summary (recoverable) rather than an open one.
+        self.close_attempt(record)
         self.write_summary()
         return record
 
@@ -2933,8 +3910,32 @@ you intend to do next. Write it for yourself. No JSON this round.
             "orchestrator_error": self.orchestrator_error,
             "opening_plan": ({"attempts": len(self.opening_attempts),
                               "degeneration":
-                                  self.opening_attempts[-1]["degeneration"]}
+                                  self.opening_attempts[-1]["degeneration"],
+                              "attempts_detail": self.opening_attempts}
                              if self.opening_attempts else None),
+            # -- DURABILITY, reported rather than assumed ------------------- #
+            # `in_flight` is what makes a summary written mid-attempt honest:
+            # it names the attempt that has no final row yet, so a reader of a
+            # summary from a run that later died can tell "attempt 1 was still
+            # playing" apart from "there was never an attempt 1".
+            "in_flight": ({"attempt": self._open.get("attempt"),
+                           "from_checkpoint": self._open.get("from_checkpoint"),
+                           "started_iso": self._open.get("iso"),
+                           "pid": self._open.get("pid")}
+                          if self._open else None),
+            "resumed": self.resumed,
+            "interrupted_by": self.interrupted_by,
+            "attempts_recovered": sum(1 for a in self.attempts
+                                      if a.get("recovered")),
+            # An attempt whose spend could not be recovered makes the run's
+            # total a LOWER BOUND, and a budget ceiling read off a lower bound
+            # is not a ceiling. Counted here so nobody has to notice it.
+            "attempts_with_unknown_spend": sum(
+                1 for a in self.attempts
+                if a.get("recovered") and not a.get("spend_known")),
+            "recovery": self.recovery or None,
+            "unattributed_checkpoints":
+                list((self.recovery or {}).get("unattributed_checkpoints") or []),
         }
         if best is not None:
             # COMPARABILITY: the best-state claim NEVER travels alone.
@@ -2970,8 +3971,187 @@ you intend to do next. Write it for yourself. No JSON this round.
 
     # -- the loop ---------------------------------------------------------- #
 
+    # -- resuming ----------------------------------------------------------- #
+
+    def resume(self) -> dict:
+        """Pick a dead run back up without losing or re-spending anything.
+
+        Order matters. Reconciliation runs FIRST, so the attempt that was in
+        flight when the last process died is a finalized `censored:interrupted`
+        row -- and its checkpoints are attributed -- before any counter is
+        rebuilt from those rows. Then:
+
+        * the attempt rows, the call/wall/spend counters and the frontier
+          history are read back from `attempts.jsonl`, so cumulative spend is
+          CONTINUOUS across the restart and nothing is charged twice;
+        * the orchestrator's conversation is re-attached by its recorded
+          session id, so the optimization continues instead of restarting --
+          which is the whole reason the session is persistent;
+        * `opened` is set, because the opening plan is already on the record
+          and paying for a second one would both cost money and replace the
+          plan every earlier attempt was steered by.
+        """
+        cfg = self.cfg
+        live = live_orchestrator_pids(cfg.run_dir)
+        if live:
+            raise RunStillLive(
+                f"REFUSING to resume {cfg.run_dir}: orchestrator pid(s) "
+                f"{live} are still running against it. Two orchestrators on "
+                f"one archive would select from each other's checkpoints, "
+                f"charge one budget twice, and write attempt rows with "
+                f"colliding ids. Stop the running one first.")
+        self.resumed = True
+        self.recovery = reconcile_run(cfg)
+
+        rows = read_jsonl(cfg.attempts_path)
+        rows.sort(key=lambda r: int(r.get("attempt") or 0))
+        self.attempts = rows
+        self.cum_calls = sum(int(r.get("calls") or 0) for r in rows)
+        self.cum_wall = sum(float(r.get("wall_s") or 0.0) for r in rows)
+        self.budget.player_usd = sum(float(r.get("spend_usd") or 0.0) for r in rows)
+        # THE ORCHESTRATOR'S OWN LINE, recovered from its round log rather than
+        # from the summary: the round log is append-only and fsynced per round,
+        # so it survives exactly the crashes the summary does not.
+        self.budget.orchestrator_usd = sum(
+            float(r.get("spend_usd") or 0.0) for r in read_jsonl(cfg.orchestrator_log))
+
+        prior = {}
+        try:
+            prior = json.loads(cfg.summary_path.read_text())
+        except Exception:
+            prior = {}
+        self.frontier_advances = list(prior.get("frontier_advances") or [])
+        self.llm_fallbacks = int(prior.get("llm_fallbacks") or 0)
+        self.opening_attempts = list((prior.get("opening_plan") or {}).get(
+            "attempts_detail") or [])
+        # Wall clock CONTINUES rather than restarting from zero: a resumed run
+        # that reported its own uptime would understate what the result cost.
+        self.started_at = time.time() - float(prior.get("wall_clock_s") or 0.0)
+        # Attempts since the last frontier advance, recomputed from the rows.
+        since = 0
+        for r in reversed(rows):
+            if r.get("frontier_advanced"):
+                break
+            since += 1
+        self._since_advance = since
+        self._pair_counter = max((int(r.get("pair_id") or 0) for r in rows),
+                                 default=0)
+
+        sess = self.restore_session()
+        state = {
+            "resumed": True,
+            "attempts_recovered": len(rows),
+            "recovery": self.recovery,
+            "budget": self.budget.lines(),
+            "session": sess,
+        }
+        self.write_summary()
+        return state
+
+    def restore_session(self) -> dict:
+        """Re-attach the orchestrator conversation by its recorded session id.
+
+        Read out of `orchestrator_rounds.jsonl`, which every round appends to
+        and fsyncs, rather than out of provenance -- provenance is rewritten at
+        the END of a run and a run that died never wrote it.
+        """
+        out = {"attached": False, "session_id": "", "rounds": 0}
+        if self.session is None:
+            out["reason"] = "scripted selector: no session to resume"
+            return out
+        rounds = read_jsonl(self.cfg.orchestrator_log)
+        # THE PROBE IS NOT THE RUN. `--probe-session` opens its own throwaway
+        # conversation in the same agent dir and logs it here; resuming THAT id
+        # would continue a two-sentence continuity check instead of the run's
+        # strategy. Its spend still counts (it was billed), its id does not.
+        chain = [r for r in rounds
+                 if not str(r.get("kind") or "").startswith("probe")]
+        ids = [r.get("session_id") for r in chain if r.get("session_id")]
+        if not ids:
+            out["reason"] = "no session id on record; the next round opens one"
+            return out
+        self.session.session_id = ids[-1]
+        self.session.session_ids = list(dict.fromkeys(ids))
+        self.session.rounds = max((int(r.get("round") or 0) for r in chain),
+                                  default=0)
+        self.session.sent_chars = max(
+            (int(r.get("sent_chars_cumulative") or 0) for r in chain), default=0)
+        self.session.spend_usd = sum(float(r.get("spend_usd") or 0.0)
+                                     for r in rounds)
+        self.session.compactions = sum(1 for r in chain
+                                       if r.get("kind") == "compaction")
+        for r in reversed(chain):
+            if r.get("session_cwd"):
+                self.session.session_cwd = r["session_cwd"]
+                break
+            if r.get("session_file"):
+                self.session.session_file = r["session_file"]
+        # The opening plan is already bought and already on the record.
+        self.opened = any(str(r.get("kind") or "").startswith("opening")
+                          for r in rounds)
+        out.update({"attached": True, "session_id": self.session.session_id,
+                    "session_ids": list(self.session.session_ids),
+                    "rounds": self.session.rounds,
+                    "sent_chars": self.session.sent_chars,
+                    "opening_already_bought": self.opened})
+        return out
+
+    # -- the loop ----------------------------------------------------------- #
+
+    def install_signal_handlers(self) -> list:
+        """Turn SIGTERM/SIGINT into an exception that unwinds the stack.
+
+        Python's DEFAULT SIGTERM disposition terminates the process without
+        running one `finally`, so an operator's `kill` and a box teardown both
+        destroy the in-flight attempt's record. Raising instead means the
+        launch path's `except BaseException` finalizes the row, the archive's
+        new checkpoints are attributed to it, and the summary is flushed --
+        before the process goes.
+        """
+        installed = []
+        for signame in ("SIGTERM", "SIGINT", "SIGHUP"):
+            signum = getattr(signal, signame, None)
+            if signum is None:
+                continue
+
+            def handler(num, _frame, _name=signame):
+                self.interrupted_by = _name
+                raise RunInterrupted(_name, num)
+
+            try:
+                signal.signal(signum, handler)
+                installed.append(signame)
+            except (ValueError, OSError):
+                # Not the main thread (a test, an embedded caller): the loop
+                # still works, it just cannot intercept that signal.
+                continue
+        return installed
+
     def run(self, max_attempts: Optional[int] = None) -> dict:
         limit = max_attempts if max_attempts is not None else self.cfg.max_attempts
+        self.install_signal_handlers()
+        # summary.json exists from the START, not from the first completed
+        # attempt. A run that dies in its opening round now leaves a summary
+        # that says so instead of leaving an empty directory.
+        self.write_summary()
+        try:
+            return self._run(limit)
+        finally:
+            # THE BACKSTOP. Whatever left the loop -- a signal, a raise, an
+            # orchestrator failure -- an attempt that is still open is finalized
+            # here rather than lost. Idempotent: the launch path usually got
+            # there first and `_open` is already None.
+            if self._open is not None:
+                self.finalize_interrupted(
+                    detail=(f"the orchestrator exited on {self.interrupted_by} "
+                            f"while this attempt was in flight")
+                    if self.interrupted_by else
+                    "the orchestrator exited while this attempt was in flight")
+            # The lock goes LAST, after the record is final: a reader that sees
+            # no lock must be able to trust that nothing is still being written.
+            clear_run_lock(self.cfg.run_dir)
+
+    def _run(self, limit: int) -> dict:
         # ROUND 1 IS DISCUSSION. The plan goes on the record before any player
         # is launched, so "did it follow its own strategy?" stays answerable.
         #
@@ -3371,6 +4551,27 @@ def main(argv=None) -> int:
                          "Its process group is killed at the deadline and the "
                          "round is recorded as an error, so a hang can never "
                          "consume the run's wall clock.")
+    ap.add_argument("--resume", action="store_true",
+                    help="CONTINUE an existing run directory instead of "
+                         "starting one. Reconciles the archive against the "
+                         "attempt rows, finalizes whatever attempt was in "
+                         "flight as censored:interrupted, re-attaches the "
+                         "orchestrator's recorded session so the conversation "
+                         "continues, and carries spend forward so nothing is "
+                         "charged twice.")
+    ap.add_argument("--reconcile", action="store_true",
+                    help="Run the reconciliation and exit. NO model calls, no "
+                         "spend, no launches: it attributes orphaned archive "
+                         "checkpoints, finalizes interrupted attempts, and "
+                         "reports what it could not attribute.")
+    ap.add_argument("--force", action="store_true",
+                    help="--reconcile only: proceed even though a live "
+                         "orchestrator still holds the run directory. Almost "
+                         "always wrong -- it writes a censored row for an "
+                         "attempt that is still playing.")
+    ap.add_argument("--progress-interval", type=float, default=15.0,
+                    help="Seconds between progress.jsonl samples while an "
+                         "attempt plays. `tail -f` that file to watch a run.")
     ap.add_argument("--seed-archive", action="store_true",
                     help="Write c1 (a fresh game at the entrance) and exit.")
     ap.add_argument("--prepare-only", action="store_true",
@@ -3401,7 +4602,22 @@ def main(argv=None) -> int:
                                 else run_dir / "orchestrator" / "agent"),
         orchestrator_tmpdir=(Path(args.orch_tmpdir) if args.orch_tmpdir
                              else None),
+        progress_interval_s=args.progress_interval,
     )
+    # RECONCILE-ONLY runs against the directory as it stands. No wiki copy, no
+    # provenance rewrite, no session -- so it is safe to point at a run someone
+    # else is still holding, and safe to run twice.
+    if args.reconcile:
+        if not cfg.archive_dir.is_dir():
+            print(f"e16: {cfg.archive_dir} does not exist", file=sys.stderr)
+            return 2
+        try:
+            report = reconcile_run(cfg, force=args.force)
+        except RunStillLive as exc:
+            print(f"[e16] {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, sort_keys=True, default=str))
+        return 0 if not report["unattributed_checkpoints"] else 1
     # THE NULL ARM HAS NO ORCHESTRATOR. Not "an orchestrator that is told to do
     # nothing" -- no session at all, no selection, no directive. An LM in the
     # loop that merely refrained from steering would still be a treatment.
@@ -3413,6 +4629,18 @@ def main(argv=None) -> int:
         cfg.selector = "scripted"
         cfg.no_directive = True
         cfg.paired_control = False
+    # A RESUME MUST NOT LOSE WHAT THE FIRST START PROVED. `prepare` rewrites
+    # provenance.json from the config, so the resume-continuity verdict (which
+    # `run_e16.sh run` gates on, and which cost real inference) has to be read
+    # back off disk first or the next resume would demand the probe again.
+    if args.resume:
+        try:
+            _prev = json.loads(cfg.provenance_path.read_text())
+            cfg.session_resume_verified = (
+                _prev.get("orchestrator_session") or {}).get(
+                    "session_resume_verified")
+        except Exception:
+            pass
     session = build_session(cfg) if cfg.selector == "llm" else None
     orch = Orchestrator(cfg, SubprocessPlayer(), session=session)
     prov = orch.prepare()
@@ -3433,8 +4661,35 @@ def main(argv=None) -> int:
         print(f"[e16] seeded archive: {target}")
         if args.seed_archive:
             return 0
+    if args.resume:
+        try:
+            state = orch.resume()
+        except RunStillLive as exc:
+            print(f"[e16] {exc}", file=sys.stderr)
+            return 2
+        print("[e16] RESUMED " + json.dumps(
+            {k: v for k, v in state.items() if k != "recovery"},
+            sort_keys=True, default=str), file=sys.stderr)
+        rep = state["recovery"]
+        print(f"[e16] reconciled: {len(rep['attempts_finalized_now'])} attempt(s) "
+              f"finalized as censored:interrupted, "
+              f"{len(rep['checkpoints_attributed'])} checkpoint(s) attributed, "
+              f"{len(rep['unattributed_checkpoints'])} unattributed",
+              file=sys.stderr)
+        for item in rep["unattributed_checkpoints"]:
+            print(f"[e16]   UNATTRIBUTED {item['checkpoint']}: {item['why']}",
+                  file=sys.stderr)
     try:
         summary = orch.run()
+    except RunInterrupted as exc:
+        # The in-flight attempt has already been finalized and the summary
+        # flushed by `run`'s finally. Exit code 130 is the conventional
+        # "killed by a signal", so a supervising script can tell an interrupted
+        # run apart from a failed one.
+        print(f"[e16] INTERRUPTED: {exc}. The in-flight attempt was finalized "
+              f"as censored:interrupted; resume with --resume.", file=sys.stderr)
+        print(json.dumps(orch.summary(), indent=2, sort_keys=True, default=str))
+        return 130
     except OrchestratorRoundFailed as exc:
         # LOUD AND NON-ZERO. `run` has already flushed the summary with
         # stop_reason=orchestrator_failed and the error on it, and the raw

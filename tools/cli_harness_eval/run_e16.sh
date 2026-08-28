@@ -19,7 +19,19 @@
 #             Writes `session_resume_verified` into provenance.json.
 #   run       the loop: orchestrator round -> player attempt -> ingest, until
 #             budget / stall / milestone. SPENDS THE RUN'S BUDGET.
+#   resume    CONTINUE a run whose orchestrator died. Reconciles the archive
+#             against the attempt rows, finalizes whatever attempt was in
+#             flight as censored:interrupted (attributing the checkpoints it
+#             left behind), re-attaches the orchestrator's recorded session so
+#             the optimization conversation continues rather than restarting,
+#             and carries spend forward so nothing is charged twice. SPENDS
+#             THE REMAINING BUDGET.
+#   reconcile reconciliation ONLY -- no session, no launches, NO SPEND. Run it
+#             on any run directory to attribute orphaned archive checkpoints,
+#             finalize interrupted attempts, and be told what it could not
+#             attribute. Exits 1 if anything was left unattributed.
 #   status    print the current summary.json.
+#   watch     tail the live progress stream (progress.jsonl).
 #
 # ENVIRONMENT
 #   The isolation rules of this box are not optional here; every one of them
@@ -158,6 +170,7 @@ ARGS=(
   --stall-attempts "${E16_STALL:-8}"
   --orch-json-mode "${E16_ORCH_JSON_MODE:-discovery_only}"
   --orch-timeout "${E16_ORCH_TIMEOUT:-900}"
+  --progress-interval "${E16_PROGRESS_INTERVAL:-15}"
 )
 [ -n "${ORCH_MODEL:-}" ] && ARGS+=(--orch-model "$ORCH_MODEL")
 [ -n "${E16_ORCH_AGENT_DIR:-}" ] && ARGS+=(--orch-agent-dir "$E16_ORCH_AGENT_DIR")
@@ -179,7 +192,17 @@ case "$CMD" in
     exec "$PY_BIN" -c "import json,sys;print(json.dumps(json.load(open(sys.argv[1])),indent=2))" \
       "${RUN_DIR}/summary.json"
     ;;
-  run)
+  watch)
+    # THE LIVE SIGNAL. The orchestrator is blocked in the player's subprocess
+    # for the whole rollout, so before progress.jsonl existed the only way to
+    # tell a playing run from a wedged one was to stat the archive. Watch
+    # `idle_s`: it is seconds since the harness last wrote a turn, and a run
+    # sitting in a harness relaunch shows a climbing idle_s while every other
+    # column holds still.
+    exec tail -n +1 -F "${RUN_DIR}/progress.jsonl"
+    ;;
+  reconcile) exec "$PY_BIN" "$ORCH" "${ARGS[@]}" --reconcile ;;
+  run|resume)
     # THE HANG GATE, FIRST. Three of E16's known failure modes do not error --
     # they hang, and a hang on an uncapped player behind a $385 ceiling is the
     # run. The preflight exercises all three against a stub binary for nothing,
@@ -221,6 +244,14 @@ PYV
         echo "   continuity is an assumption, which the run will record.)" >&2
         exit 3
       fi
+    fi
+    if [ "$CMD" = "resume" ]; then
+      [ -d "${RUN_DIR}/archive" ] || {
+        echo "run_e16: ${RUN_DIR} has no archive/ -- there is nothing to resume." >&2
+        echo "  Use '$0 ${RUN_DIR} run' to start it." >&2
+        exit 2
+      }
+      ARGS+=(--resume)
     fi
     exec "$PY_BIN" "$ORCH" "${ARGS[@]}"
     ;;
