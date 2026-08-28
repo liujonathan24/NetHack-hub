@@ -21,6 +21,15 @@ from nethack_core.env import NetHackCoreEnv
 from nethack_harness.memory.journal import Journal
 from nethack_core.observations import shape as shape_observation
 from nethack_harness.tools.skills import registry as skill_registry, list_skills
+# E16 checkpoint-integrity guard. done(TRICKED) is an engine abort over
+# inconsistent level data, not a game outcome, and it reaches this layer
+# looking exactly like a monster kill (see nethack_harness/integrity.py).
+from nethack_harness.integrity import (
+    CheckpointIntegrityError as _CheckpointIntegrityError,
+    assert_dungeon_on_disk as _assert_dungeon_on_disk,
+    assert_not_tricked as _assert_not_tricked,
+    tricked_marker_in as _tricked_marker_in,
+)
 
 # Load the harness overlay from the file that sits next to *this* module, by
 # absolute path. A plain `from environments.nethack import harness_overlay` (or
@@ -1739,6 +1748,26 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["balrog_progression"] = progression_score(
             state["max_dlvl_reached"], s.get("experience_level", 1)
         )
+        # E16 INTEGRITY GATE — must run BEFORE any death detector.
+        #
+        # NetHack's done(TRICKED) is not a game outcome, it is an abort: the
+        # engine found its in-memory dungeon inconsistent with the level files
+        # on disk (tricked_fileremoved, save.c:487, reached from goto_level,
+        # do.c:1462; or trickery, restore.c:1171). It arrives here as
+        # `terminated` with zeroed blstats — byte-for-byte the shape of a
+        # monster kill — which is how three E15 rollouts wrote a full-HP
+        # "death" into the dataset. Surfacing it as an explicit engine error is
+        # the whole point: a corrupted checkpoint must never be scoreable as a
+        # death. The banner is also checked, because it is printed several
+        # steps before `terminated` flips.
+        if terminated or _tricked_marker_in(last_obs):
+            try:
+                _assert_not_tricked(state["env"], last_obs,
+                                    where=f"after {skill_name}")
+            except _CheckpointIntegrityError as exc:
+                state["engine_error"] = str(exc)
+                state["died"] = False
+                raise
         # Death/ascension detection from the game state, not raw NLE termination flag.
         _detect_terminal_outcome(last_obs, state)
         # Robust death fallback: the text-marker scan above misses most deaths
@@ -1825,10 +1854,22 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 revived = False
                 try:
                     env._engine.restore(_handle)
+                    # E16: the death that got us here ran done() ->
+                    # clearlocks() (end.c:1371), which unlinks EVERY dungeon
+                    # level file. The restore has to have put them all back; if
+                    # it did not, the hero is walking around a dungeon whose
+                    # next stair use is a done(TRICKED) full-HP "death". Check
+                    # before handing the revived state back, and let the error
+                    # out rather than degrading it to "the rewind failed".
+                    _assert_dungeon_on_disk(env, where="forced revive restore")
                     last_obs, _r, _t, _tr, _i = env.step(27)  # ESC materializes
                     state["raw_obs"] = last_obs
                     state["structured_obs"] = shape_observation(last_obs, state["character"])
+                    _assert_not_tricked(env, last_obs, where="forced revive restore")
                     revived = (state["structured_obs"].status or {}).get("hitpoints", 0) > 0
+                except _CheckpointIntegrityError as exc:
+                    state["engine_error"] = str(exc)
+                    raise
                 except Exception:
                     revived = False
                 if revived:

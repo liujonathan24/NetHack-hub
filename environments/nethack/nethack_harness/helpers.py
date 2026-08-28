@@ -1296,7 +1296,12 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
     # selection is auto-dismissed in env_response; eat/quaff/read take an
     # `item` arg and bundle the selection in-skill. Exposing these as agent
     # tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
-    _HARNESS_OWNED = {"inventory_item", "menu_option"}
+    # `save` (E16 persistent checkpoints) is here for a different reason: it is
+    # a finished, dispatchable skill that is not published to ANY tier yet.
+    # `skill_set="full"` publishes every registered skill, so without this line
+    # merely registering it would add a tool to every existing arm's served
+    # prompt. Publishing it must be a deliberate edit to a tier's tool list.
+    _HARNESS_OWNED = {"inventory_item", "menu_option", "save"}
 
     # Namespace prefix of the vendored NetPlay skills (see tools/netplay_true.py).
     _NETPLAY_TRUE_PREFIX = "np_"

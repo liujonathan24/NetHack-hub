@@ -23,6 +23,10 @@ from typing import Any, Callable, Iterable, Literal, Optional
 from nethack_core import actions as nethack
 
 from nethack_core.env import NetHackCoreEnv
+from nethack_harness.integrity import (
+    CheckpointIntegrityError as _CheckpointIntegrityError,
+    assert_dungeon_on_disk as _assert_dungeon_on_disk,
+)
 from nethack_harness.memory.journal import Journal
 from nethack_core.observations import StructuredObservation, InventoryItem
 from nethack_harness.navigation.pathfinding import (
@@ -2401,6 +2405,14 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
     turn_no, game_time, handle = ring[idx]
     try:
         eng.restore(handle)
+        # E16: a restore whose level files did not all come back leaves the
+        # hero in a dungeon where the next stair use is a done(TRICKED) full-HP
+        # "death" (see nethack_harness/integrity.py). That must reach the
+        # caller as an engine fault, never as skill feedback the agent can play
+        # through, so this deliberately escapes the except below.
+        _assert_dungeon_on_disk(env, where="rollback restore")
+    except _CheckpointIntegrityError:
+        raise
     except Exception as exc:
         return SkillResult(actions=[], feedback=f"rollback failed: {exc}")
     # Everything AFTER the restored point is now an unreachable future. The
@@ -2430,4 +2442,89 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
         feedback=(f"rolled back {n} call(s) to the state after call {turn_no}"
                   f"{gt_note}{clamp_note}. "
                   "The moves you just made have been undone; choose differently."),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# E16 persistent checkpoints — `save(name, note)`
+#
+# STUB, DELIBERATELY UNPUBLISHED. Registering a skill makes it dispatchable via
+# `registry.call(...)`, and `skill_set="full"` publishes EVERY registered skill,
+# so a bare @register here would silently add a tool to every existing arm's
+# served prompt. `save` is therefore listed in `_HARNESS_OWNED`
+# (nethack_harness/helpers.py), which every skill_set branch filters out — so it
+# appears in no tier, and no served prompt bytes change. Publishing it is a
+# separate, deliberate edit to a tier's tool list.
+# --------------------------------------------------------------------------- #
+
+#: Where `save` writes when the caller has not put a run archive on the env.
+#: `archive/<run>/c<id>/` per the E16 design; the run dir comes from the env.
+CHECKPOINT_ARCHIVE_ATTR = "_checkpoint_archive"
+
+
+def _next_checkpoint_dir(root):
+    """`<root>/c<n>` with the lowest free n (checkpoint ids are stable, not reused)."""
+    from pathlib import Path
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    used = set()
+    for child in root.iterdir():
+        if child.is_dir() and child.name.startswith("c") and child.name[1:].isdigit():
+            used.add(int(child.name[1:]))
+    n = 1
+    while n in used:
+        n += 1
+    return root / f"c{n}"
+
+
+@registry.register("save", schema={
+    "description": (
+        "Save the current game as a named checkpoint you (or a later session) "
+        "can resume from. Use it before attempting something risky, or after "
+        "reaching a state that took a long time to build."
+    ),
+    # NB the design doc writes this as `save(name, note)`, but the parameter is
+    # `label`: SkillRegistry.call() strips "name"/"env"/"obs" from every tool
+    # call before dispatch (a v0.0.37 crash fix -- a model sending
+    # {"name": ...} collided with the dispatcher's own signature), so a `name`
+    # argument can never reach a skill. `label` carries the same meaning.
+    "parameters": {
+        "label": {"type": "string", "description": "Short label, e.g. 'before mines'."},
+        "note": {"type": "string",
+                 "description": "Why this checkpoint exists / what to try from it.",
+                 "default": ""},
+    },
+})
+def save(env: NetHackCoreEnv, obs: StructuredObservation,
+         label: str = "", note: str = "") -> SkillResult:
+    """Write a persistent checkpoint and name it back to the caller.
+
+    Costs no game time and takes no engine actions: the checkpoint is written
+    from the live state, and the observation is unchanged.
+    """
+    from nethack_harness.checkpoints import checkpoint_save
+
+    root = getattr(env, CHECKPOINT_ARCHIVE_ATTR, None)
+    if root is None:
+        return SkillResult(
+            actions=[],
+            feedback=("save unavailable: no checkpoint archive is configured "
+                      "for this run."),
+        )
+    directory = _next_checkpoint_dir(root)
+    try:
+        meta = checkpoint_save(env, directory, name=label or directory.name,
+                               note=note or "")
+    except _CheckpointIntegrityError:
+        raise  # a broken game must not be silently checkpointed
+    except Exception as exc:
+        return SkillResult(actions=[], feedback=f"save failed: {exc}")
+    return SkillResult(
+        actions=[],
+        feedback=(
+            f"saved checkpoint {meta['id']} ({meta['name']!r}) at "
+            f"Dlvl {meta['dlvl']}, XL {meta['xl']}, HP {meta['hp']}/{meta['max_hp']}, "
+            f"game turn {meta['gameturn']}. Resume it with checkpoint id "
+            f"{meta['id']}."
+        ),
     )
