@@ -2496,6 +2496,68 @@ def test_decide_only_runs_the_real_rounds_and_launches_NOTHING(tmp_path):
     assert checkpoint_meta(cfg.archive_dir / "c3")["attempts_from"] == 1
 
 
+def test_decide_only_outcomes_can_REACT_to_what_was_chosen(tmp_path):
+    """A static list cannot say "the state it just chose has died there twice".
+
+    Which is the behaviour the whole mode exists to probe, so the outcome
+    source may be a callable that is handed the round's actual choice.
+    """
+    cfg = cfg_for(tmp_path / "run", selector="llm", budget_ceiling_usd=100.0,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    cfg.archive_dir.mkdir(parents=True)
+    _fake_checkpoint(cfg.archive_dir, 1, created_at=1.0,
+                     created_by="orchestrator", name="entrance")
+    _fake_checkpoint(cfg.archive_dir, 2, created_at=2.0, dlvl=5, name="d5")
+
+    session = ScriptedDecider([
+        "THE PLAN. " + ("Try the deepest state, then go back. " * 30),
+        '{"checkpoint": "2", "directive": "a", "rationale": "r"}',
+        '{"checkpoint": "1", "directive": "b", "rationale": "r"}',
+    ], work_dir=cfg.orchestrator_dir)
+    seen: list = []
+
+    def react(n, choice, attempts):
+        seen.append((n, choice["checkpoint_id"]))
+        return {"outcome": "died", "max_dlvl": 3,
+                "summary": f"died after resuming c{choice['checkpoint_id']}"}
+
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult(), session=session)
+    orch.run_decide_only(react, rounds=2)
+    assert seen == [(1, "2"), (2, "1")]
+    assert "died after resuming c2" in orch.attempts[0]["model_text"]["summary"]
+    with pytest.raises(ValueError, match="needs `rounds`"):
+        orch.run_decide_only(react)
+
+
+def test_a_too_long_tmpdir_moves_the_socket_instead_of_timing_out(tmp_path):
+    """The failure that killed the first attempt at this study, in one assert.
+
+    prime-agent puts its daemon worker socket at
+    ``$TMPDIR/prime-agent-<uid>/worker-<id>-<id>.sock``. Under the default
+    private TMPDIR (``<run>/orchestrator/agent/tmp``) that path was 114 bytes
+    for a run at ``/root/nld/e16_runs/e16method-select/run`` -- past the
+    kernel's 107-byte ``sun_path`` limit -- and what came back was not a path
+    error but "Timed out after 30000ms waiting for the Prime Agent daemon
+    response" on every round, empty reply, exit 1. Indistinguishable from the
+    wedged-daemon failure the private TMPDIR exists to prevent.
+    """
+    import shutil
+    ok_dir = Path("/tmp") / f"e16t{os.getpid()}"
+    try:
+        short, note = S.usable_tmpdir(ok_dir)
+        assert note == "" and short == ok_dir and short.is_dir()
+    finally:
+        shutil.rmtree(ok_dir, ignore_errors=True)
+
+    deep = tmp_path / ("x" * 90) / "orchestrator" / "agent" / "tmp"
+    moved, why = S.usable_tmpdir(deep)
+    assert moved != deep and moved.is_dir()
+    assert "sun_path" in why and str(S.SUN_PATH_MAX) in why
+    # The whole socket path under the replacement fits, which is the point.
+    sock = f"{moved}/prime-agent-0/worker-{'0' * 12}-{'0' * 12}.sock"
+    assert len(sock) <= S.SUN_PATH_MAX
+
+
 def test_decide_only_refuses_the_scripted_selector(tmp_path):
     cfg = cfg_for(tmp_path / "run", selector="scripted")
     orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult())

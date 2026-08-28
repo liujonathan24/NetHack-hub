@@ -300,6 +300,11 @@ class OrchestratorConfig:
     #: Filled in by `build_session`: the record of what compaction the CLI was
     #: actually configured with. Provenance reads it; nothing decides on it.
     orchestrator_compaction: Optional[dict] = None
+    #: Set by `build_session` when the preferred TMPDIR was unusable (its
+    #: daemon socket would have exceeded the kernel's sun_path limit). Empty
+    #: when it was usable. Provenance carries it: a run that moved its socket
+    #: somewhere else should say where.
+    orchestrator_tmpdir_note: str = ""
     #: `--decide-only`: USD that must remain before another decision round is
     #: bought. Sized for a decision round (cents), not for a player launch --
     #: see `min_headroom_usd`, which is the launch gate and would refuse every
@@ -3403,6 +3408,7 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
                               "and never exported; the shared "
                               "/tmp/prime-agent-0/daemon.sock was measured at "
                               "900s of hang against 3.5s with a private one"),
+            "tmpdir_note": cfg.orchestrator_tmpdir_note,
             "json_mode_policy": cfg.orchestrator_json_mode,
             "json_mode_policy_why": ("--mode json + --resume was measured "
                                      "hanging where the identical text --print "
@@ -5196,7 +5202,7 @@ player result.
 
     # -- the decision loop, with no players -------------------------------- #
 
-    def run_decide_only(self, outcomes: list) -> dict:
+    def run_decide_only(self, outcomes, rounds: Optional[int] = None) -> dict:
         """The orchestrator's ROUNDS, against synthetic attempt outcomes.
 
         WHY THIS EXISTS. A player attempt costs ~$31 and half an hour; an
@@ -5224,11 +5230,27 @@ player result.
         row as ``synthetic_spend_usd`` and is NOT added to the budget, because
         adding it would make the ceiling stop a run that had spent nothing.
 
+        `outcomes` may instead be a CALLABLE ``(round, choice, attempts) ->
+        spec``, with ``rounds`` saying how many to run. A static list cannot
+        probe the behaviours this mode exists for: "the state it just chose has
+        now died there twice" is a fact about what it chose, and writing the
+        sequence in advance means either guessing its choices or feeding back
+        outcomes that do not match them. The CLI passes a list, because a JSON
+        file is what an operator has; a study driver passes a function.
+
         NO STOP CONDITIONS EXCEPT THE BUDGET. `should_stop` is deliberately not
         consulted: the milestone and stall rules exist to stop paying for
         players, and here there are none. The round count is the caller's.
         """
         self.decide_only = True
+        if callable(outcomes):
+            if not rounds:
+                raise ValueError("a callable outcome source needs `rounds`")
+            plan = [None] * int(rounds)
+            outcome_for = outcomes
+        else:
+            plan = list(outcomes)
+            outcome_for = lambda n, choice, attempts: plan[n - 1]  # noqa: E731
         if self.session is None:
             raise ValueError("--decide-only needs the LLM selector: with "
                              "--selector scripted there is no decision round "
@@ -5243,7 +5265,7 @@ player result.
                 self.orchestrator_error = f"{type(exc).__name__}: {exc}"
                 self.write_summary()
                 raise
-            for spec in outcomes:
+            for _slot in plan:
                 # THE CEILING, ON A DECISION ROUND'S SCALE. `budget.check()`
                 # refuses below `min_headroom_usd`, which is sized for LAUNCHING
                 # AN UNCAPPED PLAYER ($5 by default) -- against a decide-only
@@ -5270,6 +5292,7 @@ player result.
                 rec["synthetic"] = True
                 rec["synthetic_note"] = SYNTHETIC_NOTE
                 _append_jsonl(self.cfg.selection_path, rec)
+                spec = outcome_for(n, choice, list(self.attempts))
                 self.ingest_synthetic(choice, dict(spec or {}))
             else:
                 self.stop_reason = self.stop_reason or STOP_MAX_ATTEMPTS
@@ -6064,7 +6087,8 @@ def build_session(cfg: OrchestratorConfig):
     measured reaping from another experiment's live rollouts.
     """
     from e16_session import (DEFAULT_MODEL, PrimeAgentSession,
-                             configure_native_compaction, seed_agent_dir)
+                             configure_native_compaction, seed_agent_dir,
+                             usable_tmpdir)
 
     agent_dir = cfg.orchestrator_agent_dir or (cfg.orchestrator_dir / "agent")
     cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
@@ -6081,8 +6105,15 @@ def build_session(cfg: OrchestratorConfig):
               f"{cfg.orchestrator_context_limit_tokens}-token orchestrator "
               f"context bound is NOT enforced: "
               f"{cfg.orchestrator_compaction.get('why')}", file=sys.stderr)
-    tmpdir = cfg.orchestrator_tmpdir or (Path(agent_dir) / "tmp")
+    # THE SOCKET PATH, CHECKED BEFORE IT IS USED. See `usable_tmpdir`: a
+    # too-long TMPDIR does not fail as a path error, it fails as a 30s daemon
+    # timeout on every round, which is indistinguishable from a wedge.
+    tmpdir, note = usable_tmpdir(cfg.orchestrator_tmpdir
+                                 or (Path(agent_dir) / "tmp"))
     cfg.orchestrator_tmpdir = Path(tmpdir)
+    cfg.orchestrator_tmpdir_note = note
+    if note:
+        print(f"[e16] {note}", file=sys.stderr)
     return PrimeAgentSession(
         work_dir=cfg.orchestrator_dir, agent_dir=agent_dir,
         log_path=cfg.orchestrator_log,

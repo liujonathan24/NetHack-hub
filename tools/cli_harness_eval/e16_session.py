@@ -139,6 +139,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -572,6 +573,54 @@ def configure_native_compaction(agent_dir, *, model: str = DEFAULT_MODEL,
                compacts_when="context tokens exceed "
                              f"{cw} - {reserve} = {limit_tokens}")
     return rec
+
+
+#: The kernel's own limit on a Unix domain socket path (`sun_path`), 108 bytes
+#: including the NUL. Not a prime-agent limit and not tunable.
+SUN_PATH_MAX = 107
+
+#: The longest path prime-agent appends to $TMPDIR for a worker socket:
+#: ``/prime-agent-<uid>/worker-<12 hex>-<12 hex>.sock``. Measured off a real
+#: failure, with a little room for a multi-digit uid.
+_SOCKET_SUFFIX_LEN = len("/prime-agent-0/worker-"
+                         "000000000000-000000000000.sock") + 2
+
+
+def usable_tmpdir(preferred, tag: str = "e16orch") -> tuple:
+    """A private TMPDIR prime-agent can actually open its daemon socket in.
+
+    THE FAILURE THIS EXISTS FOR, measured rather than imagined. The private
+    TMPDIR defaults under the run's agent dir, and prime-agent puts its worker
+    socket at ``$TMPDIR/prime-agent-<uid>/worker-<id>-<id>.sock``. For a run at
+    ``/root/nld/e16_runs/e16method-select/run`` that path is 114 bytes, over
+    the kernel's 107-byte ``sun_path`` limit, so ``bind`` truncates and the
+    supervisor then fails ``lstat`` on the name it meant to create. What
+    reaches the caller is not "path too long": it is
+
+        Timed out after 30000ms waiting for the Prime Agent daemon response
+
+    on EVERY round, with an empty reply and exit 1 -- indistinguishable from
+    the wedged-daemon failure this whole private-TMPDIR mechanism was built to
+    avoid, and fatal to a run whose directory happens to be nested one level
+    deeper than the one it was tested on.
+
+    So the length is CHECKED, and a too-long preference falls back to a short
+    private directory under ``/tmp``. Returns ``(path, note)``; ``note`` is
+    empty when the preference was usable and says what happened when it was
+    not, because a run that silently moved its socket somewhere else should
+    say so in its own provenance.
+    """
+    preferred = Path(preferred)
+    room = SUN_PATH_MAX - _SOCKET_SUFFIX_LEN
+    if len(str(preferred)) <= room:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return preferred, ""
+    fallback = Path(tempfile.mkdtemp(prefix=f"{tag}-"))
+    return fallback, (
+        f"the preferred TMPDIR {preferred} is {len(str(preferred))} bytes and "
+        f"prime-agent's daemon socket under it would exceed the kernel's "
+        f"{SUN_PATH_MAX}-byte sun_path limit (room: {room}); using {fallback} "
+        f"instead. It is still private to this run.")
 
 
 def seed_agent_dir(dest, src=None) -> list:
@@ -1321,4 +1370,5 @@ __all__ = [
     "parse_json_mode_stdout",
     "parse_round_stdout",
     "seed_agent_dir",
+    "usable_tmpdir",
 ]
