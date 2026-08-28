@@ -461,6 +461,14 @@ def test_the_final_unapplied_call_is_recorded_as_unapplied(tmp_path):
     assert last["tool_results"][0]["name"] == "np_press_key"
     assert last["tool_results"][0]["arguments"] == {"key": "s"}
     assert last["tool_results"][0]["status"] == "not_applied"
+    # The correlation-id barrier: every DISPATCHED call gets the next monotonic
+    # id; the flush was never dispatched, so its id is an explicit None (a
+    # fabricated number here would corrupt every downstream join) -- while the
+    # transport's own id, which the writer did see, is still recorded.
+    assert [r["tool_results"][0]["call_id"] for r in recs] == [1, 2, 3, 4, None]
+    assert [r["tool_results"][0]["native_call_id"] for r in recs] == \
+        ["c0", "c1", "c2", "c3", "c4"]
+    assert last["tool_results"][0]["call_id_echoed"] is False
     assert last["actions"]["recorded"] is False
     assert "never applied" in last["actions"]["reason"]
     assert last["actions"]["bytes"] == []
