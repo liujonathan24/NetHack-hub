@@ -3212,10 +3212,8 @@ launch.
 
 THE SETUP
   Seed {seed}, character {character}, every attempt on the same dungeon. This
-  seed is deliberately overfit to: it is the program's proven deep seed (D13 in
-  the base control; D15 -- the program's deepest run -- via preemptive
-  rollback). Its known hazard ladder: a Grey-elf / owlbear wall around D11, a
-  wraith around D15.
+  is a single-seed study by design: you are meant to learn this one dungeon
+  deeply, and what you learn about it is expected to be specific to it.
   Players have: the standard action surface, rollback(n), save(label, note),
   and wiki(page|query|section) over the same two curated pages you have.
 
@@ -3224,12 +3222,12 @@ YOUR KNOWLEDGE BASE (read it now, before deciding anything)
     why_do_i_keep_dying.md   standard_strategy.md   MANIFEST.json
   Use your IPython kernel to read them. Also available:
     python {wiki_tool} --list
-    python {wiki_tool} --query wraith
-    python {wiki_tool} --page why_do_i_keep_dying --section Praying
+    python {wiki_tool} --query <term>
+    python {wiki_tool} --page <page> --section <section>
 
 ROUND 1 IS DISCUSSION, NOT A LAUNCH. Reply with:
-  1. What you learned from the wiki that bears on THIS seed's hazard ladder --
-     specifically: the wraith, prayer timing, floating eyes, and when to flee.
+  1. What you learned from the wiki that you expect to matter for this run,
+     and why.
   2. Your strategy for the run: what kinds of checkpoint you will resume from,
      what you will tell players to do, and what would make you change course.
   3. What evidence would tell you your strategy is wrong.
@@ -3245,9 +3243,9 @@ ceiling ${ceiling:.2f}.
 {ledger}
 
 Choose the checkpoint the next player resumes from, and write it a DIRECTIVE:
-one or two sentences of concrete instruction for THIS attempt ("from c12, go
-back up to D10 and clear the east rooms before descending"; "engrave Elbereth
-before engaging anything on this floor"). The directive is served to the player
+one or two sentences of concrete instruction for THIS attempt. It must name
+what to do and be checkable against what the game records -- the two rules
+below say how. The directive is served to the player
 verbatim at the top of its first observation, and whether it followed you is
 measured -- so make it checkable, not encouraging.
 
