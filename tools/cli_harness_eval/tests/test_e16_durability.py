@@ -390,8 +390,14 @@ def test_a_SIGKILLED_run_is_reconciled_into_a_censored_attempt(tmp_path):
         meta = checkpoint_meta(cfg.archive_dir / name)
         assert meta["created_in_attempt"] == 1
         assert meta["attributed_by"] == "recovery"
-        assert meta["parent"] == "1"
         assert (cfg.archive_dir / name / "state.bundle").stat().st_size > 0
+    # RECOVERY REBUILDS THE CHAIN, NOT A FAN. It used to stamp every orphan
+    # with the checkpoint the attempt resumed, which is how a recovered archive
+    # came out a star: c101, c102 and c103 all children of c1, with nothing
+    # recording that c102 was written after c101 in the same life.
+    assert [checkpoint_meta(cfg.archive_dir / n)["parent"]
+            for n in ("c101", "c102", "c103")] == ["1", "101", "102"]
+    assert E.archive_tree(E.ledger_rows(cfg.archive_dir))["problems"] == []
     assert "created_in_attempt" not in checkpoint_meta(cfg.archive_dir / "c1"), \
         "the seed state belongs to no attempt and must not be attributed to one"
 
