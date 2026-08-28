@@ -5927,6 +5927,7 @@ def read_trace_result(out_dir) -> PlayerResult:
     # The turn files win: they are per-turn engine observations, while the
     # metric is one number written once at the end.
     max_dlvl = turns_dlvl if turns_dlvl is not None else metrics_dlvl
+    costed = True
     try:
         from aggregate import price_table_for, rollout_cost  # same dir
         spend = rollout_cost(trace, price_table_for(trace)) or 0.0
@@ -5935,7 +5936,11 @@ def read_trace_result(out_dir) -> PlayerResult:
             from aggregate import PRICE_TABLE_GLM_5_2, rollout_cost
             spend = rollout_cost(trace, PRICE_TABLE_GLM_5_2) or 0.0
         except Exception:
-            spend = 0.0
+            # A COSTING FAILURE, not a free rollout. Both price tables refused
+            # a trace that exists and has token usage in it, so the number
+            # below is the absence of an answer -- `spend_known: false` keeps
+            # it out of the measured total exactly as an absent trace does.
+            spend, costed = 0.0, False
     return PlayerResult(
         stop_condition=str(trace.get("stop_condition") or ""),
         died=bool(metrics.get("died")),
@@ -5943,6 +5948,7 @@ def read_trace_result(out_dir) -> PlayerResult:
         error=str(trace.get("error") or ""),
         calls=int(metrics.get("skill_calls") or 0),
         spend_usd=float(spend),
+        spend_known=costed,
         max_dlvl=max_dlvl,
         max_xl=int(metrics.get("max_xp_level") or 1),
         summary=_final_text(trace),
