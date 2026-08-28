@@ -2286,6 +2286,217 @@ def test_the_attempt_record_flags_spend_as_a_lower_bound_when_retried(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# a censored attempt reports UNKNOWN, never zero
+#
+# treesmoke2 is the run these are written against: three attempts, 205 LM
+# turns, Dlvl 4, XL 5, 16 archived checkpoints -- and a summary.json saying
+# `player_usd: 0.0`, `cumulative_calls: 0`, `best_state.calls_to_reach: 0`,
+# `luck.*.max_dlvl_per_attempt: [0]`, with `attempts_with_unknown_spend: 0`
+# asserting all of that was measured. The attempt rows and the archive
+# contradicted each other about the same run.
+# --------------------------------------------------------------------------- #
+
+def _write_turnfile(path: Path, turns: int, *, dlvl: int, xl: int) -> None:
+    """`turns` LM-turn records in the shape the env's helpers write."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        for i in range(1, turns + 1):
+            fh.write(json.dumps({
+                "turn": i, "lm_turn": i, "dlvl": dlvl,
+                "max_dlvl_reached": dlvl,
+                "status": {"experience_level": xl, "time": 100 * i},
+                "tool_calls": [{"name": "np_explore_level", "args": {}}],
+            }) + "\n")
+
+
+class CrashedEnvPlayer:
+    """The treesmoke2 failure, reproduced exactly at the launcher seam.
+
+    The env tool server dies of a fatal native signal partway through, so:
+    the archive gets a real checkpoint (the game really was played), the turn
+    file is QUARANTINED into `turns.stalled/` by the stall watchdog, an
+    in-flight spend estimate is on `progress.jsonl`, `env_crash.log` holds the
+    faulthandler dump -- and `traces.jsonl` is EMPTY, because the rollout never
+    finished to write one. The launcher then does what `SubprocessPlayer` does:
+    hands back `read_trace_result(out_dir)`.
+    """
+
+    def __init__(self, *, turns=93, dlvl=4, xl=5, estimate=17.3,
+                 quarantine=True, evidence=True, crash=True):
+        self.turns, self.dlvl, self.xl = turns, dlvl, xl
+        self.estimate = estimate
+        self.quarantine, self.evidence, self.crash = quarantine, evidence, crash
+
+    def __call__(self, ctx: E.PlayerContext) -> E.PlayerResult:
+        env, _ = checkpoint_restore(ctx.checkpoint_dir,
+                                    fidelity_log=ctx.fidelity_log)
+        for _ in range(6):
+            env.step(ord("s"))
+        env.modify(gold=1000 * ctx.attempt)
+        checkpoint_save(env, ctx.archive_dir / f"c{100 + ctx.attempt}",
+                        name=f"attempt {ctx.attempt} state",
+                        note="crashed-env player checkpoint", created_by="save")
+        out = Path(ctx.out_dir)
+        if self.evidence:
+            name = f"1_{os.getpid()}_{int(time.time())}.ndjson"
+            sub = (out / "turns.stalled" / "20260828T201633Z_pid1" / name
+                   if self.quarantine else out / "turns" / name)
+            _write_turnfile(sub, self.turns, dlvl=self.dlvl, xl=self.xl)
+        if self.estimate is not None:
+            with (out / "progress.jsonl").open("a") as fh:
+                fh.write(json.dumps({
+                    "event": "progress", "attempt": ctx.attempt,
+                    "spend_so_far_usd": self.estimate,
+                    "spend_so_far_upper_usd": self.estimate * 2,
+                    "spend_so_far_is_estimate": True,
+                    "spend_so_far_source": "wall_clock_rate",
+                    "spend_so_far_rate_usd_per_hour": 90.0,
+                    "spend_so_far_rate_source": "prior",
+                    "spend_so_far_safety_factor": 2.0}) + "\n")
+        if self.crash:
+            (out / E.ENV_CRASH_LOG_NAME).write_text(
+                "[env-server] start pid=1086653 ppid=1084892 cwd=/tmp/vf-x t=1.0\n"
+                "Fatal Python error: Segmentation fault\n\n"
+                'Current thread 0x00007f (most recent call first):\n'
+                '  File "/root/NetHack-engine/nethack_core/env.py", '
+                "line 1, in step\n")
+        (out / "traces.jsonl").write_text("")   # the rollout never reported
+        return E.read_trace_result(out)
+
+
+def _run_one_crashed_attempt(tmp_path, **kw):
+    cfg = cfg_for(tmp_path / "run", selector="scripted",
+                  budget_ceiling_usd=1000.0, max_attempts=1,
+                  stall_attempts=8, milestone_dlvl=99, milestone_dungeon=-1)
+    orch = E.Orchestrator(cfg, CrashedEnvPlayer(**kw))
+    orch.prepare()
+    E.seed_archive(cfg)
+    summary = orch.run(max_attempts=1)
+    row = [json.loads(ln) for ln in
+           cfg.attempts_path.read_text().splitlines() if ln.strip()][0]
+    return cfg, orch, summary, row
+
+
+def test_a_censored_attempt_books_unknown_spend_not_zero(tmp_path):
+    """$0.00 with `attempts_with_unknown_spend: 0` is a run claiming it
+    measured a zero. It measured nothing; the row must say so."""
+    cfg, orch, summary, row = _run_one_crashed_attempt(tmp_path)
+
+    assert row["outcome"] == E.OUTCOME_CENSORED
+    assert row["spend_known"] is False
+    assert row["spend_source"] == "progress_estimate_lower_bound"
+    assert row["spend_usd"] == pytest.approx(17.3), \
+        "the attempt's own in-flight estimate, booked as a lower bound"
+    assert row["spend_is_lower_bound"] is True
+    assert row["spend_estimate"]["spend_so_far_is_estimate"] is True
+
+    assert summary["attempts_with_unknown_spend"] == 1
+    assert summary["budget"]["player_usd"] == pytest.approx(17.3)
+    assert summary["budget"]["player_usd_is_lower_bound"] is True
+    assert summary["budget"]["player_estimated_usd"] == pytest.approx(17.3)
+    assert summary["counts_are_lower_bounds"] is True
+
+
+def test_a_censored_attempt_reports_the_calls_and_depth_it_actually_played(
+        tmp_path):
+    """The archive proves the attempt descended. The row must not say 0."""
+    cfg, orch, summary, row = _run_one_crashed_attempt(tmp_path)
+
+    assert row["evidence_source"] == "turns"
+    assert row["calls"] == 93, "recovered from the env's own turn records"
+    assert row["max_dlvl"] == 4
+    assert row["max_xl"] == 5
+    assert summary["cumulative_calls"] == 93
+    assert summary["best_state"]["calls_to_reach"] == 93, \
+        "0 calls to reach a state the run demonstrably played to is not a number"
+
+    # THE CONTRADICTION THAT MUST NOT SURVIVE: the archive says the run got
+    # somewhere, so no per-attempt field may say it got nowhere.
+    assert summary["best_state"]["dlvl"] >= 1
+    for slot in summary["luck"].values():
+        assert 0 not in slot["max_dlvl_per_attempt"]
+
+
+def test_quarantined_turn_files_are_still_the_attempts_own_record(tmp_path):
+    """The stall watchdog MOVES the turn file to `turns.stalled/` before the
+    orchestrator ingests. Reading only `turns/` is why the numbers were 0."""
+    out = tmp_path / "a001"
+    _write_turnfile(
+        out / "turns.stalled" / "20260828T201633Z_pid1" / "1_5_9.ndjson",
+        40, dlvl=3, xl=2)
+    assert len(E.calls_from_turns(out)) == 40
+    assert E._max_dlvl_from_turns(out) == 3
+    ev = E._attempt_dir_evidence(out)
+    assert (ev["calls"], ev["max_dlvl"], ev["max_xl"], ev["turns"]) == (40, 3, 2, 40)
+
+
+def test_a_dead_env_is_censored_as_env_crash_not_harness_error(tmp_path):
+    """`harness_error` is a thing the harness said. A SIGSEGV in the game
+    process is a different fact and gets its own reason and its evidence."""
+    cfg, orch, summary, row = _run_one_crashed_attempt(tmp_path)
+    assert row["censor_reason"] == E.CENSOR_ENV_CRASH
+    assert "Segmentation fault" in row["env_crash"]
+    assert summary["censor_reasons"] == {E.CENSOR_ENV_CRASH: 1}
+
+
+def test_the_engines_own_native_backtrace_is_the_crash_evidence(tmp_path):
+    """`libnethack.so` installs its own fatal-signal handlers when it loads,
+    so for a fault INSIDE the engine the sentinel wins and faulthandler never
+    fires. `nle_crash_<pid>.txt` is then the only record there is -- and it is
+    the one that named `winrl.cc:1250` for E16."""
+    out = tmp_path / "a001"
+    out.mkdir()
+    (out / E.ENV_CRASH_LOG_NAME).write_text("[env-server] start pid=1 ppid=2 cwd=/ t=1\n")
+    assert E.env_crash_evidence(out) == "", "a server that started is not a crash"
+    (out / "nle_crash_1086653.txt").write_text(
+        "=== NLE SENTINEL: SIGSEGV ===\n"
+        "pid=1086653 tid=140669941184320\n"
+        "FAULTING ENV: id=0 seed=0x1 step=2259 action=27 dlvl=2\n"
+        "--- backtrace ---\n"
+        "libnethack.so(_ZN10nethack_rl9NetHackRL17start_menu_methodEi+0x23)\n")
+    ev = E.env_crash_evidence(out)
+    assert "NLE SENTINEL: SIGSEGV" in ev and "pid=1086653" in ev
+
+
+def test_an_attempt_that_left_no_evidence_reports_null_not_zero(tmp_path):
+    """Unknown is not zero, and an absent estimate is not $0.00 either."""
+    cfg, orch, summary, row = _run_one_crashed_attempt(
+        tmp_path, evidence=False, estimate=None, crash=False)
+    assert row["evidence_source"] == "none"
+    assert row["calls"] is None and row["max_dlvl"] is None \
+        and row["max_xl"] is None
+    assert row["spend_known"] is False
+    # The monitor publishes an estimate for every attempt it opens, so even
+    # this one is booked as a labelled lower bound rather than as $0.00.
+    assert row["spend_source"] == "progress_estimate_lower_bound"
+    assert summary["attempts_with_unknown_spend"] == 1
+    assert summary["attempts_with_unknown_progress"] == 1
+    assert row["censor_reason"] == E.CENSOR_HARNESS_ERROR
+    # ... and with no progress stream at all there is no estimate to invent.
+    assert E.progress_spend_estimate(tmp_path / "nothing-here") == {}
+
+
+def test_a_measured_attempt_is_not_labelled_a_lower_bound(tmp_path):
+    """The flags must stay off on the normal path, or they say nothing."""
+    cfg = cfg_for(tmp_path / "run", selector="scripted",
+                  budget_ceiling_usd=1000.0, max_attempts=1,
+                  stall_attempts=8, milestone_dlvl=99, milestone_dungeon=-1)
+    orch = E.Orchestrator(cfg, StubPlayer([{"died": True, "spend": 2.0}]))
+    orch.prepare()
+    E.seed_archive(cfg)
+    summary = orch.run(max_attempts=1)
+    row = [json.loads(ln) for ln in
+           cfg.attempts_path.read_text().splitlines() if ln.strip()][0]
+    assert row["spend_known"] is True
+    assert row["evidence_source"] == "trace"
+    assert row["env_crash"] is None
+    assert summary["attempts_with_unknown_spend"] == 0
+    assert summary["attempts_with_unknown_progress"] == 0
+    assert summary["counts_are_lower_bounds"] is False
+    assert summary["budget"]["player_usd_is_lower_bound"] is False
+
+
+# --------------------------------------------------------------------------- #
 # the archive is a TREE, not a star
 # --------------------------------------------------------------------------- #
 

@@ -128,10 +128,20 @@ CENSOR_UNKNOWN = "unknown"
 #: that was unavailable. Pooling these with completed attempts understates
 #: spend and depth simultaneously.
 CENSOR_INTERRUPTED = "interrupted"
+#: The ENV tool server (`python -m nethack_v1`) died of a fatal native signal
+#: mid-attempt -- SIGSEGV/SIGABRT out of the NetHack C extension, not an
+#: external kill. Split out of `harness_error` because the two demand different
+#: responses: a harness error is a thing the harness said, while this is the
+#: game process ceasing to exist under a live rollout, which truncates the
+#: attempt at a turn count that has nothing to do with the game. Evidence is
+#: `<attempt>/env_crash.log`, written by `nethack_v1.arm_crash_capture()`; the
+#: row carries `env_crash` with the signal faulthandler named.
+CENSOR_ENV_CRASH = "env_crash"
 
 CENSOR_REASONS = frozenset({
     CENSOR_WALL_CLOCK, CENSOR_HARNESS_ERROR, CENSOR_EMPTY_COMPLETION,
     CENSOR_BUDGET_STOP, CENSOR_INTEGRITY, CENSOR_UNKNOWN, CENSOR_INTERRUPTED,
+    CENSOR_ENV_CRASH,
 })
 
 #: `stop_condition` strings the eval CLI writes for an infrastructure stop.
@@ -982,6 +992,17 @@ def attempts_by_checkpoint(attempts: Optional[list]) -> dict:
     return out
 
 
+def _or_unknown(value) -> str:
+    """Render a possibly-null measurement for a human. Null reads as unknown.
+
+    Every number an attempt row carries can be null, because an attempt whose
+    rollout never reported and which left no turn files measured nothing. The
+    orchestrator is TOLD these numbers in its round text, so rendering null as
+    `0` would teach it that a crashed attempt reached Dlvl 0 and made 0 calls.
+    """
+    return "unknown" if value is None else str(value)
+
+
 def outcome_label(attempt: dict) -> str:
     """``died@D9`` / ``censored:wall_clock@D8`` -- what came of resuming here."""
     o = str(attempt.get("outcome") or "?")
@@ -1563,6 +1584,13 @@ class Budget:
     min_headroom_usd: float = 5.0
     player_usd: float = 0.0
     orchestrator_usd: float = 0.0
+    #: How many attempts contributed an ESTIMATE rather than a measurement to
+    #: `player_usd`, and how much of it is estimated. Non-zero makes the whole
+    #: player line a LOWER BOUND, and a ceiling read off a lower bound is not a
+    #: ceiling -- so it is carried on the budget itself rather than being
+    #: recomputed by whoever remembers to.
+    player_unknown_attempts: int = 0
+    player_estimated_usd: float = 0.0
 
     @property
     def spent_usd(self) -> float:
@@ -1585,8 +1613,21 @@ class Budget:
                 f"headroom). Refusing to launch."
             )
 
-    def add_player(self, usd: float) -> None:
-        self.player_usd += float(usd or 0.0)
+    def add_player(self, usd: float, *, known: bool = True) -> None:
+        """Book one attempt's player spend.
+
+        `known=False` means `usd` is an ESTIMATE (the attempt's own in-flight
+        `spend_so_far_usd`), booked because the alternative -- booking zero for
+        an attempt that demonstrably played -- is the failure this counter
+        exists to make impossible to miss. It is still added: money that was
+        spent and cannot be measured is money spent, and a ceiling that ignores
+        it is not a ceiling.
+        """
+        amount = float(usd or 0.0)
+        self.player_usd += amount
+        if not known:
+            self.player_unknown_attempts += 1
+            self.player_estimated_usd += amount
 
     def add_orchestrator(self, usd: float) -> None:
         self.orchestrator_usd += float(usd or 0.0)
@@ -1598,6 +1639,10 @@ class Budget:
             "total_usd": round(self.spent_usd, 4),
             "ceiling_usd": self.ceiling_usd,
             "remaining_usd": round(self.remaining, 4),
+            # Says out loud when the two lines above are not measurements.
+            "player_usd_is_lower_bound": self.player_unknown_attempts > 0,
+            "player_attempts_with_unknown_spend": self.player_unknown_attempts,
+            "player_estimated_usd": round(self.player_estimated_usd, 4),
         }
 
 
@@ -1666,6 +1711,24 @@ class PlayerResult:
     wall_s: float = 0.0
     max_dlvl: int = 0
     max_xl: int = 1
+    #: WAS THERE A MEASUREMENT AT ALL. False means every number above that the
+    #: trace was supposed to carry is absent, not zero. It defaults True so a
+    #: result built from a real trace needs no ceremony, and is set False on
+    #: exactly the paths where `traces.jsonl` is missing or empty -- the paths
+    #: that used to hand `spend_usd=0.0` / `calls=0` / `max_dlvl=0` to the
+    #: accounting as though the attempt had played nothing. Measured on
+    #: treesmoke2: three attempts, 205 LM turns, Dlvl 4, all three booked at
+    #: $0.00 / 0 calls / max_dlvl 0 while the archive held Dlvl 4 XL 5.
+    spend_known: bool = True
+    #: Where `calls` / `max_dlvl` / `max_xl` came from: "trace" (the rollout
+    #: reported) or "turns" (recovered from the env's own per-turn NDJSON after
+    #: the rollout failed to report). "none" when there was no evidence either
+    #: way, in which case those fields are UNKNOWN and the row carries null.
+    evidence_source: str = "trace"
+    #: Non-empty when the env tool server died of a fatal native signal; the
+    #: text is what `<attempt>/env_crash.log` says (e.g. "Fatal Python error:
+    #: Segmentation fault").
+    env_crash: str = ""
     #: Model-written text. Recorded, appended to lessons.md, never measured.
     summary: str = ""
     lesson: str = ""
@@ -1694,6 +1757,12 @@ def classify_outcome(result: PlayerResult) -> tuple:
     """
     if result.ascended:
         return OUTCOME_ASCENDED, ""
+    # Checked BEFORE `error`, because the error the launcher reports for a
+    # crashed env ("empty traces.jsonl in ...") describes the symptom the
+    # orchestrator saw, not the thing that happened. `env_crash` is the
+    # env process's own dying words.
+    if result.env_crash:
+        return OUTCOME_CENSORED, CENSOR_ENV_CRASH
     if result.error:
         low = result.error.lower()
         if "integrity" in low or "tricked" in low:
@@ -2293,11 +2362,7 @@ def calls_from_turns(out_dir) -> list:
     record, not from anything the player said about itself.
     """
     out = []
-    turns = Path(out_dir) / "turns"
-    if not turns.is_dir():
-        return out
-    files = sorted(turns.glob("*.ndjson"), key=lambda p: p.stat().st_mtime)
-    for path in files:
+    for path in all_turn_files(out_dir):
         for line in path.read_text(errors="replace").splitlines():
             line = line.strip()
             if not line:
@@ -2436,6 +2501,40 @@ def _turn_files(turns_dir) -> list:
         return []
 
 
+def all_turn_files(out_dir) -> list:
+    """Every per-turn NDJSON an attempt left behind, QUARANTINED ONES INCLUDED.
+
+    `tools/stall_watchdog.py` MOVES the turn file of a killed rollout out of
+    `turns/` into `turns.stalled/<stamp>_pid<pid>/` before the orchestrator
+    ingests the attempt. Nothing here knew that, so every post-hoc reader
+    (`calls_from_turns`, `_max_dlvl_from_turns`, `_attempt_dir_evidence`) saw
+    an empty `turns/` and concluded the attempt had played nothing.
+
+    That is how treesmoke2 reported `max_dlvl_per_attempt: [0]` and
+    `calls_to_reach: 0` for three attempts that played 205 LM turns to Dlvl 4
+    -- while its own archive held the Dlvl 4 / XL 5 checkpoints those turns
+    produced. An attempt row and the archive contradicting each other about
+    the same run is worse than either being wrong alone: a reader of
+    summary.json would conclude the method did nothing.
+
+    Quarantined files are real engine records; they are quarantined because the
+    ROLLOUT was killed, not because the turns are suspect. Sorted by mtime so
+    the last element is the attempt's last turn wherever it now lives.
+    """
+    out = list(_turn_files(Path(out_dir) / "turns"))
+    stalled = Path(out_dir) / "turns.stalled"
+    if stalled.is_dir():
+        try:
+            out.extend(p for p in stalled.glob("*/*.ndjson") if p.is_file())
+        except OSError:
+            pass
+    try:
+        out.sort(key=lambda p: p.stat().st_mtime)
+    except OSError:
+        pass
+    return out
+
+
 def sample_attempt(turns_dir, archive_dir, *, baseline: frozenset = frozenset()
                    ) -> dict:
     """One observation of an attempt in flight, from ITS OWN files.
@@ -2568,11 +2667,17 @@ def calibrate_spend_rate(attempts: list, *,
     ratio is not dominated by a 90-second attempt that happened to cost a
     dollar. Attempts shorter than two minutes are dropped entirely: their
     ratio is mostly launch overhead and would bias the rate either way.
+
+    ONLY MEASURED ATTEMPTS COUNT. A row with `spend_known: false` carries an
+    estimate produced BY THIS RATE; feeding it back in would calibrate the
+    rate against its own output and freeze whatever the prior happened to be.
     """
     spend = 0.0
     wall = 0.0
     n = 0
     for row in attempts or []:
+        if not row.get("spend_known", True):
+            continue
         try:
             w = float(row.get("wall_s") or 0.0)
             s = float(row.get("spend_usd_billed_upper_est")
@@ -2902,7 +3007,7 @@ def _attempt_dir_evidence(out_dir: Path) -> dict:
             ev["started_at"] = served.stat().st_mtime
     except OSError:
         pass
-    files = _turn_files(out_dir / "turns")
+    files = all_turn_files(out_dir)
     if files:
         try:
             ev["started_at"] = min([ev["started_at"] or files[0].stat().st_mtime,
@@ -2925,6 +3030,79 @@ def _attempt_dir_evidence(out_dir: Path) -> dict:
         except OSError:
             ev["ended_at"] = ev["started_at"]
     return ev
+
+
+#: What `nethack_v1.arm_crash_capture()` names the file it arms faulthandler
+#: on, and the string CPython's faulthandler prints on a fatal native signal.
+#: Duplicated rather than imported: the orchestrator runs in a process that
+#: does not (and must not) import the env package.
+ENV_CRASH_LOG_NAME = "env_crash.log"
+ENV_CRASH_MARKER = "Fatal Python error"
+
+
+def env_crash_evidence(out_dir) -> str:
+    """The env tool server's dying words, or "" if it did not die that way.
+
+    The env drives NetHack through a C extension and a SIGSEGV/SIGABRT in
+    there kills the tool server with no Python traceback, no log line, and no
+    "tool server down" counterpart to the launcher's startup line -- while its
+    merged stdout/stderr is deleted with the runtime workdir by the same
+    teardown that failed to notice (`v1/runtimes/subprocess.py:cleanup`).
+    `nethack_v1.arm_crash_capture()` redirects both dumpers into the ATTEMPT
+    directory, which outlives the runtime; this reads whichever fired.
+
+    TWO CHANNELS, and the ENGINE one is the load-bearing half. `libnethack.so`
+    installs its own SIGSEGV/SIGABRT/SIGFPE/SIGBUS handlers when it loads, so
+    for a fault inside the engine the sentinel wins and CPython's faulthandler
+    never runs: the native backtrace in `nle_crash_<pid>.txt` is the only
+    record. faulthandler's `env_crash.log` covers the other case, a fatal
+    signal on the Python side of the server.
+    """
+    out_dir = Path(out_dir)
+    try:
+        dumps = sorted(out_dir.glob("nle_crash_*.txt"),
+                       key=lambda p: p.stat().st_mtime)
+    except OSError:
+        dumps = []
+    if dumps:
+        text = dumps[-1].read_text(errors="replace")
+        head = [ln.strip() for ln in text.splitlines() if ln.strip()][:3]
+        # e.g. "=== NLE SENTINEL: SIGSEGV === | pid=... | FAULTING ENV: ..."
+        return (" | ".join(head) or dumps[-1].name)[:500]
+    path = out_dir / ENV_CRASH_LOG_NAME
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return ""
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    for i, line in enumerate(lines):
+        if ENV_CRASH_MARKER in line:
+            frame = next((ln.strip() for ln in lines[i + 1:] if ln.strip()), "")
+            return (line.strip() + (f" | {frame}" if frame else ""))[:500]
+    return ""
+
+
+def progress_spend_estimate(out_dir) -> dict:
+    """The last in-flight spend ESTIMATE this attempt published, if any.
+
+    `AttemptProgressMonitor` writes `spend_so_far_usd` (and its upper twin, and
+    the rate it used) into `<attempt>/progress.jsonl` every sampling interval,
+    precisely because mid-attempt spend is otherwise unknowable. Until now
+    nothing ever read it back: when the rollout failed to report, the attempt
+    was booked at $0.00 and the estimate died in the log.
+
+    Returns `{}` when there is nothing to read. Every key keeps its
+    `spend_so_far_*` name so it can never be mistaken for a measurement.
+    """
+    rows = read_jsonl(Path(out_dir) / "progress.jsonl")
+    for rec in reversed(rows):
+        if isinstance(rec.get("spend_so_far_usd"), (int, float)):
+            return {k: rec[k] for k in (
+                "spend_so_far_usd", "spend_so_far_upper_usd",
+                "spend_so_far_source", "spend_so_far_is_estimate",
+                "spend_so_far_rate_usd_per_hour", "spend_so_far_rate_source",
+                "spend_so_far_safety_factor") if k in rec}
+    return {}
 
 
 def _partial_spend(out_dir: Path) -> tuple:
@@ -3777,7 +3955,8 @@ player result.
             f"LAST ATTEMPT (#{last['attempt']} from c{last['from_checkpoint']}): "
             f"{last['outcome']}"
             + (f":{last['censor_reason']}" if last["censor_reason"] else "")
-            + f", max Dlvl {last['max_dlvl']}, {last['calls']} calls.\n"
+            + f", max Dlvl {_or_unknown(last['max_dlvl'])}, "
+              f"{_or_unknown(last['calls'])} calls.\n"
             f"Your directive was: {last.get('directive') or '(none)'}\n"
             f"Compliance rubric said: "
             f"{(last.get('directive_compliance') or {}).get('class')}\n"
@@ -3954,7 +4133,10 @@ player result.
             # producing max-of-8 against max-of-12 and calling it a matched
             # comparison. N is fixed by --max-attempts and by the budget, and
             # by nothing else.
-            best = max((a["max_dlvl"] for a in self.attempts), default=0)
+            # `max_dlvl` is null on an attempt that left no evidence at all;
+            # an unknown depth cannot satisfy a milestone, and must not raise.
+            best = max((a["max_dlvl"] for a in self.attempts
+                        if a.get("max_dlvl") is not None), default=0)
             if best >= self.cfg.milestone_dlvl:
                 return STOP_MILESTONE
             return None
@@ -4098,8 +4280,13 @@ player result.
         try:
             result = self.launcher(ctx)
         except Exception as exc:  # a launcher blow-up is a CENSORED attempt
-            result = PlayerResult(stop_condition="error", error=f"{type(exc).__name__}: {exc}",
-                                  wall_s=time.time() - t0)
+            # The launcher never returned, so nothing costed the rollout --
+            # `spend_known=False` keeps that from being booked as $0.00, and
+            # `ingest` recovers what the env's turn files prove.
+            result = _unreported_result(
+                ctx.out_dir, f"{type(exc).__name__}: {exc}",
+                rollouts_billed(ctx.out_dir))
+            result.wall_s = time.time() - t0
         except BaseException as exc:
             # A SIGNAL, or anything else that is not an ordinary error. The row
             # is finalized HERE, before the exception continues on its way --
@@ -4358,8 +4545,9 @@ player result.
             # Spend and calls STILL move the run's counters. An interrupted
             # attempt that cost money and is not charged for it is a budget
             # that lies, which is the same defect as an attempt that vanishes.
-            self.budget.add_player(rec["spend_usd"])
-            self.cum_calls += rec["calls"]
+            self.budget.add_player(rec["spend_usd"],
+                                   known=bool(rec.get("spend_known")))
+            self.cum_calls += int(rec["calls"] or 0)
             self.cum_wall += rec["wall_s"]
             rec["cumulative_calls"] = self.cum_calls
             rec["cumulative_spend_usd"] = round(self.budget.spent_usd, 4)
@@ -4472,9 +4660,10 @@ player result.
         try:
             result = self.launcher(ctx)
         except Exception as exc:
-            result = PlayerResult(stop_condition="error",
-                                  error=f"{type(exc).__name__}: {exc}",
-                                  wall_s=time.time() - t0)
+            result = _unreported_result(
+                ctx.out_dir, f"{type(exc).__name__}: {exc}",
+                rollouts_billed(ctx.out_dir))
+            result.wall_s = time.time() - t0
         if not result.wall_s:
             result.wall_s = time.time() - t0
         result = self._apply_budget_stop(result)
@@ -4508,8 +4697,37 @@ player result.
         cfg = self.cfg
         outcome, censor_reason = classify_outcome(result)
 
-        self.budget.add_player(result.spend_usd)
-        self.cum_calls += int(result.calls or 0)
+        # WHAT THIS ATTEMPT IS ALLOWED TO CLAIM. `spend_known` is False on
+        # exactly the paths where no rollout ever reported (`_unreported_result`
+        # -- a dead env tool server, a killed launcher). On those paths there is
+        # no token usage anywhere, so there is nothing to cost; the honest
+        # numbers are the attempt's own last in-flight ESTIMATE for money and
+        # the env's own turn files for everything else.
+        #
+        # Booking 0.0 instead -- which is what a bare `PlayerResult()` used to
+        # hand over -- is the specific defect this run was blocked on: a run
+        # whose archive holds Dlvl 4 checkpoints reporting `player_usd: 0.0`,
+        # `cumulative_calls: 0` and `max_dlvl_per_attempt: [0]`, with
+        # `attempts_with_unknown_spend: 0` asserting those zeros were solid.
+        # Zero is a measurement. Unknown is the truth, and it must be said.
+        spend_known = bool(getattr(result, "spend_known", True))
+        estimate = {} if spend_known else progress_spend_estimate(ctx.out_dir)
+        booked = float(result.spend_usd or 0.0)
+        spend_source = "trace"
+        if not spend_known:
+            booked = float(estimate.get("spend_so_far_usd") or 0.0)
+            spend_source = ("progress_estimate_lower_bound" if estimate
+                            else "unavailable")
+        self.budget.add_player(booked, known=spend_known)
+        # UNKNOWN, NOT ZERO. A censored attempt that left no turn file at all
+        # gets null on every count -- the summary must not be able to say a run
+        # did nothing when its own archive says otherwise.
+        unknown_counts = (not spend_known
+                          and getattr(result, "evidence_source", "trace") == "none")
+        n_calls = None if unknown_counts else int(result.calls or 0)
+        row_dlvl = None if unknown_counts else int(result.max_dlvl or 0)
+        row_xl = None if unknown_counts else int(result.max_xl or 1)
+        self.cum_calls += int(n_calls or 0)
         self.cum_wall += float(result.wall_s or 0.0)
 
         # DIRECTIVE COMPLIANCE, from the harness's own per-turn record of what
@@ -4622,8 +4840,27 @@ player result.
             "censor_reason": censor_reason,
             "stop_condition": result.stop_condition,
             "error": result.error,
-            "calls": int(result.calls or 0),
-            "spend_usd": round(float(result.spend_usd or 0.0), 6),
+            # The env tool server's own dying words when it died of a fatal
+            # native signal, so `censor_reason: env_crash` can be audited
+            # rather than believed.
+            "env_crash": result.env_crash or None,
+            "calls": n_calls,
+            # WHERE THE THREE NUMBERS ABOVE AND BELOW CAME FROM. "trace" = the
+            # rollout reported them; "turns" = the rollout never reported and
+            # they were recovered from the env's own per-turn NDJSON (a LOWER
+            # bound, since the file stops where the env died); "none" = there
+            # was no evidence at all and `calls`/`max_dlvl`/`max_xl` are null.
+            "evidence_source": getattr(result, "evidence_source", "trace"),
+            "spend_usd": round(booked, 6),
+            # `spend_known: false` says the number above is not a measurement.
+            # It is the attempt's last published in-flight estimate
+            # (`spend_so_far_usd`), booked as a LOWER BOUND rather than as a
+            # zero -- and counted in the summary's
+            # `attempts_with_unknown_spend`, which is what stops a run's cost
+            # curve from silently averaging in free attempts that were not free.
+            "spend_known": spend_known,
+            "spend_source": spend_source,
+            "spend_estimate": estimate or None,
             # WHAT THIS ATTEMPT ACTUALLY BILLED. A whole-rollout retry replays
             # the trajectory from turn 1 and the discarded attempts' usage never
             # reaches `traces.jsonl`, so `spend_usd` above costs ONE rollout for
@@ -4637,12 +4874,16 @@ player result.
             # to be looked at, never to be summed as if it were measured.
             "rollouts_paid": int(getattr(result, "rollouts_paid", 1) or 1),
             "retry_errors": list(getattr(result, "retry_errors", []) or []),
-            "spend_is_lower_bound": int(getattr(result, "rollouts_paid", 1) or 1) > 1,
+            "spend_is_lower_bound": (
+                int(getattr(result, "rollouts_paid", 1) or 1) > 1
+                or not spend_known),
             "spend_usd_billed_upper_est": round(
+                float(estimate.get("spend_so_far_upper_usd") or booked)
+                if not spend_known else
                 float(result.spend_usd or 0.0)
                 * int(getattr(result, "rollouts_paid", 1) or 1), 6),
             "wall_s": round(float(result.wall_s or 0.0), 2),
-            "max_dlvl": int(result.max_dlvl or 0),
+            "max_dlvl": row_dlvl,
             # Recorded, never smoothed over: a metric and the turn files
             # disagreeing about depth is a fact about the harness, and the one
             # place it can be noticed is here.
@@ -4651,7 +4892,7 @@ player result.
             # what was estimated, against which ceiling, on which rate -- so a
             # `censored:budget_stop` row can be audited rather than believed.
             "budget_stop": (result.raw or {}).get("budget_stop"),
-            "max_xl": int(result.max_xl or 1),
+            "max_xl": row_xl,
             "new_checkpoints": [p.name for p in new_dirs],
             "frontier_advanced": bool(advanced),
             "attempts_since_frontier_advance": self._since_advance,
@@ -4785,17 +5026,22 @@ player result.
             # comparison. Reported only for complete pairs, because a delta
             # against a control that never ran is not a delta.
             if slot["complete"]:
-                slot["delta"] = {
-                    "max_dlvl": slot["treatment"]["max_dlvl"] - slot["control"]["max_dlvl"],
-                    "max_xl": slot["treatment"]["max_xl"] - slot["control"]["max_xl"],
-                    "calls": slot["treatment"]["calls"] - slot["control"]["calls"],
-                }
+                # A delta against an UNKNOWN is not a delta either: an attempt
+                # that left no evidence carries null, and null minus a number
+                # is null, never zero.
+                def _delta(key, _t=slot["treatment"], _c=slot["control"]):
+                    a, b = _t.get(key), _c.get(key)
+                    return None if a is None or b is None else a - b
+
+                slot["delta"] = {"max_dlvl": _delta("max_dlvl"),
+                                 "max_xl": _delta("max_xl"),
+                                 "calls": _delta("calls")}
                 k = by_kind.setdefault(kind, {"pairs": 0, "sum_dlvl_delta": 0,
                                               "sum_xl_delta": 0,
                                               "treatment_compliance": {}})
                 k["pairs"] += 1
-                k["sum_dlvl_delta"] += slot["delta"]["max_dlvl"]
-                k["sum_xl_delta"] += slot["delta"]["max_xl"]
+                k["sum_dlvl_delta"] += slot["delta"]["max_dlvl"] or 0
+                k["sum_xl_delta"] += slot["delta"]["max_xl"] or 0
                 cls = slot["treatment"]["compliance"]
                 k["treatment_compliance"][cls] = \
                     k["treatment_compliance"].get(cls, 0) + 1
@@ -4943,9 +5189,28 @@ player result.
             # An attempt whose spend could not be recovered makes the run's
             # total a LOWER BOUND, and a budget ceiling read off a lower bound
             # is not a ceiling. Counted here so nobody has to notice it.
+            #
+            # It used to be `recovered AND NOT spend_known`, which could only
+            # ever count the crash-recovery path -- so treesmoke2's three
+            # censored attempts, none of them `recovered`, reported
+            # `player_usd: 0.0` alongside `attempts_with_unknown_spend: 0`:
+            # a run that spent real money on 205 turns of play, asserting it
+            # spent nothing and that the nothing was measured. The `recovered`
+            # conjunct is gone; `spend_known` is now written by every row
+            # writer and is the whole test.
             "attempts_with_unknown_spend": sum(
-                1 for a in self.attempts
-                if a.get("recovered") and not a.get("spend_known")),
+                1 for a in self.attempts if not a.get("spend_known", True)),
+            # The same statement for the play numbers: how many attempts left
+            # no evidence at all, so their `calls` / `max_dlvl` / `max_xl` are
+            # null rather than measured. `cumulative_calls` and
+            # `best_state.calls_to_reach` are lower bounds while this is
+            # non-zero.
+            "attempts_with_unknown_progress": sum(
+                1 for a in self.attempts if a.get("calls") is None),
+            "counts_are_lower_bounds": any(
+                (not a.get("spend_known", True))
+                or a.get("evidence_source") in ("turns", "none")
+                for a in self.attempts),
             "recovery": self.recovery or None,
             "unattributed_checkpoints":
                 list((self.recovery or {}).get("unattributed_checkpoints") or []),
@@ -5022,6 +5287,13 @@ player result.
         self.cum_calls = sum(int(r.get("calls") or 0) for r in rows)
         self.cum_wall = sum(float(r.get("wall_s") or 0.0) for r in rows)
         self.budget.player_usd = sum(float(r.get("spend_usd") or 0.0) for r in rows)
+        # A resumed run inherits the LOWER-BOUND-ness of what it is resuming:
+        # rebuilt from the same rows, so the second half of a run cannot quietly
+        # report a measured total the first half never had.
+        unknown = [r for r in rows if not r.get("spend_known", True)]
+        self.budget.player_unknown_attempts = len(unknown)
+        self.budget.player_estimated_usd = sum(
+            float(r.get("spend_usd") or 0.0) for r in unknown)
         # THE ORCHESTRATOR'S OWN LINE, recovered from its round log rather than
         # from the summary: the round log is append-only and fsynced per round,
         # so it survives exactly the crashes the summary does not.
@@ -5570,6 +5842,48 @@ def rollouts_billed(out_dir) -> dict:
     return out
 
 
+def _unreported_result(out_dir: Path, error: str, billed: dict) -> PlayerResult:
+    """The result for an attempt whose ROLLOUT never reported.
+
+    `traces.jsonl` is written when the rollout finishes. When the env tool
+    server dies under it, or the launcher is killed, the file is missing or
+    empty and there is no report -- but the attempt still PLAYED, and the env
+    wrote every turn of it to `turns/` (or, after the stall watchdog, to
+    `turns.stalled/`) and every checkpoint of it to the archive.
+
+    This used to return a bare `PlayerResult()`, whose dataclass defaults are
+    `calls=0`, `spend_usd=0.0`, `max_dlvl=0`. Those zeros then flowed into the
+    budget, the cumulative call count, and `luck.max_dlvl_per_attempt` as if
+    they had been measured. treesmoke2 is the measured case: 3 attempts, 205 LM
+    turns, Dlvl 4, XL 5, 16 checkpoints -- reported as `player_usd: 0.0`,
+    `cumulative_calls: 0`, `max_dlvl_per_attempt: [0]`, with
+    `attempts_with_unknown_spend: 0` claiming the zeros were solid.
+
+    So: recover what the env's own files prove (calls, depth, XL, turns) and
+    say plainly that spend was never measured. `evidence_source` says which
+    channel every number came from, and is "none" when the attempt really did
+    leave nothing -- the only case in which those fields are honestly unknown.
+    """
+    ev = _attempt_dir_evidence(Path(out_dir))
+    has = bool(ev.get("turns") or ev.get("calls"))
+    return PlayerResult(
+        stop_condition="error",
+        error=error,
+        env_crash=env_crash_evidence(out_dir),
+        calls=int(ev.get("calls") or 0),
+        max_dlvl=int(ev.get("max_dlvl") or 0),
+        max_xl=int(ev.get("max_xl") or 1),
+        # NEVER a measurement: no trace means no token usage, and token usage
+        # is the only thing this tree ever costs from.
+        spend_usd=0.0,
+        spend_known=False,
+        evidence_source="turns" if has else "none",
+        rollouts_paid=int(billed["rollouts_paid"]),
+        retry_errors=list(billed["retry_errors"]),
+        raw={"attempt_dir_evidence": ev, "rollouts_billed": billed},
+    )
+
+
 def read_trace_result(out_dir) -> PlayerResult:
     """Read one rollout's `traces.jsonl` into a :class:`PlayerResult`.
 
@@ -5584,10 +5898,7 @@ def read_trace_result(out_dir) -> PlayerResult:
     path = out_dir / "traces.jsonl"
     billed = rollouts_billed(out_dir)
     if not path.is_file():
-        return PlayerResult(stop_condition="error",
-                            error=f"no traces.jsonl in {out_dir}",
-                            rollouts_paid=int(billed["rollouts_paid"]),
-                            retry_errors=list(billed["retry_errors"]))
+        return _unreported_result(out_dir, f"no traces.jsonl in {out_dir}", billed)
     traces = []
     for line in path.read_text(errors="replace").splitlines():
         line = line.strip()
@@ -5598,10 +5909,7 @@ def read_trace_result(out_dir) -> PlayerResult:
         except json.JSONDecodeError:
             continue
     if not traces:
-        return PlayerResult(stop_condition="error",
-                            error=f"empty traces.jsonl in {out_dir}",
-                            rollouts_paid=int(billed["rollouts_paid"]),
-                            retry_errors=list(billed["retry_errors"]))
+        return _unreported_result(out_dir, f"empty traces.jsonl in {out_dir}", billed)
     trace = traces[-1]
     metrics = trace.get("metrics") or {}
     # DEPTH IS CROSS-CHECKED, NOT TRUSTED. `metrics.max_dlvl_reached` is what
@@ -5653,11 +5961,8 @@ def _max_dlvl_from_turns(out_dir) -> Optional[int]:
     own account of where the hero went -- independent of whatever the
     end-of-rollout metric computed.
     """
-    turns = Path(out_dir) / "turns"
-    if not turns.is_dir():
-        return None
     best = None
-    for path in sorted(turns.glob("*.ndjson")):
+    for path in all_turn_files(out_dir):
         for line in path.read_text(errors="replace").splitlines():
             line = line.strip()
             if not line:
