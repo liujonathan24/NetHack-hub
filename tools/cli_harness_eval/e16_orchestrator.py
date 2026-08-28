@@ -146,6 +146,21 @@ STOP_EMPTY_ARCHIVE = "empty_archive"
 #: NetHack numbers its branches in dungeon.def order. Sokoban is 4.
 SOKOBAN_DUNGEON_NUMBER = 4
 
+# --------------------------------------------------------------------------- #
+# experiment arms
+# --------------------------------------------------------------------------- #
+
+#: The method under test.
+ARM_GO_EXPLORE = "go_explore"
+#: THE NULL. See :class:`OrchestratorConfig.arm`.
+ARM_MATCHED_RESTART = "matched_restart"
+ARMS = (ARM_GO_EXPLORE, ARM_MATCHED_RESTART)
+
+#: An attempt's role inside a matched pair (``--paired-control``).
+ROLE_SOLO = "solo"
+ROLE_TREATMENT = "treatment"
+ROLE_CONTROL = "control"
+
 
 # --------------------------------------------------------------------------- #
 # config
@@ -159,7 +174,33 @@ class OrchestratorConfig:
     #: Source of the curated wiki pages; copied into ``run_dir/wiki`` at start.
     wiki_src: Path = Path("/root/nld/e15-wiki/configs/continual/wiki")
     tier: str = "e16_gewiki"
-    arm: str = "prime_agent"
+    #: THE EXPERIMENT ARM. Not the launcher's arm (that is `player_arm`).
+    #:
+    #: ``go_explore``      the method: archive, selection, directives, lessons.
+    #: ``matched_restart`` THE NULL. N independent player attempts from ONE
+    #:                     fixed start state, with no archive, no selection, no
+    #:                     directive and no lessons -- the multi-restart
+    #:                     baseline the method has to beat.
+    #:
+    #: WHY THIS ARM EXISTS AT ALL, since it is the one that can end the
+    #: experiment: every other control in this design (`--selector scripted`,
+    #: `--no-directive`, no-wiki) is an ablation WITHIN the method, and not one
+    #: of them is a null. Each is beaten by "we got N tries instead of one".
+    #: The headline number is a running maximum over attempts -- monotone
+    #: non-decreasing by construction, unable to fall -- so comparing it to a
+    #: single-life number compares max-of-N draws against one draw. Without a
+    #: matched-N baseline there is no reading of the result under which the
+    #: method could have failed, and a claim that cannot fail is not a finding.
+    arm: str = ARM_GO_EXPLORE
+    #: The LAUNCHER's arm name -- which scaffold `launch_cell.sh` runs. Distinct
+    #: from `arm` above, and deliberately so: the experiment arm is a property
+    #: of the design, the player arm is a property of the harness, and E15 lost
+    #: an arm to exactly the kind of confusion that follows from one name.
+    player_arm: str = "prime_agent"
+    #: matched_restart only: the checkpoint every attempt restarts from. Empty
+    #: means "the archive's seed checkpoint" (c1). The red team's C1 wants a
+    #: FIXED, early state -- so it is named once and never re-selected.
+    start_checkpoint_id: str = ""
     #: "llm" -- a persistent Prime Agent session chooses the next checkpoint
     #: and may pass a short directive to the player (the primary design).
     #: "scripted" -- the softmax selector below chooses (the ABLATION, kept so
@@ -221,14 +262,70 @@ class OrchestratorConfig:
     orchestrator_model: str = ""
     #: Per-round wall-clock cap on one orchestrator turn.
     orchestrator_timeout_s: float = 900.0
-    #: CONTROL MODE. Launch players with no directive at all -- same archive,
-    #: same selection, no instructions. This is an ablation, not a convenience:
-    #: if it matches the directive condition, the orchestrator's strategy adds
-    #: nothing, and the run should be able to establish that.
+    #: CONTROL MODE, RUN-WIDE. Launch every player with no directive at all --
+    #: same archive, same selection, no instructions.
+    #:
+    #: ITS MEASURED LIMIT, which is why `paired_control` exists below: run-wide
+    #: it answers "does the directive channel matter on average", and the sims
+    #: showed that is not enough. A `descend_fast` directive inverted the
+    #: player's first decision causally (walk to the down staircase vs melee the
+    #: jackal; 0 attacks vs 1, and 15 explores vs 1 at 25 calls). A `no_descend`
+    #: directive was INDISTINGUISHABLE from this control -- because the control
+    #: did not descend either. A prohibition against something the player was
+    #: never going to do measures nothing, and pooling both kinds into one
+    #: run-wide control hides that: the average says "directives do something"
+    #: while half the directive kinds are untested.
     no_directive: bool = False
+    #: CONTROL MODE, PER DIRECTIVE KIND. Every directive the orchestrator issues
+    #: is run TWICE from the SAME checkpoint: once with it (`treatment`) and
+    #: once without (`control`). Each directive is then compared against its own
+    #: control rather than against a run-level average, which is the only way
+    #: "this KIND of directive changes behaviour" is answerable.
+    #:
+    #: It doubles the attempt count for a given number of directives, and that
+    #: is the price of the comparison rather than an accident: both attempts
+    #: draw on the same budget line and emit the same attempt records.
+    paired_control: bool = False
+    #: RESEED ON RESTORE. Default OFF, and that is a deliberate choice rather
+    #: than an oversight.
+    #:
+    #: WHAT IS TRUE TODAY (measured by the red team's probe, not assumed):
+    #: `checkpoint_restore` resets the engine to the game's ORIGINAL seed and
+    #: replays no history, so two restores of one checkpoint continue
+    #: byte-identically. Restoring does NOT reroll the dice.
+    #:
+    #: WHY THAT IS THE DEFAULT: with the dice fixed, the difference between two
+    #: attempts from one checkpoint comes from the model's choices and from the
+    #: directive it was given -- which is exactly what makes a directive's
+    #: effect attributable. Turn reseeding on and every A/B between a directive
+    #: and its control acquires a second, uncontrolled source of variance, and
+    #: the causal reading of the sims' `descend_fast` inversion would not have
+    #: been available.
+    #:
+    #: WHY THE FLAG EXISTS ANYWAY: determinism has a real cost the design must
+    #: state rather than enjoy. The dungeon BELOW a checkpoint is regenerated
+    #: from a stream restarted at position 0, so the deep levels an E16 run
+    #: reaches are NOT the seed-1 deep levels E15 mapped, and per-checkpoint
+    #: outcome spread reflects policy variation only -- it understates the luck
+    #: a real run is exposed to. A reader who wants the Monte-Carlo reading is
+    #: one CLI argument away from it, and provenance records which was used.
+    reseed_on_restore: bool = False
     #: Whether `--resume` was PROVEN to carry history (the two-call probe). Set
     #: by the run, written to provenance; never assumed.
     session_resume_verified: Optional[bool] = None
+    #: THE ORCHESTRATOR'S RECORDED CWD. Written into provenance at round 0 and
+    #: asserted before every later round; a `--resume` from anywhere else takes
+    #: prime-agent's "fork this session?" branch and hangs forever. Empty until
+    #: `prepare()` fills it in.
+    orchestrator_cwd: str = ""
+    #: The orchestrator's PRIVATE TMPDIR. The unsandboxed orchestrator otherwise
+    #: shares /tmp/prime-agent-0/daemon.sock with every prime-agent on the box:
+    #: measured at 900s of hang against 3.5s with a private one. Never
+    #: exported -- see e16_session for why an exported TMPDIR breaks players.
+    orchestrator_tmpdir: Optional[Path] = None
+    #: `discovery_only` (default) | `always` | `never`. See e16_session: json
+    #: mode + `--resume` was measured hanging where text `--print` succeeded.
+    orchestrator_json_mode: str = "discovery_only"
 
     @property
     def archive_dir(self) -> Path:
@@ -612,8 +709,23 @@ def render_prefix(checkpoint_dir, max_chars: int = 1500) -> str:
     difference from real prefix continuity is recorded in provenance.json as
     ``prefix_continuity: "text_only"``.
 
-    ``prefix.jsonl`` is currently written by nothing, so this returns "" on
-    every checkpoint the current harness produces.
+    WHAT "TEXT ONLY" DOES AND DOES NOT MEAN -- measured, because the two
+    readings have opposite consequences for H4. It is a statement about the
+    MECHANISM (a resumed player reads a transcript rather than having had the
+    conversation, so there is no inherited session and no server-side prompt
+    cache). It is NOT a statement about DELIVERY. The replayed text does reach
+    the model: one real seed-1 rollout resumed from a checkpoint with a
+    non-empty ``prefix.jsonl`` carries this block byte-identically in exactly
+    one served node -- the first observation -- along with a canary string
+    that exists nowhere else in the harness, the wiki, the ledger table or the
+    directive. See ``outputs/e16_launchfix/``. So H4 is testable as "lessons
+    plus prefix CONTENT transfer", and only the stronger "prefix continuity of
+    SESSION" is out of reach.
+
+    ``prefix.jsonl`` is written by ``nethack.py:_append_conversation_prefix``
+    after every turn and picked up by ``checkpoint_save`` off the env; it is
+    empty only for checkpoints written outside a live rollout (``seed_archive``
+    makes one such: c1 has no conversation behind it).
     """
     p = Path(checkpoint_dir) / PREFIX_JSONL
     if not p.is_file() or p.stat().st_size == 0:
@@ -742,8 +854,23 @@ class PlayerContext:
     fidelity_log: Path
     game_seed: int
     tier: str
+    #: The LAUNCHER's arm (which scaffold to run), not the experiment arm.
     arm: str
     directive: str = ""
+    #: The experiment arm this attempt belongs to (`go_explore` /
+    #: `matched_restart`), carried on the context so an attempt record is
+    #: self-describing even read on its own.
+    experiment_arm: str = ARM_GO_EXPLORE
+    #: Matched-pair bookkeeping. `pair_id` is shared by a directive and its own
+    #: control; `pair_role` says which is which. `solo` for an unpaired attempt.
+    pair_id: Optional[int] = None
+    pair_role: str = ROLE_SOLO
+    #: What KIND of directive this is, so a control can be compared against the
+    #: directive kind it controls for rather than against a run-wide average.
+    directive_kind: str = "none"
+    #: ``(core, disp)`` to reseed the engine's RNG with after restore, or None
+    #: for the deterministic default. See `OrchestratorConfig.reseed_on_restore`.
+    reseed: Optional[tuple] = None
 
 
 @dataclass
@@ -814,6 +941,26 @@ COMPLY_PREVENTED = "prevented"      # ended before it could act on it
 COMPLY_NONE = "no_directive"
 COMPLY_UNKNOWN = "unclassified"     # no call data to judge from
 
+#: One clause's verdict. The three-valued result is the point: `no-evidence`
+#: is NOT `satisfied`, and collapsing them is how "do not X" scores `followed`
+#: on an attempt that never had the chance to do X.
+CLAUSE_SATISFIED = "satisfied"
+CLAUSE_VIOLATED = "violated"
+CLAUSE_NO_EVIDENCE = "no-evidence"
+
+#: The two kinds of clause a directive can contain, scored SEPARATELY.
+#:
+#: THE MEASUREMENT THAT FORCED THIS. The E16 sims first scored both directive
+#: arms `prevented` on one enum, because both hit their call budget with a goal
+#: clause unmet -- and that erased the fact that the `no_descend` arm's
+#: PROHIBITION ("do NOT descend") had been fully and checkably obeyed for 26
+#: calls. A prohibition is scoreable at any budget: not descending in ten calls
+#: is real evidence. Reaching XL 3 in ten calls was never possible, so the goal
+#: clause had no evidence either way. One enum cannot carry both facts, and the
+#: one it carried was the less informative one.
+KIND_PROHIBITION = "prohibition"
+KIND_GOAL = "goal"
+
 #: Words that carry no instruction, stripped before matching.
 _STOPWORDS = frozenset("""
 a an the and or but if then than to from into onto at by for with of on in out
@@ -837,14 +984,322 @@ _AVOID_WORDS = frozenset({"avoid", "not", "never", "don't", "dont", "without",
 DIRECTIVE_WINDOW = 12
 
 
+#: The TOOL vocabulary -- the names of things the player CALLS, as opposed to
+#: outcomes the game REACHES. A prohibition phrased over any of these is
+#: unscoreable, and :func:`lint_directive` says so.
+_TOOL_WORDS = frozenset({
+    "explore", "exploring", "explores", "search", "searching", "searches",
+    "move", "moving", "moves", "press", "pressing", "key", "keys",
+    "wiki", "rollback", "save", "look", "looking", "map", "request_map",
+    "np_explore_level", "np_move_to", "np_press_key", "np_search",
+    "np_melee_attack", "np_kick", "np_pickup", "np_travel",
+    "call", "calls", "calling", "tool", "tools", "skill", "skills",
+})
+
+#: OUTCOME words -- things the engine measures, which a prohibition CAN be
+#: scored against. Kept beside the tool list so the lint can say what a better
+#: phrasing would look like rather than only what is wrong.
+_OUTCOME_WORDS = frozenset({
+    "descend", "descending", "descent", "downstairs", "deeper", "dlvl",
+    "die", "dying", "death", "level", "floor", "clear", "cleared",
+    "fight", "fighting", "melee", "attack", "attacking", "kill", "killing",
+    "engrave", "pray", "praying", "ascend", "hp", "starve",
+})
+
+#: Tokens that name DESCENT, which the harness measures directly
+#: (``metrics.descent_count`` / ``max_dlvl_reached``). A clause containing one
+#: of these is scored against the METRIC, not against a keyword match on a call
+#: -- which is the difference between "it typed `>`" and "it went down".
+_DESCEND_TOKENS = frozenset({"descend", "descending", "descent", "descended",
+                             "downstairs", "deeper", "downward", "down"})
+
+#: Skill names / keys that constitute an ATTEMPT to descend.
+_DESCEND_CALL_TOKENS = ("np_down", "np_descend", "np_stairs_down", '">"', "'>'")
+
+
 def _tokens(text: str) -> list:
     return [w for w in re.findall(r"[a-z0-9_]+", (text or "").lower())
             if len(w) > 2 and w not in _STOPWORDS]
 
 
+#: Where one clause ends and the next begins. Deliberately coarse: a directive
+#: is one or two sentences of instruction, not prose, and over-splitting costs
+#: only precision on a clause that then scores `no-evidence`.
+_CLAUSE_SPLIT = re.compile(
+    r"(?:[.;]+|\s+(?:and|but|then|while|also|however)\s+|,\s+)", re.I)
+
+
+def split_directive_clauses(directive: str) -> list:
+    """A directive as a list of ``{"kind", "text", "tokens"}`` clauses.
+
+    Prohibitions and goals are separated because they are scoreable under
+    different conditions -- see :data:`KIND_PROHIBITION`. A segment that names
+    something to do BEFORE its avoidance word yields both: "descend fast, do
+    not fight" is one goal and one prohibition, not one muddled clause.
+    """
+    directive = (directive or "").strip()
+    if not directive:
+        return []
+    out = []
+    for seg in _CLAUSE_SPLIT.split(directive):
+        seg = seg.strip()
+        if not seg:
+            continue
+        lowered = re.findall(r"[a-z0-9_']+", seg.lower())
+        avoid_at = next((i for i, w in enumerate(lowered)
+                         if w in _AVOID_WORDS), None)
+        if avoid_at is None:
+            toks = _tokens(seg)
+            if toks:
+                out.append({"kind": KIND_GOAL, "text": seg, "tokens": toks})
+            continue
+        head = " ".join(lowered[:avoid_at])
+        tail = " ".join(lowered[avoid_at:])
+        head_toks = _tokens(head)
+        if head_toks:
+            out.append({"kind": KIND_GOAL, "text": head.strip(),
+                        "tokens": head_toks})
+        tail_toks = _tokens(tail)
+        if tail_toks:
+            out.append({"kind": KIND_PROHIBITION, "text": tail.strip(),
+                        "tokens": tail_toks})
+    return out
+
+
+def lint_directive(directive: str) -> list:
+    """Warnings about a directive's PHRASING, before its compliance is scored.
+
+    THE ONE THAT MATTERS: a prohibition over a TOOL is not scoreable, and the
+    sims produced the counter-example rather than the argument. The
+    `descend_fast` arm was told "do not explore" and called ``np_explore_level``
+    seven times, which any syntactic check scores `violated`. Its own reasoning
+    says why: "No valid path found. I need to explore more first". It explored
+    IN ORDER TO descend -- in service of the directive's own goal. A checker
+    that never reads the model's prose (which is the whole point of a checker,
+    since the prose is the thing under test) cannot separate "explored instead
+    of obeying" from "explored in order to obey", so scoring the second as a
+    violation understates compliance and scoring it as compliance would make
+    the rubric unfalsifiable.
+
+    The cheap fix is upstream: prohibit OUTCOMES, not tools. "Do not clear the
+    level" is checkable against what the game shows; "do not explore" is not.
+    So the warning is raised here, recorded on the attempt, and fed back into
+    the orchestrator's next round -- where the phrasing can actually change.
+
+    Returns a list of ``{"code", "clause", "message"}``. Empty is good news.
+    """
+    warnings = []
+    clauses = split_directive_clauses(directive)
+    if not (directive or "").strip():
+        return warnings
+    for c in clauses:
+        if c["kind"] != KIND_PROHIBITION:
+            continue
+        tool_hits = sorted(set(c["tokens"]) & _TOOL_WORDS)
+        outcome_hits = sorted(set(c["tokens"]) & _OUTCOME_WORDS)
+        if tool_hits and not outcome_hits:
+            warnings.append({
+                "code": "tool_prohibition",
+                "clause": c["text"],
+                "tokens": tool_hits,
+                "message": (
+                    f"prohibition names a TOOL ({', '.join(tool_hits)}), not an "
+                    f"OUTCOME, and is therefore UNSCOREABLE: the player may call "
+                    f"that tool in service of the directive's own goal, and no "
+                    f"check that stays off the model's prose can tell that from "
+                    f"disobedience. Prefer an outcome: 'do not clear the level' "
+                    f"rather than 'do not explore'."),
+            })
+    if clauses and all(c["kind"] == KIND_PROHIBITION for c in clauses):
+        warnings.append({
+            "code": "no_goal_clause",
+            "clause": directive.strip(),
+            "tokens": [],
+            "message": ("directive is prohibition-only, so it is satisfied by "
+                        "dying on turn 2; it cannot distinguish steering from "
+                        "an attempt that never got started. Pair every "
+                        "prohibition with something to DO."),
+        })
+    if clauses and all(c["kind"] == KIND_GOAL for c in clauses) \
+            and not any(set(c["tokens"]) & _OUTCOME_WORDS for c in clauses):
+        warnings.append({
+            "code": "no_measured_outcome",
+            "clause": directive.strip(),
+            "tokens": [],
+            "message": ("no clause names anything the harness measures "
+                        "(descent, depth, XL, fighting, engraving), so every "
+                        "clause will be scored by surface keyword match on the "
+                        "tool calls and a compliant player that took an "
+                        "unnamed route will score low."),
+        })
+    return warnings
+
+
+RUBRIC_NAME = "per-clause (prohibition/goal) over the first N calls + metrics"
+
+
+def _call_haystack(calls) -> str:
+    return " ".join(
+        f"{c.get('name', '')} "
+        f"{c.get('args') if isinstance(c.get('args'), str) else json.dumps(c.get('args') or {})}"
+        for c in calls if isinstance(c, dict)
+    ).lower()
+
+
+def _descent_evidence(metrics: Optional[dict], haystack: str) -> Optional[bool]:
+    """Did this attempt DESCEND? ``None`` when nothing can answer.
+
+    Metrics first, calls second, and the order is the whole point: `>` was
+    typed is not the same fact as the hero went down a level, and only the
+    first of those is what a "descend" clause is about.
+    """
+    metrics = metrics or {}
+    for key in ("descent_count",):
+        v = metrics.get(key)
+        if isinstance(v, (int, float)):
+            return bool(v > 0)
+    start, best = metrics.get("start_dlvl"), metrics.get("max_dlvl")
+    if isinstance(start, (int, float)) and isinstance(best, (int, float)):
+        return bool(best > start)
+    if any(t in haystack for t in _DESCEND_CALL_TOKENS):
+        # An ATTEMPT to descend. Enough to violate a prohibition, never enough
+        # to satisfy a goal -- so this is only consulted where that asymmetry
+        # is handled by the caller.
+        return True
+    return None
+
+
+def score_clause(clause: dict, calls, haystack: str,
+                 metrics: Optional[dict]) -> dict:
+    """One clause's verdict, with the evidence that produced it.
+
+    Two evidence bases, used in this order:
+
+    1. HARNESS METRICS, where the clause names something the engine measures.
+       Today that is descent, which is the clause kind the sims actually
+       exercised. This is an OUTCOME check and it is the strong one.
+    2. SURFACE KEYWORD MATCH over the tool calls, for everything else. Its
+       limits are real and are reported with every verdict: it matches tokens,
+       so "take the south door" scores against a call whose args mention
+       ``south``, and a player that complied by a route the directive did not
+       name scores low.
+
+    Deliberately not an LM judge. An LM grading whether a second LM followed a
+    third LM's instruction is three models deep and is not a measurement.
+    """
+    toks = set(clause["tokens"])
+    is_prohibition = clause["kind"] == KIND_PROHIBITION
+    if toks & _DESCEND_TOKENS:
+        went_down = _descent_evidence(metrics, haystack)
+        if went_down is None:
+            return {"name": clause["text"][:60], "kind": clause["kind"],
+                    "result": CLAUSE_NO_EVIDENCE, "basis": "metric",
+                    "why": "no descent metric and no descend call in the window"}
+        if is_prohibition:
+            return {"name": clause["text"][:60], "kind": clause["kind"],
+                    "result": CLAUSE_VIOLATED if went_down else CLAUSE_SATISFIED,
+                    "basis": "metric",
+                    "why": ("descended (or called a descend skill) despite the "
+                            "prohibition" if went_down else
+                            "no descent registered and no descend skill or '>' "
+                            "key in the examined calls")}
+        return {"name": clause["text"][:60], "kind": clause["kind"],
+                "result": CLAUSE_SATISFIED if went_down else CLAUSE_VIOLATED,
+                "basis": "metric",
+                "why": "descent_count/max_dlvl says the hero "
+                       + ("did" if went_down else "did not") + " go down"}
+
+    if not calls:
+        return {"name": clause["text"][:60], "kind": clause["kind"],
+                "result": CLAUSE_NO_EVIDENCE, "basis": "calls",
+                "why": "no tool calls to read"}
+    hits = sorted(t for t in toks if t in haystack)
+    if is_prohibition:
+        return {"name": clause["text"][:60], "kind": clause["kind"],
+                "result": CLAUSE_VIOLATED if hits else CLAUSE_SATISFIED,
+                "basis": "calls", "matched": hits,
+                "why": (f"prohibited token(s) {hits} appear in the calls"
+                        if hits else
+                        f"none of {sorted(toks)} appear in the examined calls")}
+    need = max(1, (len(toks) + 1) // 2)
+    if len(hits) >= need:
+        result = CLAUSE_SATISFIED
+    elif hits:
+        result = CLAUSE_VIOLATED   # partial match: some of the goal, not enough
+    else:
+        result = CLAUSE_VIOLATED
+    return {"name": clause["text"][:60], "kind": clause["kind"],
+            "result": result, "basis": "calls", "matched": hits,
+            "why": f"{len(hits)}/{len(toks)} goal token(s) matched "
+                   f"({hits}); {need} needed"}
+
+
+def _kind_label(scored: list, kind: str, *, pursued: bool,
+                ended_early: bool) -> dict:
+    """One clause kind's label, from its clauses' verdicts.
+
+    The asymmetry between the kinds is deliberate and is the finding this
+    structure exists to preserve: a GOAL can be `prevented` (the attempt ran
+    out before the goal could be reached), a PROHIBITION cannot. Not descending
+    in ten calls is real evidence of obedience; reaching XL 3 in ten calls was
+    never possible.
+    """
+    sel = [r for r in scored if r["kind"] == kind]
+    sat = [r for r in sel if r["result"] == CLAUSE_SATISFIED]
+    vio = [r for r in sel if r["result"] == CLAUSE_VIOLATED]
+    noe = [r for r in sel if r["result"] == CLAUSE_NO_EVIDENCE]
+    if not sel:
+        label = "n/a"
+    elif vio and not sat:
+        label = (COMPLY_PREVENTED
+                 if kind == KIND_GOAL and pursued and ended_early
+                 else COMPLY_IGNORED)
+    elif vio:
+        label = COMPLY_PARTIAL
+    elif sat:
+        label = COMPLY_FOLLOWED
+    else:
+        label = COMPLY_PREVENTED if kind == KIND_GOAL else COMPLY_UNKNOWN
+    return {"label": label, "clauses": [r["name"] for r in sel],
+            "n_satisfied": len(sat), "n_violated": len(vio),
+            "n_no_evidence": len(noe)}
+
+
+def _headline(by_kind: dict) -> str:
+    """The single field the design asks for, DERIVED from the per-kind labels.
+
+    Kept only because one field is asked for, and derived rather than measured
+    so that the two labels it summarises are always the more informative
+    record.
+
+    ``violated`` outranks ``ignored`` when the directive was PURELY a
+    prohibition and that prohibition was broken. The distinction is the one the
+    original enum was right about and is worth carrying forward: an instruction
+    that was reachable and was overridden is a different fact about the player
+    from an instruction it never engaged with, and only the first is evidence
+    that the orchestrator's channel works at all.
+    """
+    labels = [v["label"] for v in by_kind.values() if v["label"] != "n/a"]
+    if not labels:
+        return COMPLY_UNKNOWN
+    if all(l == COMPLY_FOLLOWED for l in labels):
+        return COMPLY_FOLLOWED
+    proh = by_kind.get(KIND_PROHIBITION, {}).get("label", "n/a")
+    goal = by_kind.get(KIND_GOAL, {}).get("label", "n/a")
+    if proh == COMPLY_IGNORED and goal == "n/a":
+        return COMPLY_VIOLATED
+    if COMPLY_IGNORED in labels and COMPLY_FOLLOWED not in labels:
+        return COMPLY_IGNORED
+    if COMPLY_PREVENTED in labels and not (
+            {COMPLY_IGNORED, COMPLY_PARTIAL} & set(labels)):
+        return COMPLY_PREVENTED
+    return COMPLY_PARTIAL
+
+
 def classify_directive_compliance(directive: str, calls, outcome: str,
-                                  window: int = DIRECTIVE_WINDOW) -> dict:
-    """Did the player do what the orchestrator told it to?
+                                  window: int = DIRECTIVE_WINDOW,
+                                  metrics: Optional[dict] = None) -> dict:
+    """Did the player do what the orchestrator told it to? Scored PER CLAUSE.
 
     WHY THIS EXISTS, and it is the research point rather than a nicety: without
     compliance data there is no way to tell "the orchestrator steered the
@@ -853,70 +1308,196 @@ def classify_directive_compliance(directive: str, calls, outcome: str,
     and the second is the null hypothesis this experiment has to be able to
     fail against. So compliance is measured per attempt, not assumed.
 
-    WHAT THIS IS. A KEYWORD RUBRIC over the attempt's first ``window`` tool
-    calls -- deterministic, cheap, auditable, and deliberately not an LM judge
-    (an LM grading whether another LM followed a third LM's instruction is
-    three models deep and not a measurement). Its limits are real and are
-    reported alongside it: it matches surface tokens, so "take the south door"
-    scores against a call whose args mention ``south``, and a player that
-    complies by a route the directive did not name scores low. Read it as a
-    signal over many attempts, never as a verdict on one.
+    WHY PER CLAUSE. See :data:`KIND_PROHIBITION`: one enum cannot carry a
+    directive that mixes a prohibition with an aspiration, and when the sims
+    made it try, the label it produced erased the only half that had evidence.
+    Prohibition and goal are scored separately, both are recorded, and the
+    single ``class`` field is DERIVED from them rather than measured.
 
     ``calls`` is a sequence of ``{"name": str, "args": dict|str}`` -- the
-    player's tool calls in order.
+    player's tool calls in order. ``metrics`` is the harness's own numbers for
+    the attempt (``descent_count``, ``max_dlvl``, ``start_dlvl``, ``died``,
+    ``budget_exhausted``), used wherever a clause names something measured.
+
+    Returns a dict whose ``class`` key is the derived headline (so every
+    existing reader keeps working) alongside ``by_clause_kind``, ``clauses``,
+    ``warnings`` (the phrasing lint) and ``rationale``.
     """
     directive = (directive or "").strip()
+    base = {"class": COMPLY_NONE, "headline": COMPLY_NONE,
+            "by_clause_kind": {}, "clauses": [], "matched": [], "missed": [],
+            "violated": [], "window": window, "n_calls_examined": 0,
+            "pursued": False, "instrumental_ambiguity": False,
+            "warnings": [], "rationale": "", "rubric": RUBRIC_NAME}
     if not directive:
-        return {"class": COMPLY_NONE, "matched": [], "missed": [],
-                "violated": [], "window": window, "n_calls_examined": 0,
-                "rubric": "keyword-over-first-N-calls"}
+        base["rationale"] = ("no directive was served (control mode or a round "
+                             "in which the orchestrator produced none)")
+        return base
 
-    words = _tokens(directive)
-    # Split at the first avoidance word: everything after it is a prohibition.
-    lowered = re.findall(r"[a-z0-9_']+", directive.lower())
-    avoid_at = next((i for i, w in enumerate(lowered) if w in _AVOID_WORDS), None)
-    if avoid_at is None:
-        want, avoid = words, []
-    else:
-        boundary = set(_tokens(" ".join(lowered[avoid_at:avoid_at + 6])))
-        avoid = [w for w in words if w in boundary]
-        want = [w for w in words if w not in boundary]
-
+    clauses = split_directive_clauses(directive)
+    warnings = lint_directive(directive)
+    base["warnings"] = warnings
     calls = list(calls or [])[:window]
+    base["n_calls_examined"] = len(calls)
+    metrics = dict(metrics or {})
+    haystack = _call_haystack(calls)
+
+    if not clauses:
+        base["class"] = base["headline"] = COMPLY_UNKNOWN
+        base["rationale"] = ("the directive reduced to no scoreable clause "
+                             "after stopword removal")
+        return base
+
+    scored = [score_clause(c, calls, haystack, metrics) for c in clauses]
+    base["clauses"] = scored
+
+    # `pursued` -- the BEHAVIOURAL signal, kept separate from the outcome so
+    # "tried hard and did not arrive" is never silently merged with "did not
+    # try". This is ambiguity 1 from the sims, made a field instead of a note.
+    goal_toks = {t for c in clauses if c["kind"] == KIND_GOAL for t in c["tokens"]}
+    pursued = bool(goal_toks & set(re.findall(r"[a-z0-9_]+", haystack)))
+    if goal_toks & _DESCEND_TOKENS:
+        pursued = pursued or any(t in haystack for t in _DESCEND_CALL_TOKENS)
+    base["pursued"] = pursued
+    ended_early = bool(metrics.get("budget_exhausted")
+                       or metrics.get("died")
+                       or outcome in (OUTCOME_DIED, OUTCOME_CENSORED))
+
     if not calls:
-        cls = COMPLY_PREVENTED if outcome in (OUTCOME_DIED, OUTCOME_CENSORED) \
-            else COMPLY_UNKNOWN
-        return {"class": cls, "matched": [], "missed": want, "violated": [],
-                "window": window, "n_calls_examined": 0,
-                "rubric": "keyword-over-first-N-calls"}
+        # Nothing to read. `prevented` when the attempt ended, `unclassified`
+        # when it did not -- never `followed`, which is the vacuous label that
+        # would make a fast death look like obedience. The per-clause record is
+        # still written: "which clauses could not be scored, and why" is the
+        # part a later analysis needs, and dropping it here would make a
+        # zero-call attempt the one case with no auditable rubric output.
+        base["by_clause_kind"] = {
+            KIND_PROHIBITION: _kind_label(scored, KIND_PROHIBITION,
+                                          pursued=pursued,
+                                          ended_early=ended_early),
+            KIND_GOAL: _kind_label(scored, KIND_GOAL, pursued=pursued,
+                                   ended_early=ended_early),
+        }
+        base["class"] = base["headline"] = (
+            COMPLY_PREVENTED if ended_early else COMPLY_UNKNOWN)
+        base["rationale"] = ("no tool calls were recorded for this attempt, so "
+                             "no clause backed by call evidence could be "
+                             "scored either way; per-clause verdicts are "
+                             "recorded as no-evidence rather than as "
+                             "compliance")
+        return base
 
-    haystack = " ".join(
-        f"{c.get('name', '')} {c.get('args') if isinstance(c.get('args'), str) else json.dumps(c.get('args') or {})}"
-        for c in calls if isinstance(c, dict)
-    ).lower()
+    by_kind = {
+        KIND_PROHIBITION: _kind_label(scored, KIND_PROHIBITION,
+                                      pursued=pursued, ended_early=ended_early),
+        KIND_GOAL: _kind_label(scored, KIND_GOAL,
+                               pursued=pursued, ended_early=ended_early),
+    }
+    base["by_clause_kind"] = by_kind
+    headline = _headline(by_kind)
+    base["class"] = base["headline"] = headline
 
-    matched = sorted({w for w in want if w in haystack})
-    missed = sorted(set(want) - set(matched))
-    violated = sorted({w for w in avoid if w in haystack})
+    # Back-compat surface for readers that only ever wanted token lists.
+    base["matched"] = sorted({m for r in scored for m in r.get("matched", [])})
+    base["violated"] = sorted({m for r in scored
+                               if r["kind"] == KIND_PROHIBITION
+                               and r["result"] == CLAUSE_VIOLATED
+                               for m in r.get("matched", [])})
+    base["missed"] = sorted({t for c in clauses for t in c["tokens"]}
+                            - set(base["matched"]))
 
-    if violated:
-        cls = COMPLY_VIOLATED
-    elif not want:
-        # Pure prohibition, and it was respected within the window.
-        cls = COMPLY_FOLLOWED
-    elif len(matched) >= max(1, (len(want) + 1) // 2):
-        cls = COMPLY_FOLLOWED
-    elif matched:
-        cls = COMPLY_PARTIAL
-    elif len(calls) < window and outcome in (OUTCOME_DIED, OUTCOME_CENSORED):
-        # It never got enough turns to act on the instruction.
-        cls = COMPLY_PREVENTED
-    else:
-        cls = COMPLY_IGNORED
-    return {"class": cls, "matched": matched, "missed": missed,
-            "violated": violated, "window": window,
-            "n_calls_examined": len(calls),
-            "rubric": "keyword-over-first-N-calls"}
+    # THE INSTRUMENTAL-ACTION AMBIGUITY, recorded rather than resolved. See
+    # `lint_directive`: a tool-prohibition violated while the directive's own
+    # goal was unmet and being pursued is exactly the case the sims measured --
+    # "do not explore" broken seven times by a player whose stated reason was
+    # "I need to explore more to find the path" to the staircase it had been
+    # told to reach. The label stands (the rubric does not read prose, so it
+    # cannot know), but the rationale says the label may understate compliance,
+    # so nobody downstream reads it as a clean violation.
+    tool_prohibition = any(w["code"] == "tool_prohibition" for w in warnings)
+    prohibition_broken = by_kind[KIND_PROHIBITION]["label"] in (
+        COMPLY_IGNORED, COMPLY_PARTIAL)
+    goal_unmet = by_kind[KIND_GOAL]["label"] in (
+        COMPLY_IGNORED, COMPLY_PARTIAL, COMPLY_PREVENTED)
+    instrumental = bool(tool_prohibition and prohibition_broken
+                        and goal_unmet and pursued)
+    base["instrumental_ambiguity"] = instrumental
+
+    parts = [
+        f"prohibition clauses -> {by_kind[KIND_PROHIBITION]['label']} "
+        f"({by_kind[KIND_PROHIBITION]['n_satisfied']} satisfied / "
+        f"{by_kind[KIND_PROHIBITION]['n_violated']} violated)",
+        f"goal clauses -> {by_kind[KIND_GOAL]['label']} "
+        f"({by_kind[KIND_GOAL]['n_satisfied']} satisfied / "
+        f"{by_kind[KIND_GOAL]['n_violated']} violated)",
+        f"headline {headline} is DERIVED from those two, not measured",
+        f"pursued={pursued} (behaviour, reported separately from outcome so "
+        f"'tried and did not arrive' is not merged with 'did not try')",
+    ]
+    if instrumental:
+        parts.append(
+            "INSTRUMENTAL-ACTION AMBIGUITY: this directive prohibits a TOOL "
+            "while setting a goal that the tool can serve, and the player broke "
+            "the prohibition with the goal still unmet and visibly being "
+            "pursued. The measured case: 'do not explore' broken seven times by "
+            "a player whose own reasoning was 'I need to explore more to find "
+            "the path' to the staircase the same directive told it to reach. A "
+            "check that stays off the model's prose cannot separate 'explored "
+            "instead of obeying' from 'explored in order to obey', so this "
+            "label MAY UNDERSTATE compliance and must not be read as a clean "
+            "violation. The fix is upstream: prohibit outcomes, not tools.")
+    if headline == COMPLY_FOLLOWED and not any(
+            r["result"] == CLAUSE_SATISFIED and r["basis"] == "metric"
+            for r in scored):
+        parts.append(
+            "NO METRIC-BACKED POSITIVE EVIDENCE: this `followed` rests on "
+            "keyword matches and absences only. 'Do not descend' is also "
+            "satisfied by dying on turn 2.")
+    base["rationale"] = " | ".join(parts)
+    return base
+
+
+#: A coarse KIND for a directive, so a control can be paired with the directive
+#: it controls FOR rather than with the run as a whole. The sims' finding: a
+#: `no_descend` directive was indistinguishable from the no-directive control
+#: because the control did not descend either -- a prohibition against
+#: something the model was not going to do measures nothing. Pairing per kind is
+#: what makes that comparison mean anything.
+DIRECTIVE_KIND_RULES = (
+    ("no_descend", KIND_PROHIBITION, _DESCEND_TOKENS),
+    ("descend", KIND_GOAL, _DESCEND_TOKENS),
+    ("no_fight", KIND_PROHIBITION, frozenset({"fight", "fighting", "melee",
+                                              "attack", "attacking", "kill"})),
+    ("fight", KIND_GOAL, frozenset({"fight", "fighting", "melee", "attack",
+                                    "kill", "experience"})),
+    ("no_explore", KIND_PROHIBITION, frozenset({"explore", "exploring",
+                                                "search", "searching"})),
+    ("explore", KIND_GOAL, frozenset({"explore", "exploring", "clear",
+                                      "search", "searching", "rooms"})),
+    ("engrave", KIND_GOAL, frozenset({"engrave", "elbereth"})),
+    ("pray", KIND_GOAL, frozenset({"pray", "praying", "prayer"})),
+    ("ascend_stairs_up", KIND_GOAL, frozenset({"upstairs", "back", "return"})),
+)
+
+
+def classify_directive_kind(directive: str) -> str:
+    """A short tag naming what KIND of instruction this directive is.
+
+    Prohibitions are checked before goals on the same vocabulary, because
+    "do not descend" and "descend" share every content token and only the
+    clause kind separates them.
+    """
+    clauses = split_directive_clauses(directive)
+    if not clauses:
+        return "none" if not (directive or "").strip() else "other"
+    tags = []
+    for tag, kind, vocab in DIRECTIVE_KIND_RULES:
+        for c in clauses:
+            if c["kind"] == kind and (set(c["tokens"]) & vocab):
+                tags.append(tag)
+                break
+    if not tags:
+        return "other"
+    return "+".join(sorted(set(tags)))
 
 
 def calls_from_turns(out_dir) -> list:
@@ -991,8 +1572,39 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
         "tier": cfg.tier,
         "tier_registry_sha256_16": registry_hash(),
         "tier_contract": contract_for(cfg.tier),
+        # TWO ARMS UNDER TWO NAMES, because they are two different things and
+        # one name for both is how an arm gets misreported.
         "arm": cfg.arm,
+        "experiment_arm": cfg.arm,
+        "player_arm": cfg.player_arm,
+        "experiment_arm_meaning": (
+            "matched_restart = THE NULL: N independent attempts from one fixed "
+            "start state, no archive, no selection, no directive, no lessons. "
+            "go_explore = the method." if cfg.arm == ARM_MATCHED_RESTART else
+            "go_explore = the method (archive, selection, directives, "
+            "lessons). Its null is --arm matched_restart at the same N."),
+        "start_checkpoint_id": cfg.start_checkpoint_id or "(archive seed)",
         "game_seed": cfg.game_seed,
+        # RESEED: which of the two stochastic semantics this run used. Recorded
+        # because they are not the same experiment. Default OFF: a restore
+        # resets the engine to the game's original seed and replays no history,
+        # so two restores of one checkpoint continue byte-identically and the
+        # difference between two attempts comes from the model and the
+        # directive rather than from dice -- which is what makes a directive's
+        # effect attributable. ON makes restores genuinely Monte-Carlo, at the
+        # cost of that attributability.
+        "reseed_on_restore": cfg.reseed_on_restore,
+        "reseed_semantics": (
+            "restore re-seeds the RNG from (sha256(rng_seed:checkpoint:attempt)) "
+            "AFTER load, so two attempts from one checkpoint diverge"
+            if cfg.reseed_on_restore else
+            "DETERMINISTIC (default): restore resets to the game's original "
+            "seed and replays no history. Two restores of one checkpoint "
+            "continue byte-identically; the dungeon below a checkpoint is "
+            "regenerated from a stream restarted at position 0, so depths here "
+            "are NOT on the same world an uninterrupted seed-1 run traverses. "
+            "Per-checkpoint outcome spread reflects policy variation only and "
+            "understates real NetHack luck."),
         "commits": {
             "zombie_fix": _git_commit(REPO),
             "engine": _git_commit(engine_repo),
@@ -1019,18 +1631,57 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
                             "milestone_dlvl": cfg.milestone_dlvl,
                             "milestone_dungeon": cfg.milestone_dungeon},
         "directive": {
-            "mode": "none (control)" if cfg.no_directive else "per-attempt",
+            "mode": ("none (run-wide control)" if cfg.no_directive
+                     else "per-attempt"),
+            "paired_control": cfg.paired_control,
+            "paired_control_meaning": (
+                "every directive is ALSO run from the same checkpoint without "
+                "it, so each directive KIND has its own control. A run-wide "
+                "--no-directive average cannot separate a directive that "
+                "changed behaviour from one that prohibited something the "
+                "player was not going to do anyway."),
             "served_as": "first observation, "
                          "[ORCHESTRATOR DIRECTIVE for this attempt: ...]",
-            "compliance_rubric": "keyword over the first "
-                                 f"{DIRECTIVE_WINDOW} tool calls; "
-                                 "surface match, not semantic judgement",
+            "compliance_rubric": RUBRIC_NAME,
+            "compliance_rubric_detail": (
+                f"clauses split into prohibition/goal; each scored "
+                f"satisfied/violated/no-evidence over the first "
+                f"{DIRECTIVE_WINDOW} tool calls, and against harness metrics "
+                f"where the clause names a measured outcome (descent). The "
+                f"single `class` field is DERIVED from the two per-kind labels, "
+                f"never measured directly. A prohibition over a TOOL is "
+                f"lint-warned as unscoreable and the instrumental-action "
+                f"ambiguity is recorded in each attempt's rationale."),
         },
         "orchestrator_session": {
-            "kind": "prime_agent --print --mode json --resume <id>, "
-                    "dedicated PRIME_AGENT_CODING_AGENT_DIR, fixed cwd",
+            "kind": "prime_agent --print [--mode json on the discovery round "
+                    "only] --resume <id>, dedicated "
+                    "PRIME_AGENT_CODING_AGENT_DIR, private TMPDIR, asserted "
+                    "fixed cwd, hard per-round timeout",
             "agent_dir": str(cfg.orchestrator_agent_dir or
                              (cfg.orchestrator_dir / "agent")),
+            # THE THREE HANGS, each named with what was done about it, because
+            # a mitigation nobody can find in the record is a mitigation nobody
+            # can check.
+            "cwd": cfg.orchestrator_cwd,
+            "cwd_policy": ("recorded at round 0 and asserted before every "
+                           "resumed launch; a mismatch raises before any "
+                           "subprocess exists, because --resume from a foreign "
+                           "cwd hangs on an interactive fork confirm"),
+            "tmpdir": str(cfg.orchestrator_tmpdir or ""),
+            "tmpdir_policy": ("private, set on the orchestrator's own env dict "
+                              "and never exported; the shared "
+                              "/tmp/prime-agent-0/daemon.sock was measured at "
+                              "900s of hang against 3.5s with a private one"),
+            "json_mode_policy": cfg.orchestrator_json_mode,
+            "json_mode_policy_why": ("--mode json + --resume was measured "
+                                     "hanging where the identical text --print "
+                                     "call succeeded 30s later, so json mode "
+                                     "runs only on the round that has no "
+                                     "session id to resume; the id, cwd and "
+                                     "per-round usage come from the session "
+                                     "file on every later round"),
+            "round_timeout_s": cfg.orchestrator_timeout_s,
             "ids": [],  # filled in as rounds happen
             # NEVER assumed: set by the two-call probe, or left None with the
             # run saying it did not check.
@@ -1044,6 +1695,20 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
         # Honest statements about what this run is NOT.
         "comparable_to_single_life_balrog": False,
         "prefix_continuity": "text_only",
+        # The distinction that decides whether H4 is testable, kept in the
+        # record so nobody has to re-derive it. "text_only" is about the
+        # MECHANISM, not about delivery: the replayed prefix was measured
+        # arriving byte-identically in the first served observation of a real
+        # resumed rollout (outputs/e16_launchfix/). What is out of reach is
+        # continuity of SESSION -- an inherited conversation and its prompt
+        # cache -- not continuity of CONTENT.
+        "prefix_continuity_detail": (
+            "the checkpoint's conversation is REPLAYED as quoted text in the "
+            "first observation, and that text was verified present in the "
+            "served bytes. H4 is therefore testable as 'lessons + prefix "
+            "CONTENT transfer'; it is NOT a test of session continuity, and "
+            "any claim about inherited conversation state would be false."),
+        "prefix_continuity_verified_in_served_bytes": True,
         "metrics_authored_by": "harness (engine blstats at save time)",
         "orchestrator_text_authored_by": "the orchestrator LM -- displayed and "
                                          "recorded, never measured",
@@ -1077,6 +1742,10 @@ class Orchestrator:
         self._since_advance = 0
         self.opened = False
         self.llm_fallbacks = 0
+        self._pair_counter = 0
+        #: Phrasing warnings raised on the last directive, fed back into the
+        #: next orchestrator round. A lint nobody reads changes nothing.
+        self._last_lint: list = []
 
     # -- setup ------------------------------------------------------------- #
 
@@ -1094,6 +1763,16 @@ class Orchestrator:
         self.cfg.run_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.archive_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+        # THE CWD, RECORDED AT ROUND 0. Everything after this asserts against
+        # it. A --resume from anywhere else takes prime-agent's "fork this
+        # session into current directory?" branch and hangs a non-interactive
+        # driver forever -- which is a silent $700 failure, not an error.
+        self.cfg.orchestrator_cwd = str(self.cfg.orchestrator_dir.resolve())
+        if self.cfg.orchestrator_tmpdir is None:
+            self.cfg.orchestrator_tmpdir = (
+                Path(self.cfg.orchestrator_agent_dir
+                     or (self.cfg.orchestrator_dir / "agent")) / "tmp")
+        Path(self.cfg.orchestrator_tmpdir).mkdir(parents=True, exist_ok=True)
         hashes = install_wiki(self.cfg.wiki_src, self.cfg.wiki_dir)
         # The orchestrator reads the SAME bytes the players are served, through
         # a tiny CLI over the same WikiKB. Two knowledge bases with the same
@@ -1117,6 +1796,13 @@ class Orchestrator:
             sess["compactions"] = self.session.compactions
             sess["continuity_breaks"] = self.session.continuity_breaks
             sess["usage_available"] = self.session.usage_available
+            # The hardening's own record: how often each guard fired.
+            sess["timeouts"] = getattr(self.session, "timeouts", 0)
+            sess["cwd_asserts"] = getattr(self.session, "cwd_asserts", 0)
+            sess["session_cwd_from_header"] = getattr(self.session,
+                                                      "session_cwd", "")
+            sess["cost_usd_reported"] = round(
+                getattr(self.session, "cost_usd_reported", 0.0), 6)
         sess["session_resume_verified"] = self.cfg.session_resume_verified
         atomic_write(self.cfg.provenance_path,
                      json.dumps(prov, indent=2, sort_keys=True) + "\n")
@@ -1182,6 +1868,16 @@ before engaging anything on this floor"). The directive is served to the player
 verbatim at the top of its first observation, and whether it followed you is
 measured -- so make it checkable, not encouraging.
 
+HOW TO PHRASE IT SO IT CAN BE SCORED. Two rules, both learned from directives
+that could not be measured:
+  * PROHIBIT OUTCOMES, NOT TOOLS. "Do not clear the level" is checkable against
+    what the game shows. "Do not explore" is not: the player may have to
+    explore in order to reach the staircase you told it to take, and nothing
+    that stays out of its reasoning can tell that from disobedience.
+  * ALWAYS PAIR A PROHIBITION WITH SOMETHING TO DO. A directive that only
+    forbids is satisfied by dying on turn two, so it cannot distinguish your
+    steering from an attempt that never started.
+
 Reply with a short rationale and then EXACTLY this JSON object on its own line:
 {{"checkpoint": "<id from the table above>", "directive": "<your instruction>", "rationale": "<one line>"}}
 
@@ -1238,7 +1934,12 @@ you intend to do next. Write it for yourself. No JSON this round.
         if self.cfg.selector != "llm" or self.session is None:
             return out
 
-        last = self.attempts[-1] if self.attempts else None
+        # The orchestrator is shown the LAST TREATMENT, not the last attempt.
+        # Under --paired-control the last attempt is a control that was
+        # deliberately given no instruction; feeding "your directive was:
+        # (none)" back as the orchestrator's own last round would teach it that
+        # its directives are not being delivered.
+        last = self._last_treatment()
         last_block = "This is the first launch." if last is None else (
             f"LAST ATTEMPT (#{last['attempt']} from c{last['from_checkpoint']}): "
             f"{last['outcome']}"
@@ -1251,6 +1952,21 @@ you intend to do next. Write it for yourself. No JSON this round.
             f"per-round allowance):\n"
             + self.session.cap_summary(last.get("model_text", {}).get("summary", ""))
         )
+        # THE LINT, FED BACK. A warning that only lands in a log changes
+        # nothing; a warning the orchestrator reads before writing its next
+        # directive changes the directive. This is the cheap half of the
+        # tool-vs-outcome fix -- the expensive half would be a smarter rubric,
+        # and the sims' recommendation was explicitly the cheap half.
+        if self._last_lint:
+            last_block += (
+                "\n\nWARNING about how you phrased that directive -- it "
+                "affects whether compliance can be measured at all:\n"
+                + "\n".join(f"  - {w['message']}" for w in self._last_lint))
+        if self.cfg.paired_control:
+            last_block += (
+                "\n\nNOTE: every directive you write is also run a second time "
+                "from the same checkpoint WITHOUT it, as its own control. Two "
+                "attempts per round is expected; the ledger shows both.")
         prompt = self.ROUND_PROMPT.format(
             round=n, player_usd=self.budget.player_usd,
             orch_usd=self.budget.orchestrator_usd,
@@ -1281,6 +1997,13 @@ you intend to do next. Write it for yourself. No JSON this round.
         if self.cfg.no_directive:
             out["directive"] = ""  # the explicit control mode
         return out
+
+    def _last_treatment(self) -> Optional[dict]:
+        """The last attempt that actually carried a directive, if any."""
+        for a in reversed(self.attempts):
+            if a.get("pair_role") != ROLE_CONTROL:
+                return a
+        return None
 
     def maybe_compact(self) -> Optional[str]:
         """Hand the conversation off to a fresh one when context gets long.
@@ -1332,19 +2055,47 @@ you intend to do next. Write it for yourself. No JSON this round.
             return STOP_MAX_ATTEMPTS
         if not self.budget.can_launch():
             return STOP_BUDGET
+        if not rows:
+            return STOP_EMPTY_ARCHIVE
+        if self.cfg.arm == ARM_MATCHED_RESTART:
+            # NO FRONTIER STOPS IN THE NULL ARM, and this is a correctness
+            # requirement rather than a convenience. matched_restart grows no
+            # archive by construction, so `_since_advance` would reach
+            # `stall_attempts` on schedule and truncate the control at 8
+            # attempts while the method it is being compared against ran 12 --
+            # producing max-of-8 against max-of-12 and calling it a matched
+            # comparison. N is fixed by --max-attempts and by the budget, and
+            # by nothing else.
+            best = max((a["max_dlvl"] for a in self.attempts), default=0)
+            if best >= self.cfg.milestone_dlvl:
+                return STOP_MILESTONE
+            return None
         if self.milestone_row(rows) is not None:
             return STOP_MILESTONE
         if self._since_advance >= self.cfg.stall_attempts:
             return STOP_STALL
-        if not rows:
-            return STOP_EMPTY_ARCHIVE
         return None
 
     # -- one attempt ------------------------------------------------------- #
 
     def run_attempt(self, rows: list) -> dict:
-        """Select, launch, ingest. Returns the attempt record."""
+        """One round of the loop. Returns the LAST attempt record it produced.
+
+        Three shapes, because the arms are genuinely different loops rather
+        than one loop with flags:
+
+        * ``matched_restart``   -- no orchestrator round, no selection, no
+          directive: one attempt from the fixed start state. See
+          :meth:`run_matched_restart_attempt`.
+        * ``go_explore`` + ``--paired-control`` -- one orchestrator round
+          produces one directive, and that directive is run TWICE from the same
+          checkpoint, with and without it.
+        * ``go_explore`` -- the plain case: one round, one attempt.
+        """
         cfg = self.cfg
+        if cfg.arm == ARM_MATCHED_RESTART:
+            return self.run_matched_restart_attempt(rows)
+
         n = len(self.attempts) + 1
         self.maybe_compact()
         choice = self.decide(rows)
@@ -1353,9 +2104,50 @@ you intend to do next. Write it for yourself. No JSON this round.
         _append_jsonl(cfg.selection_path,
                       {"attempt": n, "source": choice["source"],
                        "chosen_id": chosen_id, "directive": directive,
+                       "directive_kind": classify_directive_kind(directive),
+                       "directive_lint": lint_directive(directive),
                        "llm": choice["decision"], **choice["selection"]})
 
         ck_dir = next((r.path for r in rows if r.id == chosen_id), None)
+
+        if not cfg.paired_control:
+            return self._launch_one(rows, chosen_id, ck_dir, directive, choice,
+                                    pair_id=None, pair_role=ROLE_SOLO)
+
+        # PAIRED: the same checkpoint, twice, differing only in the directive.
+        # The treatment goes first so that an interrupted pair leaves the
+        # directive arm complete rather than a control with nothing to control
+        # for -- and `pair_complete` on each record says whether its partner
+        # ever ran, so a truncated run cannot be analysed as if it had.
+        self._pair_counter += 1
+        pair_id = self._pair_counter
+        rec_t = self._launch_one(rows, chosen_id, ck_dir, directive, choice,
+                                 pair_id=pair_id, pair_role=ROLE_TREATMENT)
+        rows_now = self.rows()
+        # The control resumes THE SAME checkpoint. Not the frontier as it now
+        # stands: a control launched from a state the treatment just produced
+        # would be measuring the treatment.
+        ck_dir_c = next((r.path for r in rows_now if r.id == chosen_id), ck_dir)
+        try:
+            self.budget.check()
+        except BudgetExceeded:
+            # An unpartnered treatment is worse than no pair: it enters the
+            # dataset looking like a solo directive attempt. `pairs()` derives
+            # `complete: false` for it from the attempts that exist, and the
+            # summary carries `incomplete_pairs` so a truncated run says so.
+            self.write_summary()
+            raise
+        rec_c = self._launch_one(rows_now, chosen_id, ck_dir_c, "", choice,
+                                 pair_id=pair_id, pair_role=ROLE_CONTROL,
+                                 directive_kind_override=rec_t["directive_kind"])
+        return rec_c
+
+    def _launch_one(self, rows: list, chosen_id, ck_dir, directive: str,
+                    choice: dict, *, pair_id, pair_role: str,
+                    directive_kind_override: Optional[str] = None) -> dict:
+        """Build the context for one attempt, launch it, ingest the result."""
+        cfg = self.cfg
+        n = len(self.attempts) + 1
 
         # HARD budget gate: before the launch, never after. Placed after the
         # orchestrator round on purpose -- that round's tokens are already
@@ -1378,9 +2170,14 @@ you intend to do next. Write it for yourself. No JSON this round.
             archive_dir=cfg.archive_dir, wiki_dir=cfg.wiki_dir,
             out_dir=out_dir, ledger_text=ledger_text,
             fidelity_log=cfg.fidelity_path, game_seed=cfg.game_seed,
-            tier=cfg.tier, arm=cfg.arm, directive=directive,
+            tier=cfg.tier, arm=cfg.player_arm, directive=directive,
+            experiment_arm=cfg.arm, pair_id=pair_id, pair_role=pair_role,
+            directive_kind=(directive_kind_override
+                            if directive_kind_override is not None
+                            else classify_directive_kind(directive)),
+            reseed=self.reseed_for(chosen_id, n),
         )
-        if not directive and not cfg.no_directive:
+        if not directive and not cfg.no_directive and pair_role != ROLE_CONTROL:
             # The contract says every launch carries a directive. An empty one
             # outside --no-directive means the orchestrator failed to produce
             # one, and that must be visible rather than looking like the
@@ -1403,6 +2200,114 @@ you intend to do next. Write it for yourself. No JSON this round.
             result.wall_s = time.time() - t0
         return self.ingest(ctx, result, before, before_front)
 
+    # -- the null arm ------------------------------------------------------- #
+
+    def start_row(self, rows: list) -> Optional[Row]:
+        """The ONE state ``matched_restart`` restarts from, every attempt.
+
+        Named once and never re-selected: the whole content of this arm is that
+        it does not select. Defaults to the archive's seed checkpoint, which is
+        the oldest row -- the entrance state every go_explore run also begins
+        from, so the two arms share a start.
+        """
+        if not rows:
+            return None
+        if self.cfg.start_checkpoint_id:
+            want = str(self.cfg.start_checkpoint_id).lstrip("c")
+            found = next((r for r in rows if r.id == want), None)
+            if found is None:
+                raise ValueError(
+                    f"--start-checkpoint {self.cfg.start_checkpoint_id!r} is "
+                    f"not in the archive (have: "
+                    f"{sorted((r.id for r in rows), key=_id_key)})")
+            return found
+        return min(rows, key=lambda r: (r.created_at, _id_key(r.id)))
+
+    def run_matched_restart_attempt(self, rows: list) -> dict:
+        """One independent restart from the fixed start state.
+
+        NO archive (the player writes its checkpoints into a per-attempt
+        scratch directory that the selector never reads), NO selection, NO
+        directive, NO lessons and NO ledger. What is left is the thing every
+        reader compares the method against in their head: N tries from a good
+        state. It draws on the SAME budget and emits the SAME attempt record
+        shape, which is the only reason the two arms are comparable at all.
+        """
+        cfg = self.cfg
+        n = len(self.attempts) + 1
+        start = self.start_row(rows)
+        if start is None:
+            raise ValueError("matched_restart needs a seeded archive to name a "
+                             "start state")
+        self.budget.check()
+
+        out_dir = cfg.run_dir / "attempts" / f"a{n:03d}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # A THROWAWAY archive per attempt. The player's `save` skill still
+        # works -- removing it would change the tool surface and make the arms
+        # differ on a second axis -- but nothing it writes is ever selected
+        # from, read back, or allowed to grow a frontier. That is what "no
+        # archive" means operationally.
+        scratch = out_dir / "scratch_archive"
+        scratch.mkdir(parents=True, exist_ok=True)
+
+        selection_record = {
+            "attempt": n, "source": "matched_restart_fixed_start",
+            "chosen_id": start.id, "directive": "", "directive_kind": "none",
+            "directive_lint": [], "llm": None,
+            "reason": ("no selection: matched_restart restarts from one fixed "
+                       "state by construction"),
+            "candidates": [], "n_rows": len(rows),
+        }
+        _append_jsonl(cfg.selection_path, selection_record)
+
+        ctx = PlayerContext(
+            attempt=n, checkpoint_dir=start.path, checkpoint_id=start.id,
+            archive_dir=scratch, wiki_dir=cfg.wiki_dir, out_dir=out_dir,
+            ledger_text="", fidelity_log=cfg.fidelity_path,
+            game_seed=cfg.game_seed, tier=cfg.tier, arm=cfg.player_arm,
+            directive="", experiment_arm=ARM_MATCHED_RESTART,
+            pair_id=None, pair_role=ROLE_SOLO, directive_kind="none",
+            reseed=self.reseed_for(start.id, n),
+        )
+        atomic_write(out_dir / "ledger_served.txt", "")
+        atomic_write(out_dir / "directive_served.txt", "")
+        self._decision_of_attempt = {"source": "matched_restart_fixed_start",
+                                     "decision": None}
+
+        before = {p.name for p in checkpoint_list(cfg.archive_dir)}
+        before_front = self.frontier_ids(rows)
+        t0 = time.time()
+        try:
+            result = self.launcher(ctx)
+        except Exception as exc:
+            result = PlayerResult(stop_condition="error",
+                                  error=f"{type(exc).__name__}: {exc}",
+                                  wall_s=time.time() - t0)
+        if not result.wall_s:
+            result.wall_s = time.time() - t0
+        return self.ingest(ctx, result, before, before_front)
+
+    # -- reseeding ---------------------------------------------------------- #
+
+    def reseed_for(self, checkpoint_id, attempt: int) -> Optional[tuple]:
+        """``(core, disp)`` for this attempt's restore, or None (the default).
+
+        Derived from the run's RNG seed, the checkpoint and the attempt index,
+        so it is reproducible from provenance and so two attempts from one
+        checkpoint get DIFFERENT dice -- which is the entire point of asking
+        for it. Returns None unless ``--reseed`` was passed, and the None is
+        what the launcher turns into "do not reseed at all" rather than into
+        "reseed with zero".
+        """
+        if not self.cfg.reseed_on_restore:
+            return None
+        key = f"{self.cfg.rng_seed}:{checkpoint_id}:{attempt}".encode()
+        digest = hashlib.sha256(key).digest()
+        core = int.from_bytes(digest[:4], "big") or 1
+        disp = int.from_bytes(digest[4:8], "big") or 1
+        return (core, disp)
+
     # -- ingestion --------------------------------------------------------- #
 
     def ingest(self, ctx: PlayerContext, result: PlayerResult,
@@ -1421,7 +2326,27 @@ you intend to do next. Write it for yourself. No JSON this round.
         # it: the next orchestrator round reads "told it X -> it did Y" out of
         # the checkpoint's own lessons.md as well as out of the ledger.
         calls = calls_from_turns(ctx.out_dir) or (result.raw or {}).get("calls") or []
-        compliance = classify_directive_compliance(ctx.directive, calls, outcome)
+        # Harness metrics travel into the rubric so an OUTCOME clause is scored
+        # against what the engine measured, not against whether the model typed
+        # a matching word. `start_dlvl` comes from the checkpoint's own meta,
+        # which is harness-computed, so "descend" means "deeper than where this
+        # attempt started" rather than "deeper than level 1".
+        metrics = dict((result.raw or {}).get("metrics") or {})
+        metrics.setdefault("max_dlvl", int(result.max_dlvl or 0))
+        metrics.setdefault("died", bool(result.died))
+        start_dlvl = None
+        if ctx.checkpoint_dir is not None:
+            try:
+                start_dlvl = int(checkpoint_meta(ctx.checkpoint_dir).get("dlvl") or 0)
+            except Exception:
+                start_dlvl = None
+        if start_dlvl is not None:
+            metrics.setdefault("start_dlvl", start_dlvl)
+        compliance = classify_directive_compliance(ctx.directive, calls, outcome,
+                                                   metrics=metrics)
+        lint = lint_directive(ctx.directive)
+        if ctx.pair_role != ROLE_CONTROL:
+            self._last_lint = lint
 
         # New checkpoints the player wrote. Discovered by diffing the archive,
         # not by trusting a count the player reported.
@@ -1431,8 +2356,17 @@ you intend to do next. Write it for yourself. No JSON this round.
             self._stamp_new_checkpoint(p, ctx, result)
 
         # attempts_from++ on the source checkpoint, atomically.
+        #
+        # NO LESSONS IN THE NULL ARM, and this is the line that makes
+        # "no lessons" true rather than intended: matched_restart bumps the
+        # counter (an honest record of how many attempts started there) but
+        # writes nothing back into lessons.md, so its N attempts never learn
+        # from each other. A control that accumulated lessons would be a weaker
+        # version of the method, not a null.
         if ctx.checkpoint_dir is not None:
             self._bump_attempts_from(ctx.checkpoint_dir)
+        if ctx.checkpoint_dir is not None \
+                and ctx.experiment_arm != ARM_MATCHED_RESTART:
             heading = (f"attempt {ctx.attempt} ({outcome}"
                        + (f":{censor_reason}" if censor_reason else "") + ")")
             body = (f"DIRECTIVE GIVEN: {ctx.directive or '(none)'}\n"
@@ -1470,6 +2404,19 @@ you intend to do next. Write it for yourself. No JSON this round.
             "from_checkpoint": ctx.checkpoint_id,
             "directive": ctx.directive,
             "directive_compliance": compliance,
+            # PER-KIND PAIRING. `pair_id` joins a directive to its own control;
+            # `directive_kind` is what makes the join analysable per kind rather
+            # than only per run. Whether a pair is COMPLETE is derived in
+            # `pairs()` from the attempts actually present, and never stamped on
+            # the record here -- a record written when its partner has not run
+            # yet cannot honestly claim either way, and an attempts.jsonl line
+            # that had to be rewritten later would stop being append-only.
+            "experiment_arm": ctx.experiment_arm,
+            "pair_id": ctx.pair_id,
+            "pair_role": ctx.pair_role,
+            "directive_kind": ctx.directive_kind,
+            "directive_lint": lint,
+            "reseed": (list(ctx.reseed) if ctx.reseed else None),
             "selection_source": choice.get("source"),
             "orchestrator_decision": choice.get("decision"),
             "outcome": outcome,
@@ -1558,6 +2505,87 @@ you intend to do next. Write it for yourself. No JSON this round.
             })
         return out
 
+    def pairs(self) -> dict:
+        """Directive/control pairs, grouped, with per-KIND aggregates.
+
+        THIS IS THE ARTIFACT THE PER-KIND CONTROL EXISTS FOR. A run-level
+        "directives vs no directives" average pooled a `descend_fast` directive
+        that inverted the player's first decision with a `no_descend` directive
+        that was indistinguishable from doing nothing -- because the control
+        did not descend either. The pooled number said "directives work" while
+        half the directive kinds were untested. Grouping by
+        ``directive_kind`` and pairing each directive with ITS OWN control is
+        what makes "this kind of instruction changes behaviour" answerable.
+
+        ``complete`` is derived here rather than stamped on the attempt record:
+        a treatment whose control never ran is not a solo directive attempt and
+        must not be analysed as one.
+        """
+        groups: dict = {}
+        for a in self.attempts:
+            pid = a.get("pair_id")
+            if pid is None:
+                continue
+            slot = groups.setdefault(pid, {"pair_id": pid, "treatment": None,
+                                           "control": None})
+            role = a.get("pair_role")
+            if role in (ROLE_TREATMENT, ROLE_CONTROL):
+                slot[role] = {
+                    "attempt": a["attempt"],
+                    "from_checkpoint": a["from_checkpoint"],
+                    "directive": a.get("directive", ""),
+                    "directive_kind": a.get("directive_kind"),
+                    "compliance": (a.get("directive_compliance") or {}).get("class"),
+                    "by_clause_kind": (a.get("directive_compliance") or {}).get(
+                        "by_clause_kind"),
+                    "outcome": a["outcome"], "max_dlvl": a["max_dlvl"],
+                    "max_xl": a["max_xl"], "calls": a["calls"],
+                    "spend_usd": a["spend_usd"],
+                }
+        by_kind: dict = {}
+        out_pairs = []
+        for pid in sorted(groups):
+            slot = groups[pid]
+            slot["complete"] = bool(slot["treatment"] and slot["control"])
+            kind = (slot["treatment"] or slot["control"] or {}).get(
+                "directive_kind") or "unknown"
+            slot["directive_kind"] = kind
+            # Same start state, one instruction apart: the delta IS the
+            # comparison. Reported only for complete pairs, because a delta
+            # against a control that never ran is not a delta.
+            if slot["complete"]:
+                slot["delta"] = {
+                    "max_dlvl": slot["treatment"]["max_dlvl"] - slot["control"]["max_dlvl"],
+                    "max_xl": slot["treatment"]["max_xl"] - slot["control"]["max_xl"],
+                    "calls": slot["treatment"]["calls"] - slot["control"]["calls"],
+                }
+                k = by_kind.setdefault(kind, {"pairs": 0, "sum_dlvl_delta": 0,
+                                              "sum_xl_delta": 0,
+                                              "treatment_compliance": {}})
+                k["pairs"] += 1
+                k["sum_dlvl_delta"] += slot["delta"]["max_dlvl"]
+                k["sum_xl_delta"] += slot["delta"]["max_xl"]
+                cls = slot["treatment"]["compliance"]
+                k["treatment_compliance"][cls] = \
+                    k["treatment_compliance"].get(cls, 0) + 1
+            out_pairs.append(slot)
+        for k in by_kind.values():
+            k["mean_dlvl_delta"] = round(k["sum_dlvl_delta"] / k["pairs"], 3)
+            k["mean_xl_delta"] = round(k["sum_xl_delta"] / k["pairs"], 3)
+        return {
+            "enabled": bool(self.cfg.paired_control),
+            "pairs": out_pairs,
+            "complete_pairs": sum(1 for p in out_pairs if p["complete"]),
+            "incomplete_pairs": [p["pair_id"] for p in out_pairs
+                                 if not p["complete"]],
+            "by_directive_kind": by_kind,
+            "note": ("Each directive is paired with its OWN no-directive "
+                     "control from the SAME checkpoint. A run-wide "
+                     "--no-directive average cannot tell a directive that "
+                     "changed behaviour from one that prohibited something the "
+                     "player was never going to do."),
+        }
+
     def summary(self) -> dict:
         rows = self.rows()
         best = max(rows, key=lambda r: r.key) if rows else None
@@ -1565,6 +2593,9 @@ you intend to do next. Write it for yourself. No JSON this round.
         censored = sum(1 for a in self.attempts if a["outcome"] == OUTCOME_CENSORED)
         out = {
             "run_dir": str(self.cfg.run_dir),
+            "experiment_arm": self.cfg.arm,
+            "player_arm": self.cfg.player_arm,
+            "reseed_on_restore": self.cfg.reseed_on_restore,
             "attempts": len(self.attempts),
             "attempts_died": died,
             "attempts_censored": censored,
@@ -1588,6 +2619,29 @@ you intend to do next. Write it for yourself. No JSON this round.
             "directive_compliance": _count(
                 (a.get("directive_compliance") or {}).get("class", COMPLY_UNKNOWN)
                 for a in self.attempts),
+            # PER CLAUSE KIND, beside the headline rather than instead of it.
+            # The headline is derived; these are what it was derived from, and
+            # a run whose prohibitions were all obeyed while every goal was
+            # prevented is a different result from one where both failed.
+            "compliance_by_clause_kind": {
+                kind: _count(
+                    ((a.get("directive_compliance") or {})
+                     .get("by_clause_kind") or {}).get(kind, {}).get("label", "n/a")
+                    for a in self.attempts)
+                for kind in (KIND_PROHIBITION, KIND_GOAL)
+            },
+            "directive_kinds": _count(a.get("directive_kind") or "none"
+                                      for a in self.attempts),
+            # The phrasing lint, aggregated. A run whose directives were mostly
+            # tool-prohibitions has a compliance column that cannot be read.
+            "directive_lint": _count(
+                w["code"] for a in self.attempts
+                for w in (a.get("directive_lint") or [])),
+            "instrumental_ambiguities": sum(
+                1 for a in self.attempts
+                if (a.get("directive_compliance") or {}).get(
+                    "instrumental_ambiguity")),
+            "matched_pairs": self.pairs(),
             "selection_sources": _count(a.get("selection_source") or "scripted"
                                         for a in self.attempts),
             "wall_clock_s": round(time.time() - self.started_at, 1),
@@ -1719,6 +2773,12 @@ class SubprocessPlayer:
         }
         if ctx.checkpoint_dir is not None:
             e16["resume_checkpoint"] = str(ctx.checkpoint_dir)
+        if ctx.reseed is not None:
+            # Only ever present when --reseed was asked for, so a run that did
+            # not ask for it cannot acquire it through a stale default. Sent as
+            # a JSON STRING because launch_cell's E16_ARGS whitelist requires
+            # scalars (env_args reach the eval CLI as dotted scalars anyway).
+            e16["reseed"] = json.dumps([int(ctx.reseed[0]), int(ctx.reseed[1])])
         env = dict(self.env or os.environ)
         env.update({
             "TOOL_TIER": ctx.tier,
@@ -1943,7 +3003,21 @@ def main(argv=None) -> int:
     ap.add_argument("run_dir")
     ap.add_argument("--wiki-src", default="/root/nld/e15-wiki/configs/continual/wiki")
     ap.add_argument("--tier", default="e16_gewiki")
-    ap.add_argument("--arm", default="prime_agent")
+    ap.add_argument("--arm", choices=ARMS, default=ARM_GO_EXPLORE,
+                    help="THE EXPERIMENT ARM. go_explore = the method. "
+                         "matched_restart = THE NULL: N independent attempts "
+                         "from one fixed start state, no archive, no "
+                         "selection, no directives, no lessons -- the "
+                         "multi-restart baseline the method must beat before "
+                         "any of its numbers mean anything.")
+    ap.add_argument("--player-arm", default="prime_agent",
+                    help="The LAUNCHER's arm (which scaffold launch_cell.sh "
+                         "runs). Distinct from --arm, which names the "
+                         "experiment condition.")
+    ap.add_argument("--start-checkpoint", default="",
+                    help="matched_restart only: the ONE checkpoint every "
+                         "attempt restarts from. Default: the archive's seed "
+                         "checkpoint.")
     ap.add_argument("--game-seed", type=int, default=1)
     ap.add_argument("--rng-seed", type=int, default=20260828)
     ap.add_argument("--w-balrog", type=float, default=1.0)
@@ -1959,10 +3033,41 @@ def main(argv=None) -> int:
                     help="llm = a persistent Prime Agent session decides "
                          "(primary); scripted = the softmax selector (ablation).")
     ap.add_argument("--no-directive", action="store_true",
-                    help="CONTROL MODE: launch players with no directive. Same "
-                         "archive, same selection, no instructions.")
+                    help="RUN-WIDE CONTROL: launch every player with no "
+                         "directive. Same archive, same selection, no "
+                         "instructions. See --paired-control for the per-kind "
+                         "version, which is the one the sims showed is needed.")
+    ap.add_argument("--paired-control", action="store_true",
+                    help="PER-DIRECTIVE-KIND CONTROL: run every directive "
+                         "TWICE from the same checkpoint, with and without it. "
+                         "Doubles the attempts per directive and is the only "
+                         "way 'this KIND of directive changed behaviour' is "
+                         "answerable -- a run-wide control cannot tell a "
+                         "directive that steered from one that prohibited "
+                         "something the player was not going to do anyway.")
+    ap.add_argument("--reseed", action="store_true",
+                    help="Reseed the engine's RNG after every restore, so two "
+                         "attempts from one checkpoint get different dice. OFF "
+                         "by default and deliberately so: with the dice fixed, "
+                         "the difference between two attempts comes from the "
+                         "model and the directive, which is what makes a "
+                         "directive's effect attributable. Recorded in "
+                         "provenance either way.")
     ap.add_argument("--orch-model", default="")
     ap.add_argument("--orch-agent-dir", default="")
+    ap.add_argument("--orch-tmpdir", default="",
+                    help="PRIVATE TMPDIR for the unsandboxed orchestrator. "
+                         "Default: <agent-dir>/tmp. Never exported to players.")
+    ap.add_argument("--orch-json-mode", default="discovery_only",
+                    choices=("discovery_only", "always", "never"),
+                    help="When --mode json is passed. Default discovery_only: "
+                         "json mode + --resume was measured hanging where the "
+                         "identical text --print call succeeded.")
+    ap.add_argument("--orch-timeout", type=float, default=900.0,
+                    help="HARD per-round deadline for one orchestrator call. "
+                         "Its process group is killed at the deadline and the "
+                         "round is recorded as an error, so a hang can never "
+                         "consume the run's wall clock.")
     ap.add_argument("--seed-archive", action="store_true",
                     help="Write c1 (a fresh game at the entrance) and exit.")
     ap.add_argument("--prepare-only", action="store_true",
@@ -1976,17 +3081,35 @@ def main(argv=None) -> int:
     run_dir = Path(args.run_dir).resolve()
     cfg = OrchestratorConfig(
         run_dir=run_dir, wiki_src=Path(args.wiki_src),
-        tier=args.tier, arm=args.arm, selector=args.selector,
+        tier=args.tier, arm=args.arm, player_arm=args.player_arm,
+        start_checkpoint_id=args.start_checkpoint, selector=args.selector,
         game_seed=args.game_seed,
         rng_seed=args.rng_seed, w_balrog=args.w_balrog,
         w_novelty=args.w_novelty, w_attempts=args.w_attempts,
         temperature=args.temperature, budget_ceiling_usd=args.budget,
         min_headroom_usd=args.min_headroom, max_attempts=args.max_attempts,
         stall_attempts=args.stall_attempts, no_directive=args.no_directive,
+        paired_control=args.paired_control,
+        reseed_on_restore=args.reseed,
         orchestrator_model=args.orch_model,
+        orchestrator_timeout_s=args.orch_timeout,
+        orchestrator_json_mode=args.orch_json_mode,
         orchestrator_agent_dir=(Path(args.orch_agent_dir) if args.orch_agent_dir
                                 else run_dir / "orchestrator" / "agent"),
+        orchestrator_tmpdir=(Path(args.orch_tmpdir) if args.orch_tmpdir
+                             else None),
     )
+    # THE NULL ARM HAS NO ORCHESTRATOR. Not "an orchestrator that is told to do
+    # nothing" -- no session at all, no selection, no directive. An LM in the
+    # loop that merely refrained from steering would still be a treatment.
+    if cfg.arm == ARM_MATCHED_RESTART:
+        if cfg.selector == "llm":
+            print("[e16] --arm matched_restart: forcing --selector scripted "
+                  "and disabling directives (the null arm has no orchestrator)",
+                  file=sys.stderr)
+        cfg.selector = "scripted"
+        cfg.no_directive = True
+        cfg.paired_control = False
     session = build_session(cfg) if cfg.selector == "llm" else None
     orch = Orchestrator(cfg, SubprocessPlayer(), session=session)
     prov = orch.prepare()
@@ -2027,6 +3150,8 @@ def build_session(cfg: OrchestratorConfig):
     agent_dir = cfg.orchestrator_agent_dir or (cfg.orchestrator_dir / "agent")
     cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
     seed_agent_dir(agent_dir)
+    tmpdir = cfg.orchestrator_tmpdir or (Path(agent_dir) / "tmp")
+    cfg.orchestrator_tmpdir = Path(tmpdir)
     return PrimeAgentSession(
         work_dir=cfg.orchestrator_dir, agent_dir=agent_dir,
         log_path=cfg.orchestrator_log,
@@ -2034,6 +3159,8 @@ def build_session(cfg: OrchestratorConfig):
         timeout_s=cfg.orchestrator_timeout_s,
         summary_cap=cfg.orchestrator_summary_cap,
         context_chars=cfg.orchestrator_context_chars,
+        tmpdir=tmpdir,
+        json_mode_policy=cfg.orchestrator_json_mode,
     )
 
 

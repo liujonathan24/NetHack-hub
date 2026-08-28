@@ -669,7 +669,7 @@ def checkpoint_list(root) -> list:
 
 
 def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
-                       audit: bool = True, fidelity_log=None):
+                       audit: bool = True, fidelity_log=None, reseed=None):
     """Rebuild a playable env from a checkpoint. Returns ``(env, meta)``.
 
     Works in a process that has never seen the original game: everything comes
@@ -684,6 +684,24 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     installing them earlier gets the level-1 file overwritten with the
     checkpoint's floor, and returning to level 1 later trips ``getlev``'s dlvl
     header check -> ``trickery()`` -> ``done(TRICKED)``.
+
+    ``reseed`` is ``(core, disp)`` to reseed the gameplay RNG with AFTER the
+    restore, or ``None`` -- the default and the current semantics.
+
+    WHAT THE DEFAULT ACTUALLY IS, since it is easy to assume the opposite. A
+    restore resets the engine to the game's ORIGINAL seed and replays no
+    history, so the random stream restarts at position 0. Measured
+    consequences: two restores of one checkpoint continue byte-identically
+    (restoring does NOT reroll the dice), and every level not yet visited when
+    the checkpoint was written is regenerated from a different point in the
+    stream than an uninterrupted run would have reached. Restore-and-retry is
+    therefore replay of a fixed stream, not resampling.
+
+    Passing ``reseed`` calls :meth:`RawEngine.reseed` after the load -- the
+    order matters, because the snapshot captures the RNG and a reseed before
+    the load would be overwritten by it -- which makes two restores of one
+    checkpoint diverge. Neither semantics is more correct; they are different
+    experiments, and the caller must say which it wanted.
 
     Raises :class:`CheckpointIntegrityError` if the bundle is malformed or if
     the resumed game's dungeon has holes.
@@ -720,6 +738,12 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     raw.load_level_raw(sections["level"])      # LEVEL first
     raw.load_player_raw(sections["player"])    # THEN player
     raw.load_levelfiles(sections["levelfiles"])  # THEN the rest of the dungeon
+    if reseed is not None:
+        # AFTER the load, never before: the snapshot carries the RNG, so a
+        # reseed that ran first would simply be restored over. Same ordering
+        # EngineEnv.branch() uses for the same reason.
+        core_new, disp_new = int(reseed[0]), int(reseed[1])
+        raw.reseed(core=core_new, disp=disp_new)
     raw.step(18)                               # single ctrl-R render
     assert_dungeon_on_disk(engine_env, where=f"checkpoint_restore({directory})")
 
@@ -783,7 +807,12 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     # the audit is a property of THIS resume, not of the checkpoint, and
     # meta.json must stay the checkpoint's identity.
     if record is not None:
+        record["reseeded_with"] = list(reseed) if reseed is not None else None
         meta["restore_fidelity"] = record
+    # Also on the returned meta directly, because restore_fidelity.jsonl is
+    # written above and a reader holding only `meta` still has to be able to
+    # say which stochastic semantics this resume ran under.
+    meta["restored_with_reseed"] = list(reseed) if reseed is not None else None
     return env, meta
 
 

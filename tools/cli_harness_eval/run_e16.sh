@@ -4,6 +4,12 @@
 #   run_e16.sh <RUN_DIR> [SUBCOMMAND]
 #
 # Subcommands:
+#   preflight the three silent hangs, exercised for real against a stub
+#             prime-agent: a --resume from a foreign cwd, a call that blocks
+#             past its deadline, the shared daemon socket, and json mode +
+#             --resume. NO model calls, no spend. `run` refuses to start until
+#             this passes, because each of those three fails by HANGING rather
+#             than erroring, and a hang on this budget is the whole run.
 #   prepare   create the run tree, copy the wiki in, write provenance.json.
 #             NO model calls. Safe to run any number of times.
 #   seed      write checkpoint c1 (a fresh game at the dungeon entrance on the
@@ -43,8 +49,54 @@
 #   E16_SELECTOR        llm (default, the design) | scripted (the ablation).
 #   E16_BUDGET          USD ceiling for this run. Hard: checked before every
 #                       launch. Default 385 (the design's ~55% of $700).
-#   E16_NO_DIRECTIVE=1  the control arm: same archive, same selection, no
+#   E16_NO_DIRECTIVE=1  run-wide control: same archive, same selection, no
 #                       instructions to players.
+#   E16_PAIRED_CONTROL=1
+#                       PER-DIRECTIVE-KIND control: run every directive twice
+#                       from the same checkpoint, with and without it. This is
+#                       the one the sims showed is necessary -- a run-wide
+#                       control cannot tell a directive that changed behaviour
+#                       from one that prohibited something the player was never
+#                       going to do. (`descend_fast` inverted the first
+#                       decision causally; `no_descend` was indistinguishable
+#                       from the control, because the control did not descend
+#                       either.)
+#   E16_EXP_ARM         go_explore (default, the method)
+#                     | matched_restart (THE NULL: N independent attempts from
+#                       ONE fixed start state, no archive, no selection, no
+#                       directives, no lessons). Every other control here is an
+#                       ablation WITHIN the method and is beaten by "we got N
+#                       tries instead of one"; the headline number is a running
+#                       maximum over attempts and cannot fall. Without this arm
+#                       at matched N there is no reading under which the method
+#                       could have failed.
+#   E16_PLAYER_ARM      the LAUNCHER's arm (default prime_agent). Distinct from
+#                       E16_EXP_ARM, which names the experiment condition.
+#   E16_START_CHECKPOINT
+#                       matched_restart only: the fixed state every attempt
+#                       restarts from. Default: the archive's seed checkpoint.
+#   E16_RESEED=1        reseed the engine RNG after every restore. OFF by
+#                       default, deliberately: a restore otherwise resets to
+#                       the game's original seed and replays no history, so two
+#                       attempts from one checkpoint differ only in what the
+#                       model chose -- which is what makes a directive's effect
+#                       attributable to the directive rather than to dice.
+#                       Recorded in provenance.json either way.
+#   E16_ORCH_TMPDIR     the orchestrator's PRIVATE TMPDIR (default
+#                       <agent-dir>/tmp). The unsandboxed orchestrator
+#                       otherwise shares /tmp/prime-agent-0/daemon.sock with
+#                       every prime-agent on the box: measured 900s of hang
+#                       against 3.5s with a private one. Set on the
+#                       orchestrator's own env only -- see the DO NOT export
+#                       note below.
+#   E16_ORCH_JSON_MODE  discovery_only (default) | always | never. json mode +
+#                       --resume was measured hanging where the identical text
+#                       --print call answered 30s later, so json mode runs only
+#                       on the round that has no session id to resume.
+#   E16_ORCH_TIMEOUT    hard per-round deadline in seconds (default 900). The
+#                       call's whole process group is killed at the deadline
+#                       and the round is recorded as an error, so no
+#                       orchestrator call can consume the run's wall clock.
 #
 # DO NOT export TMPDIR from here. It leaks into the sandboxed rollouts, where
 # the path does not exist, and pointing it at a bind-mounted directory
@@ -77,11 +129,26 @@ WIKI_SRC="${E16_WIKI_SRC:-/root/nld/e15-wiki/configs/continual/wiki}"
 
 ORCH="${REPO}/tools/cli_harness_eval/e16_orchestrator.py"
 
+PREFLIGHT="${REPO}/tools/cli_harness_eval/e16_preflight.py"
+
+# E16_ARM used to name the LAUNCHER's arm. It now names the EXPERIMENT arm, and
+# the launcher's is E16_PLAYER_ARM. An old E16_ARM=prime_agent would silently
+# select an arm that does not exist, so it is caught rather than translated:
+# a launch is not the place to guess which of two things someone meant.
+if [ -n "${E16_ARM:-}" ]; then
+  echo "run_e16: E16_ARM is no longer the launcher's arm." >&2
+  echo "  E16_EXP_ARM    = go_explore | matched_restart  (the experiment arm)" >&2
+  echo "  E16_PLAYER_ARM = prime_agent | claude_code ... (the launcher's arm)" >&2
+  echo "  You set E16_ARM=${E16_ARM}. Say which you meant." >&2
+  exit 2
+fi
+
 ARGS=(
   "$RUN_DIR"
   --wiki-src "$WIKI_SRC"
   --tier "${E16_TIER:-e16_gewiki}"
-  --arm "${E16_ARM:-prime_agent}"
+  --arm "${E16_EXP_ARM:-go_explore}"
+  --player-arm "${E16_PLAYER_ARM:-prime_agent}"
   --selector "${E16_SELECTOR:-llm}"
   --game-seed "${E16_SEED:-1}"
   --rng-seed "${E16_RNG_SEED:-20260828}"
@@ -89,12 +156,19 @@ ARGS=(
   --min-headroom "${E16_MIN_HEADROOM:-5}"
   --max-attempts "${E16_MAX_ATTEMPTS:-200}"
   --stall-attempts "${E16_STALL:-8}"
+  --orch-json-mode "${E16_ORCH_JSON_MODE:-discovery_only}"
+  --orch-timeout "${E16_ORCH_TIMEOUT:-900}"
 )
 [ -n "${ORCH_MODEL:-}" ] && ARGS+=(--orch-model "$ORCH_MODEL")
 [ -n "${E16_ORCH_AGENT_DIR:-}" ] && ARGS+=(--orch-agent-dir "$E16_ORCH_AGENT_DIR")
+[ -n "${E16_ORCH_TMPDIR:-}" ] && ARGS+=(--orch-tmpdir "$E16_ORCH_TMPDIR")
+[ -n "${E16_START_CHECKPOINT:-}" ] && ARGS+=(--start-checkpoint "$E16_START_CHECKPOINT")
 [ "${E16_NO_DIRECTIVE:-0}" = "1" ] && ARGS+=(--no-directive)
+[ "${E16_PAIRED_CONTROL:-0}" = "1" ] && ARGS+=(--paired-control)
+[ "${E16_RESEED:-0}" = "1" ] && ARGS+=(--reseed)
 
 case "$CMD" in
+  preflight) exec "$PY_BIN" "$PREFLIGHT" ;;
   prepare) exec "$PY_BIN" "$ORCH" "${ARGS[@]}" --prepare-only ;;
   seed)    exec "$PY_BIN" "$ORCH" "${ARGS[@]}" --seed-archive ;;
   probe)
@@ -106,13 +180,30 @@ case "$CMD" in
       "${RUN_DIR}/summary.json"
     ;;
   run)
+    # THE HANG GATE, FIRST. Three of E16's known failure modes do not error --
+    # they hang, and a hang on an uncapped player behind a $385 ceiling is the
+    # run. The preflight exercises all three against a stub binary for nothing,
+    # so there is no argument for skipping it before a real launch.
+    if [ "${E16_SKIP_PREFLIGHT:-0}" != "1" ]; then
+      if ! "$PY_BIN" "$PREFLIGHT"; then
+        echo "run_e16: PREFLIGHT FAILED -- refusing to launch." >&2
+        echo "  Every check above runs with no inference; a failure means one" >&2
+        echo "  of the three silent-hang classes is live in this checkout." >&2
+        echo "  (E16_SKIP_PREFLIGHT=1 overrides, knowing that.)" >&2
+        exit 4
+      fi
+    fi
     # REFUSE TO SPEND THE BUDGET ON AN UNVERIFIED ASSUMPTION. The whole point
     # of the LLM orchestrator is that its conversation accumulates across
     # rounds; if `--resume` does not actually carry history under `--print`,
     # the run is N independent calls wearing a session's name and its headline
     # claim is false. `probe` settles it for two sentences of inference. The
     # scripted arm needs no session and is exempt.
-    if [ "${E16_SELECTOR:-llm}" = "llm" ] && [ "${E16_SKIP_PROBE:-0}" != "1" ]; then
+    # matched_restart has NO orchestrator session by construction (the null arm
+    # is not "an LM told to sit still"), so the resume probe does not apply.
+    if [ "${E16_SELECTOR:-llm}" = "llm" ] \
+       && [ "${E16_EXP_ARM:-go_explore}" != "matched_restart" ] \
+       && [ "${E16_SKIP_PROBE:-0}" != "1" ]; then
       VERIFIED="$("$PY_BIN" - "$RUN_DIR" <<'PYV'
 import json, pathlib, sys
 p = pathlib.Path(sys.argv[1]) / "provenance.json"

@@ -72,6 +72,32 @@ CONVERSATION_PREFIX_CHARS = 1200
 CONVERSATION_PREFIX_ATTR = "_conversation_prefix"
 
 
+def _parse_reseed(value):
+    """``[core, disp]`` from an env_arg, or ``None``. Strict about the None.
+
+    env_args reach this env through the eval CLI as dotted-scalar STRINGS, so a
+    reseed pair can arrive as ``"[12, 34]"`` or as two strings, and an absent
+    one can arrive as ``""`` or ``"null"``. Anything that is not a usable pair
+    becomes ``None`` -- "do not reseed at all" -- and NEVER ``(0, 0)``: a
+    silently-zero reseed would be a third stochastic semantics that no
+    provenance field describes.
+    """
+    if value is None or value == "" or value == "null":
+        return None
+    if isinstance(value, str):
+        import json as _json
+        try:
+            value = _json.loads(value)
+        except _json.JSONDecodeError:
+            parts = [p for p in re.split(r"[,\s]+", value.strip("[]() ")) if p]
+            value = parts
+    try:
+        core, disp = list(value)[:2]
+        return (int(core), int(disp))
+    except (TypeError, ValueError):
+        return None
+
+
 def _append_conversation_prefix(state, env, assistant_msg, tool_calls, obs_text):
     """Append one turn to the transcript a checkpoint's ``prefix.jsonl`` gets.
 
@@ -613,6 +639,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         directive: Optional[str] = None,
         # Where the restore-fidelity audit records are appended (JSONL).
         fidelity_log: Optional[str] = None,
+        # `[core, disp]` to reseed the gameplay RNG with AFTER the restore, or
+        # None for the deterministic default. Off unless the orchestrator was
+        # run with --reseed: a restore otherwise resets to the game's original
+        # seed and replays no history, so two attempts from one checkpoint
+        # differ only in what the model chose to do -- which is what makes a
+        # directive's effect attributable to the directive.
+        reseed: Optional[list] = None,
         **kwargs,
     ):
         self.interface = interface
@@ -625,6 +658,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._ledger_text = ledger_text or None
         self._directive = directive or None
         self._fidelity_log = fidelity_log or None
+        self._reseed = _parse_reseed(reseed)
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         # env_args flow through the eval CLI as dotted-scalar STRINGS, so
@@ -823,6 +857,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             env, ck_meta = checkpoint_restore(
                 self._resume_checkpoint, env=env,
                 fidelity_log=self._fidelity_log,
+                reseed=self._reseed,
             )
             # The restored frame, published by checkpoint_restore. Falling back
             # to the reset's obs would show the level-1 starting room under the

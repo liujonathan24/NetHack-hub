@@ -571,6 +571,15 @@ fi
 #   fidelity_log        JSONL the restore-fidelity audit appends to
 #   directive           the orchestrator's instruction for THIS attempt, served
 #                       verbatim in the player's first observation
+#   reseed              "[core, disp]" to reseed the RNG with after the restore,
+#                       or absent for the deterministic default. It belongs
+#                       here and not in a tier for the same reason
+#                       resume_checkpoint does: it is derived PER ATTEMPT (from
+#                       the run's rng_seed, the checkpoint id and the attempt
+#                       index), so no fixed tier could carry it. WHETHER a run
+#                       reseeds at all is the experiment factor, and that lives
+#                       in the orchestrator's --reseed flag and in
+#                       provenance.json, where a reader can find it.
 if [ -n "${E16_ARGS:-}" ]; then
   case " ${ARM} " in
     *" prime_agent "*|*" prime_agent_b80 "*|*" claude_code "*) ;;
@@ -579,10 +588,30 @@ if [ -n "${E16_ARGS:-}" ]; then
       exit 2
       ;;
   esac
-  mapfile -t _E16_FLAGS < <(E16_ARGS="${E16_ARGS}" "$PY_BIN" - <<'PYE16'
+  # NUL-SEPARATED, not newline-separated, and this is load-bearing rather than
+  # tidy. `ledger_text` is the rendered archive table plus the checkpoint's
+  # lessons plus its quoted conversation prefix: it is MULTI-LINE by
+  # construction, always. A `mapfile -t` over newline-separated records splits
+  # one such value into one array element per LINE, and every line after the
+  # first then reaches the eval CLI as a bare positional argument -- which it
+  # rejects with "Unrecognized arguments: id Dlvl XL HP turn score ...".
+  #
+  # Measured: that is not an edge case, it is EVERY E16 attempt. The 4-attempt
+  # dry run never saw it because a stub player never goes through this script,
+  # and the model-in-the-loop sims never saw it because they passed only a
+  # single-line `directive`. The first real resumed rollout hit it immediately.
+  # VIA A FILE, NOT A PROCESS SUBSTITUTION, and that is the second bug this
+  # block had. `mapfile ... < <(cmd) || { exit 2; }` binds the `||` to MAPFILE,
+  # whose status has nothing to do with `cmd`'s -- so the whitelist rejection
+  # below printed its error, returned 2, and the launch CONTINUED with an empty
+  # flag array. A cell that silently lost its resume_checkpoint, its ledger and
+  # its directive is the exact silent-substitution class that invalidated E15,
+  # and it exited 0 while doing it.
+  _E16_OUT="$(mktemp "${TMPDIR:-/tmp}/e16args.XXXXXX")"
+  if ! E16_ARGS="${E16_ARGS}" "$PY_BIN" - > "$_E16_OUT" <<'PYE16'
 import json, os, sys
 ALLOWED = {"resume_checkpoint", "checkpoint_archive", "wiki_dir",
-           "ledger_text", "fidelity_log", "directive"}
+           "ledger_text", "fidelity_log", "directive", "reseed"}
 try:
     obj = json.loads(os.environ["E16_ARGS"])
 except Exception as exc:
@@ -602,10 +631,29 @@ for k in sorted(obj):
     if isinstance(v, (dict, list)):
         print(f"launch_cell: E16_ARGS.{k} must be a scalar", file=sys.stderr)
         raise SystemExit(2)
-    print(f"--taskset.env_args.{k}")
-    print(v if isinstance(v, str) else json.dumps(v))
+    val = v if isinstance(v, str) else json.dumps(v)
+    if "\0" in val:
+        print(f"launch_cell: E16_ARGS.{k} contains a NUL byte", file=sys.stderr)
+        raise SystemExit(2)
+    sys.stdout.write(f"--taskset.env_args.{k}\0")
+    sys.stdout.write(val + "\0")
 PYE16
-) || { echo "launch_cell: E16_ARGS rejected (see above)." >&2; exit 2; }
+  then
+    rm -f "$_E16_OUT"
+    echo "launch_cell: E16_ARGS rejected (see above)." >&2
+    exit 2
+  fi
+  mapfile -d '' -t _E16_FLAGS < "$_E16_OUT"
+  rm -f "$_E16_OUT"
+  # A value that is multi-line must arrive as ONE argv element. If the count is
+  # odd, the flag/value pairing broke and the next thing that happens is a
+  # rollout launched with a truncated ledger -- served bytes that no config
+  # would show as wrong. Refuse instead.
+  if [ $(( ${#_E16_FLAGS[@]} % 2 )) -ne 0 ]; then
+    echo "launch_cell: E16_ARGS produced ${#_E16_FLAGS[@]} argv items (odd);" >&2
+    echo "  flag/value pairing is broken and the served bytes would be wrong." >&2
+    exit 2
+  fi
   OVERRIDES+=("${_E16_FLAGS[@]}")
   # The ledger text can be long; log the KEYS only, and let the resolved
   # config.toml carry the values (which is where an audit should read them).

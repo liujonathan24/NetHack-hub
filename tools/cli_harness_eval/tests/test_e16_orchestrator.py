@@ -392,7 +392,100 @@ def test_directive_compliance_rubric():
 
     # The rubric names itself in its own output, so a reader never mistakes it
     # for a semantic judgement.
-    assert got["rubric"] == "keyword-over-first-N-calls"
+    assert got["rubric"] == E.RUBRIC_NAME
+    assert "per-clause" in got["rubric"]
+
+
+def test_compliance_scores_prohibition_and_goal_separately(tmp_path):
+    """The finding that forced the per-clause structure, as a regression test.
+
+    A directive that mixes a prohibition with an aspiration, scored on ONE
+    enum, collapses to `prevented` when the attempt runs out of calls -- and
+    that erases the fact that the prohibition was fully and checkably obeyed.
+    A prohibition is scoreable at any budget; a goal is not.
+    """
+    directive = ("Do NOT descend this attempt. Explore this level and reach "
+                 "XL 3 before taking any staircase.")
+    calls = [{"name": "np_melee_attack", "args": {"x": 27, "y": 8}}] * 7
+    got = E.classify_directive_compliance(
+        directive, calls, E.OUTCOME_CENSORED,
+        metrics={"descent_count": 0, "budget_exhausted": True, "max_xp_level": 1})
+
+    # The half with evidence is not erased by the half without.
+    assert got["by_clause_kind"][E.KIND_PROHIBITION]["label"] == E.COMPLY_FOLLOWED
+    assert got["by_clause_kind"][E.KIND_GOAL]["label"] != E.COMPLY_FOLLOWED
+    # The headline is DERIVED from those two, and both survive in the record.
+    assert got["headline"] == got["class"]
+    assert got["clauses"], "per-clause verdicts must always be kept"
+    assert any(c["basis"] == "metric" for c in got["clauses"]), (
+        "a descent clause must be scored against the harness metric, not "
+        "against whether the model typed a matching word")
+    assert "prohibition clauses ->" in got["rationale"]
+
+
+def test_a_zero_call_attempt_still_records_per_clause_verdicts():
+    got = E.classify_directive_compliance("clear the east rooms", [], "died")
+    assert got["class"] == E.COMPLY_PREVENTED
+    # Never `followed`: a fast death must not look like obedience.
+    assert got["class"] != E.COMPLY_FOLLOWED
+    assert got["by_clause_kind"], (
+        "a zero-call attempt is the one case that would otherwise have no "
+        "auditable rubric output at all")
+    assert all(c["result"] == E.CLAUSE_NO_EVIDENCE for c in got["clauses"])
+
+
+def test_tool_prohibitions_are_linted_as_unscoreable():
+    """The sims' instrumental-action case: 'do not explore' cannot be scored.
+
+    The player explored SEVEN times in order to reach the staircase the same
+    directive told it to take. A checker that stays off the model's prose
+    cannot tell that from disobedience, so the fix is upstream -- prohibit
+    outcomes, not tools -- and the lint is what makes that reachable.
+    """
+    warns = E.lint_directive(
+        "Descend as fast as possible. Do not explore, do not fight anything.")
+    codes = [w["code"] for w in warns]
+    assert "tool_prohibition" in codes
+    hit = next(w for w in warns if w["code"] == "tool_prohibition")
+    assert "explore" in hit["tokens"]
+    assert "UNSCOREABLE" in hit["message"]
+    assert "do not clear the level" in hit["message"], (
+        "the warning must name the better phrasing, or it is a complaint "
+        "rather than a fix")
+
+    # An OUTCOME prohibition is not warned about.
+    assert not [w for w in E.lint_directive(
+        "Reach the down staircase. Do not clear the level.")
+        if w["code"] == "tool_prohibition"]
+
+    # A prohibition-only directive is satisfied by dying on turn 2.
+    assert "no_goal_clause" in [
+        w["code"] for w in E.lint_directive("do not fight anything")]
+
+
+def test_instrumental_ambiguity_is_recorded_in_the_rationale():
+    """A tool-prohibition broken while the goal was unmet AND being pursued."""
+    got = E.classify_directive_compliance(
+        "Descend as fast as possible. Do not explore, do not fight anything.",
+        [{"name": "np_move_to", "args": {"x": 8, "y": 4, "why": "descend"}}]
+        + [{"name": "np_explore_level", "args": {}}] * 7,
+        E.OUTCOME_CENSORED,
+        metrics={"descent_count": 0, "budget_exhausted": True})
+    assert got["instrumental_ambiguity"] is True
+    assert "INSTRUMENTAL-ACTION AMBIGUITY" in got["rationale"]
+    assert "MAY UNDERSTATE compliance" in got["rationale"]
+    assert "prohibit outcomes, not tools" in got["rationale"]
+
+
+def test_directive_kind_separates_a_prohibition_from_its_own_verb():
+    """`descend` and `no_descend` share every content token.
+
+    Only the clause kind separates them, and getting this wrong would pair a
+    "descend now" directive with a "do not descend" control.
+    """
+    assert "no_descend" in E.classify_directive_kind("do not descend this level")
+    assert "descend" == E.classify_directive_kind("descend to D10 immediately")
+    assert E.classify_directive_kind("") == "none"
 
 
 # --------------------------------------------------------------------------- #
@@ -428,9 +521,13 @@ def test_session_argv_omits_no_session_and_resumes_by_id_from_round_two(tmp_path
     # checked first in createSessionManager and returns an in-memory session
     # unconditionally, so its presence would silently discard every --resume.
     assert "--no-session" not in a1 and "--no-session" not in a2
-    # json mode on every round: it is how the id is discovered AND how
-    # continuity is checked.
+    # json mode on the DISCOVERY round only. It is the only way to learn a
+    # session id, and it was measured HANGING when combined with --resume, so
+    # it runs exactly once -- on the round that has nothing to resume.
     assert a1[a1.index("--mode") + 1] == "json"
+    assert "--mode" not in a2, (
+        "json mode + --resume was measured hanging where the identical text "
+        "--print call succeeded 30s later; resumed rounds must be text")
     assert "--resume" not in a1, "round 1 creates the session"
     assert a2[a2.index("--resume") + 1] == "019f-aaaa"
     # Never a BARE --resume: with no argument it opens the interactive picker.
@@ -451,6 +548,125 @@ def test_session_argv_omits_no_session_and_resumes_by_id_from_round_two(tmp_path
     assert not r2.continuity_broken
     assert sess.usage_available and sess.usage_total["prompt_tokens"] == 2000
     assert sess.spend_usd > 0
+
+
+def test_session_refuses_to_resume_from_a_foreign_cwd(tmp_path):
+    """HANG 1. The guard must raise BEFORE any subprocess exists.
+
+    prime-agent resolves a `--resume` whose cwd does not match the session's
+    recorded one as a foreign session and asks an interactive "Fork this
+    session into current directory?" confirm. A non-interactive driver never
+    answers it, so the run hangs forever with no output and no error -- which
+    on this budget is the whole run. So this is asserted at the point where it
+    costs nothing: no launch at all.
+    """
+    runner, seen = _fake_prime_agent()
+    sess = S.PrimeAgentSession(work_dir=tmp_path / "orch",
+                               agent_dir=tmp_path / "agent", runner=runner)
+    sess.ask("round one")
+    assert sess.session_cwd, "round 1 must record the session's cwd"
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    sess.work_dir = elsewhere
+    with pytest.raises(S.SessionCwdMismatch) as exc:
+        sess.ask("round two")
+    assert len(seen) == 1, "the guard must fire before the subprocess is created"
+    assert "hangs a non-interactive driver" in str(exc.value)
+    assert str(sess.session_cwd) in str(exc.value), (
+        "the error must name the directory to re-run from")
+
+
+def test_a_hanging_orchestrator_call_becomes_an_error_at_its_deadline(tmp_path):
+    """HANGS 1-3, the backstop. A blocked call must die, loudly and countably.
+
+    A timeout is a round lost to the scripted fallback. A hang is the run. The
+    whole point of the hardening is to convert every instance of the second
+    into the first, so `timed_out` is its own field rather than a substring of
+    an error message.
+    """
+    def runner(argv, env, cwd, timeout_s):
+        raise S.RoundTimeout(
+            f"orchestrator call exceeded its {timeout_s:g}s deadline and was "
+            f"killed (process group 1234)")
+
+    sess = S.PrimeAgentSession(work_dir=tmp_path / "o", agent_dir=tmp_path / "a",
+                               runner=runner, timeout_s=30.0)
+    res = sess.ask("hello")
+    assert res.timed_out is True
+    assert res.exit_code == -1
+    assert "RoundTimeout" in res.error and "30s deadline" in res.error
+    assert sess.timeouts == 1
+    assert sess.budget_lines()["timeouts"] == 1
+    # And it is a recorded round, not a swallowed one.
+    rec = json.loads(sess.log_path.read_text().splitlines()[-1])
+    assert rec["timed_out"] is True
+
+
+def test_the_orchestrator_gets_a_private_tmpdir_and_never_exports_it(tmp_path):
+    """HANG 2. 900s on the shared daemon socket against 3.5s with a private one.
+
+    The second assertion is the one that protects the PLAYERS: an exported
+    TMPDIR leaks into sandboxed rollouts where the path is not bound, and
+    pointing it at a bind-mounted directory collapses concurrent rollouts back
+    onto one daemon socket.
+    """
+    before = os.environ.get("TMPDIR")
+    runner, seen = _fake_prime_agent()
+    sess = S.PrimeAgentSession(work_dir=tmp_path / "o", agent_dir=tmp_path / "a",
+                               runner=runner)
+    sess.ask("hi")
+    got = seen[0]["env"]["TMPDIR"]
+    assert Path(got).is_dir()
+    assert got not in ("/tmp", "/var/tmp")
+    assert not got.startswith("/tmp/prime-agent"), (
+        "this is the shared socket that was measured hanging for 900s")
+    assert os.environ.get("TMPDIR") == before, (
+        "TMPDIR must be set on the orchestrator's own env dict only")
+
+
+def test_text_mode_rounds_recover_id_usage_and_cost_from_the_session_file(tmp_path):
+    """HANG 3's replacement mechanism, proven rather than assumed.
+
+    Dropping json mode on resumed rounds only works if everything it printed is
+    recoverable elsewhere. The session file carries strictly more: the header
+    id AND the cwd AND the provider's own per-message cost.
+    """
+    agent = tmp_path / "agent"
+    sessions = agent / S.SESSIONS_SUBDIR
+    sessions.mkdir(parents=True)
+    work = tmp_path / "orch"
+    work.mkdir()
+    path = sessions / "0000-file-stem-differs.jsonl"
+    header_id = "01a047da-c7a0-757e-851c-de1bf8c7f9d5"
+    path.write_text(json.dumps({"type": "session", "version": 3,
+                                "id": header_id,
+                                "cwd": str(work.resolve())}) + "\n")
+
+    def runner(argv, env, cwd, timeout_s):
+        # Text mode: stdout carries the reply and NOTHING else. Everything the
+        # driver needs is appended to the session file, as the real one does.
+        with open(path, "a") as fh:
+            fh.write(json.dumps({
+                "type": "message",
+                "message": {"role": "assistant", "content": "ok",
+                            "usage": {"input": 15000, "output": 200,
+                                      "cacheRead": 256, "cacheWrite": 0,
+                                      "cost": {"total": 0.025242}}}}) + "\n")
+        return "ok\n", "", 0
+
+    sess = S.PrimeAgentSession(work_dir=work, agent_dir=agent, runner=runner,
+                               json_mode_policy=S.JSON_MODE_NEVER)
+    res = sess.ask("round")
+    assert res.session_id == header_id
+    # THE ID IS NOT THE FILENAME STEM. Discovering it by "newest file in
+    # sessions/" is the trap this module documents and must not fall into.
+    assert Path(res.session_file).stem != header_id
+    assert res.session_cwd == str(work.resolve())
+    assert res.usage["prompt_tokens"] == 15000
+    assert res.usage["cached_input_tokens"] == 256
+    assert res.cost_usd_reported == pytest.approx(0.025242)
+    assert sess.usage_available is True
 
 
 def test_session_detects_a_silent_fork(tmp_path):
@@ -814,6 +1030,241 @@ def test_no_directive_control_mode_launches_with_no_instruction(tmp_path):
     assert all(c.directive == "" for c in player.seen)
     assert all(a["directive_compliance"]["class"] == E.COMPLY_NONE
                for a in orch.attempts)
+
+
+def test_matched_restart_is_n_independent_tries_from_one_fixed_state(tmp_path):
+    """THE NULL ARM. Every planned control is an ablation WITHIN the method.
+
+    Not one of them is a null: each is beaten by "we got N tries instead of
+    one". The headline metric is a running maximum over attempts -- monotone
+    non-decreasing by construction, unable to fall -- so comparing it to a
+    single-life number compares max-of-N draws against one draw. This arm is
+    the comparison every reader makes in their head, and without it there is no
+    reading under which the method could have failed.
+
+    What it must be, and what each assertion below pins: ONE fixed start state,
+    no selection, no directive, no lessons, no archive the selector can see --
+    but the SAME budget accounting and the SAME attempt records, or the two
+    arms are not comparable at all.
+    """
+    cfg = cfg_for(tmp_path / "run", selector="scripted",
+                  arm=E.ARM_MATCHED_RESTART, budget_ceiling_usd=1000.0,
+                  max_attempts=4, stall_attempts=2, milestone_dlvl=99,
+                  milestone_dungeon=-1)
+    player = StubPlayer([{"died": True, "spend": 1.5}])
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    summary = orch.run(max_attempts=4)
+
+    # N INDEPENDENT TRIES, all four of them. The stall stop must NOT truncate
+    # this arm: it grows no frontier by construction, so an 8-attempt stall
+    # rule would end the control at N=2 while the method it is compared against
+    # ran to N=4 -- max-of-2 against max-of-4, called a matched comparison.
+    assert len(orch.attempts) == 4
+    assert orch.stop_reason != E.STOP_STALL
+
+    # ONE FIXED START STATE, never re-selected.
+    starts = {ctx.checkpoint_id for ctx in player.seen}
+    assert starts == {"1"}, f"expected every attempt from c1, got {starts}"
+
+    # NO DIRECTIVE, NO SELECTION, NO LEDGER, NO LESSONS.
+    assert all(ctx.directive == "" for ctx in player.seen)
+    assert all(ctx.ledger_text == "" for ctx in player.seen)
+    assert all(a["selection_source"] == "matched_restart_fixed_start"
+               for a in orch.attempts)
+    assert E.read_lessons(cfg.archive_dir / "c1").strip() == "", (
+        "the null arm must not accumulate lessons; N attempts that learn from "
+        "each other are a weaker version of the method, not a null")
+
+    # NO ARCHIVE THE SELECTOR CAN SEE: the player's own saves go to a scratch
+    # directory per attempt and never enter the run's archive.
+    assert [p.name for p in checkpoint_list(cfg.archive_dir)] == ["c1"]
+    for ctx in player.seen:
+        assert ctx.archive_dir != cfg.archive_dir
+        assert ctx.archive_dir.name == "scratch_archive"
+
+    # THE SAME ACCOUNTING AND THE SAME RECORDS, which is the only reason the
+    # two arms can be compared.
+    assert summary["budget"]["player_usd"] == pytest.approx(6.0)
+    assert summary["experiment_arm"] == E.ARM_MATCHED_RESTART
+    for a in orch.attempts:
+        for key in ("attempt", "outcome", "censored", "max_dlvl", "max_xl",
+                    "calls", "spend_usd", "cumulative_spend_usd",
+                    "experiment_arm", "directive_compliance"):
+            assert key in a, f"attempt record is missing {key}"
+    prov = json.loads(cfg.provenance_path.read_text())
+    assert prov["experiment_arm"] == E.ARM_MATCHED_RESTART
+    assert "THE NULL" in prov["experiment_arm_meaning"]
+
+
+def test_paired_control_runs_each_directive_against_its_own_control(tmp_path):
+    """PER DIRECTIVE KIND, because a run-wide control proved not to be enough.
+
+    Measured: a `descend_fast` directive inverted the player's first decision
+    causally, while a `no_descend` directive was indistinguishable from the
+    no-directive control -- because the control did not descend either. A
+    prohibition against something the player was never going to do measures
+    nothing, and a run-wide average pools the two into "directives work".
+    """
+    cfg = cfg_for(tmp_path / "run", selector="llm", paired_control=True,
+                  budget_ceiling_usd=1000.0, max_attempts=4,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+    directives = iter(["descend to D10 immediately and take the down staircase",
+                       "do not descend; clear this level and reach XL 3"])
+    nth = {"n": 0}
+
+    def runner(argv, env, cwd, timeout_s):
+        nth["n"] += 1
+        if nth["n"] == 1:                       # the opening discussion
+            body = "my plan"
+        else:
+            body = ("plan\n" + json.dumps({"checkpoint": "1",
+                                           "directive": next(directives),
+                                           "rationale": "x"}))
+        return ("\n".join([
+            json.dumps({"type": "session", "version": 3, "id": "s1",
+                        "cwd": cwd}),
+            json.dumps({"type": "message",
+                        "message": {"role": "assistant", "content": body},
+                        "usage": {"prompt_tokens": 100,
+                                  "completion_tokens": 10,
+                                  "cached_input_tokens": 0}})]) + "\n", "", 0)
+
+    session = S.PrimeAgentSession(work_dir=cfg.orchestrator_dir,
+                                  agent_dir=cfg.orchestrator_dir / "agent",
+                                  log_path=cfg.orchestrator_log, runner=runner)
+    player = StubPlayer([{"died": True, "spend": 0.5}])
+    orch = E.Orchestrator(cfg, player, session=session)
+    orch.prepare()
+    E.seed_archive(cfg)
+    summary = orch.run(max_attempts=4)
+
+    # TWO ATTEMPTS PER DIRECTIVE, from the SAME checkpoint, one instruction
+    # apart. A control launched from the state the treatment just produced
+    # would be measuring the treatment.
+    assert len(orch.attempts) == 4
+    roles = [a["pair_role"] for a in orch.attempts]
+    assert roles == [E.ROLE_TREATMENT, E.ROLE_CONTROL,
+                     E.ROLE_TREATMENT, E.ROLE_CONTROL]
+    assert [a["pair_id"] for a in orch.attempts] == [1, 1, 2, 2]
+    # WITHIN a pair the checkpoint must be identical -- that is what makes the
+    # pair a comparison. Across pairs the orchestrator is free to move.
+    for pid in (1, 2):
+        half = [a["from_checkpoint"] for a in orch.attempts
+                if a["pair_id"] == pid]
+        assert len(set(half)) == 1, (
+            f"pair {pid} ran its control from a different checkpoint than its "
+            f"treatment: {half}")
+
+    # The control carries no directive; the treatment does.
+    treatments = [a for a in orch.attempts if a["pair_role"] == E.ROLE_TREATMENT]
+    controls = [a for a in orch.attempts if a["pair_role"] == E.ROLE_CONTROL]
+    assert all(t["directive"] for t in treatments)
+    assert all(c["directive"] == "" for c in controls)
+    assert all(c["directive_compliance"]["class"] == E.COMPLY_NONE
+               for c in controls)
+
+    # PER KIND: the control inherits the kind it is controlling FOR, so the two
+    # directive kinds are analysable separately rather than pooled.
+    kinds = [a["directive_kind"] for a in orch.attempts]
+    assert kinds[0] == kinds[1] and kinds[2] == kinds[3]
+    assert kinds[0] != kinds[2], (
+        "a 'descend' directive and a 'do not descend' directive must not be "
+        "pooled into one control comparison")
+    assert "no_descend" in kinds[2] and kinds[0] == "descend"
+
+    pairs = summary["matched_pairs"]
+    assert pairs["enabled"] is True
+    assert pairs["complete_pairs"] == 2 and pairs["incomplete_pairs"] == []
+    assert set(pairs["by_directive_kind"]) == {kinds[0], kinds[2]}
+    for slot in pairs["pairs"]:
+        assert slot["complete"] and "delta" in slot
+
+
+def test_reseed_is_off_by_default_and_recorded_either_way(tmp_path):
+    """The default must stay deterministic, and the choice must be legible.
+
+    With the dice fixed, the difference between two attempts from one
+    checkpoint comes from the model's choices and from the directive -- which
+    is what makes a directive's effect attributable to the directive. Turning
+    reseeding on adds a second, uncontrolled source of variance to every A/B.
+    So it is a flag, not a default, and provenance says which was used.
+    """
+    cfg = cfg_for(tmp_path / "off", selector="scripted",
+                  budget_ceiling_usd=1000.0, milestone_dlvl=99,
+                  milestone_dungeon=-1)
+    orch = E.Orchestrator(cfg, StubPlayer([{"died": True, "spend": 0.1}]))
+    prov = orch.prepare()
+    assert cfg.reseed_on_restore is False
+    assert prov["reseed_on_restore"] is False
+    assert "DETERMINISTIC (default)" in prov["reseed_semantics"]
+    assert orch.reseed_for("1", 1) is None, (
+        "with --reseed off the launcher must be handed None -- 'do not reseed "
+        "at all' -- never a zero pair, which would be a third semantics")
+
+    cfg2 = cfg_for(tmp_path / "on", selector="scripted", reseed_on_restore=True,
+                   budget_ceiling_usd=1000.0, milestone_dlvl=99,
+                   milestone_dungeon=-1)
+    orch2 = E.Orchestrator(cfg2, StubPlayer([{"died": True, "spend": 0.1}]))
+    prov2 = orch2.prepare()
+    assert prov2["reseed_on_restore"] is True
+    assert "diverge" in prov2["reseed_semantics"]
+    # Reproducible from provenance, and DIFFERENT per attempt -- which is the
+    # entire point of asking for it.
+    a1, a2 = orch2.reseed_for("1", 1), orch2.reseed_for("1", 2)
+    assert a1 and a2 and a1 != a2
+    assert orch2.reseed_for("1", 1) == a1
+    assert E.Orchestrator(cfg2, lambda c: None).reseed_for("1", 1) == a1
+
+
+def test_reseed_changes_the_continuation_and_the_default_does_not(tmp_path):
+    """The engine-level claim, checked against the engine.
+
+    Two restores of one checkpoint continue BYTE-IDENTICALLY by default --
+    restoring does not reroll the dice, whatever a Monte-Carlo reading of the
+    archive would assume. `--reseed` is what makes them diverge, reproducibly.
+    """
+    import hashlib
+    from nethack_core.env import NetHackCoreEnv
+    from nethack_harness.checkpoints import _engine_of, _raw_of
+
+    env = NetHackCoreEnv(task_name="NetHackChallenge-v0",
+                         max_episode_steps=100_000)
+    env.seed(core=1, disp=1)
+    env.reset(character="Val-hum-neu-fem")
+    env.step(13)
+    for _ in range(20):
+        env.step(ord("s"))
+    env.step(27)
+    ck = tmp_path / "c1"
+    checkpoint_save(env, ck, name="probe", note="reseed probe",
+                    created_by="test")
+
+    def tail(reseed):
+        e, meta = checkpoint_restore(ck, fidelity_log=None, reseed=reseed)
+        raw = _raw_of(_engine_of(e))
+        for _ in range(60):
+            raw.step(ord("s"))
+        o = raw.to_core_observation()
+        digest = hashlib.sha256(
+            bytes(o.chars) + o.blstats.astype("int64").tobytes()).hexdigest()
+        return digest, meta.get("restored_with_reseed")
+
+    d_a, seed_a = tail(None)
+    d_b, seed_b = tail(None)
+    assert d_a == d_b and seed_a is None and seed_b is None, (
+        "the DEFAULT must be deterministic: two restores of one checkpoint "
+        "replay byte-identically, so restore-and-retry is replay of a fixed "
+        "stream rather than resampling")
+
+    d_c, seed_c = tail((424242, 99))
+    d_d, _ = tail((424242, 99))
+    d_e, _ = tail((7, 7))
+    assert seed_c == [424242, 99], "the resume must record what it reseeded with"
+    assert d_c == d_d, "the same reseed must reproduce"
+    assert d_c != d_a and d_c != d_e, "different seeds must diverge"
 
 
 def test_stall_stop_fires_after_n_attempts_with_no_frontier_advance(tmp_path):

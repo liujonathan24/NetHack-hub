@@ -34,14 +34,31 @@ The orchestrator gets a separate one:
   unconditionally, so passing it alongside ``--resume`` would silently discard
   the resume. That is the single flag standing between the player path and a
   persistent conversation.
-* ``--print --mode json`` on EVERY round. Text ``--print`` never reveals the
-  session id (``dist/modes/print-mode.js:80-95`` writes assistant text only),
-  while json mode emits the session header as stdout line 1
-  (``print-mode.js:60-65``, ``docs/json.md:60-63``):
+* ``--print --mode json`` on the DISCOVERY round ONLY, and text ``--print``
+  on every resumed round. Text ``--print`` never reveals the session id
+  (``dist/modes/print-mode.js:80-95`` writes assistant text only), while json
+  mode emits the session header as stdout line 1 (``print-mode.js:60-65``,
+  ``docs/json.md:60-63``):
   ``{"type":"session","version":3,"id":"...","cwd":"..."}``. So json mode is
-  how the id is discovered on round 1 AND how continuity is CHECKED on every
-  later round: if the header id ever changes, the conversation silently forked
-  and the run says so instead of reporting a continuity it did not have.
+  how the id is discovered on round 1.
+
+  IT IS NOT USED AFTER THAT, and that is a measured decision rather than a
+  preference. The E16 model-in-the-loop sims found ``--mode json`` +
+  ``--resume`` HANGING on a prompt that the identical text ``--print`` call --
+  same session, same cwd -- answered 30 s later
+  (``outputs/e16_sim/scripts/run_pa.py``, which consequently defaults json mode
+  OFF). A hang is worse than an error by the width of a whole run's budget, so
+  the mode that hangs is used exactly once, on the cheapest call, and never
+  again.
+
+  Everything json mode was doing on later rounds is recovered from the SESSION
+  FILE instead, which is strictly more information than stdout carried:
+  ``sessions/<file>.jsonl``'s first record is the header (``id`` AND ``cwd``),
+  and the records appended by a round carry per-message ``usage`` with the
+  provider's own ``cost.total`` in USD. So continuity is still CHECKED on every
+  round -- a resumed round must touch the same file and that file's header id
+  must still be ours, or the conversation forked and the run says so -- and the
+  orchestrator's spend stops being a price-table estimate.
 * ``--resume <id>`` from round 2. Explicit id, never ``-c/--continue``: the id
   goes into ``provenance.json`` so the conversation this run had is nameable
   afterwards, and a stray second session in the same directory cannot be
@@ -60,10 +77,32 @@ The orchestrator gets a separate one:
   which holds ``daemon-workers/`` and ``session-leases/`` that a booting
   experiment has been measured reaping out from under another experiment's
   live rollouts.
-* A FIXED cwd across rounds. ``--resume`` on a session whose recorded ``cwd``
-  matches resolves as ``"local"`` and opens the file directly; a different cwd
-  takes the ``"global"`` branch, which asks "Fork this session into current
-  directory?" through an interactive confirm (``main.js:311-318``).
+* A FIXED cwd across rounds, ASSERTED rather than intended. ``--resume`` on a
+  session whose recorded ``cwd`` matches resolves as ``"local"`` and opens the
+  file directly; a different cwd takes the ``"global"`` branch, which asks
+  "Fork this session into current directory?" through an interactive confirm
+  (``main.js:311-318``). In a non-interactive driver that confirm HANGS
+  FOREVER -- measured in the E16 sims. Two independent defences, because one
+  silent hang costs the run:
+  (1) the session's cwd is read out of the session file's header the moment the
+      id is discovered, written to ``provenance.json``, and compared with the
+      process's actual cwd BEFORE every resumed launch -- a mismatch raises
+      :class:`SessionCwdMismatch` and no subprocess is started at all;
+  (2) every launch gets ``stdin=DEVNULL`` and a hard timeout that kills the
+      whole process GROUP, so an interactive prompt that slips past (1) reads
+      EOF instead of blocking, and anything that still blocks dies at the
+      deadline with :class:`RoundTimeout` naming the command.
+
+* A PRIVATE ``TMPDIR``. The orchestrator runs UNSANDBOXED, so it shares
+  ``/tmp/prime-agent-0/daemon.sock`` with every other prime-agent on this box.
+  Measured in the sims: with another tenant's wedged processes on that socket a
+  resumed round hung for 900 s and then 500 s; the identical call with
+  ``TMPDIR`` pointed at a private directory returned in 3.5 s. Players do not
+  need this -- bwrap ``--tmpfs /tmp`` already gives each rollout its own socket
+  -- and this is why the variable is set on the ORCHESTRATOR's own env dict and
+  never exported: an exported ``TMPDIR`` leaks into sandboxed rollouts where
+  the path is not bound, and pointing it at a bind-mounted directory collapses
+  concurrent rollouts onto one daemon socket again.
 
 WHAT IS PROVEN AND WHAT IS NOT
 ------------------------------
@@ -98,6 +137,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -114,6 +154,18 @@ ENV_AGENT_DIR = "PRIME_AGENT_CODING_AGENT_DIR"
 
 #: Where an agent dir keeps conversations (`config.js:501-506`).
 SESSIONS_SUBDIR = "sessions"
+
+#: When ``--mode json`` is passed. `discovery_only` is the DEFAULT and the
+#: measured-safe one: json mode is the only way to learn a session id, and it
+#: was measured HANGING when combined with `--resume`, so it runs exactly once
+#: on the round that has nothing to resume. `always` restores the pre-hardening
+#: behaviour for anyone who wants to re-measure it; `never` is for a session
+#: whose id is already known.
+JSON_MODE_DISCOVERY_ONLY = "discovery_only"
+JSON_MODE_ALWAYS = "always"
+JSON_MODE_NEVER = "never"
+JSON_MODE_POLICIES = frozenset({JSON_MODE_DISCOVERY_ONLY, JSON_MODE_ALWAYS,
+                                JSON_MODE_NEVER})
 
 #: E13's lesson, reused: `--model <pattern>` alone matched openrouter's catalog
 #: entry first and died with "No API key found for openrouter" even though
@@ -144,6 +196,45 @@ class RoundResult:
     #: Set when the session header id changed between rounds, i.e. the
     #: conversation forked and continuity was NOT what it claimed to be.
     continuity_broken: bool = False
+    #: The call passed its hard deadline and its process group was killed. A
+    #: distinct field from `error` because a timeout is the failure this whole
+    #: module was hardened against, and it must be countable in the summary
+    #: rather than buried in an error string.
+    timed_out: bool = False
+    #: ``--mode json`` was on for this call. True only on the discovery round.
+    json_mode: bool = False
+    #: The cwd the session file's header records, read from disk. The value
+    #: every later round's cwd is asserted against.
+    session_cwd: str = ""
+    #: Which ``sessions/*.jsonl`` this round appended to.
+    session_file: str = ""
+    #: USD the provider itself reported for this round (session-file
+    #: ``usage.cost.total``), as opposed to `spend_usd`'s price-table estimate.
+    #: 0.0 when the session file carried no cost, which is reported as
+    #: unavailable rather than as free.
+    cost_usd_reported: float = 0.0
+
+
+class RoundTimeout(RuntimeError):
+    """One orchestrator call passed its deadline and was killed.
+
+    Exists so a hang becomes an ERROR with a message naming the command and the
+    deadline, instead of a process the run waits on forever. The three E16
+    silent hangs (resume from a foreign cwd, the shared daemon socket, json
+    mode + resume) all present identically to a driver: nothing happens, no
+    output, no exit. A run that can only be rescued by a human noticing is not
+    a run that can be launched with $700 behind it.
+    """
+
+
+class SessionCwdMismatch(RuntimeError):
+    """A resumed round was about to launch from a cwd the session was not
+    recorded in.
+
+    Raised BEFORE the subprocess exists, because the failure mode on the other
+    side of that launch is prime-agent's interactive "Fork this session into
+    current directory?" confirm, which hangs a non-interactive driver forever.
+    """
 
 
 #: A runner executes ``(argv, env, cwd, timeout)`` and returns
@@ -155,9 +246,61 @@ Runner = Callable[[list, dict, str, float], tuple]
 
 
 def _subprocess_runner(argv, env, cwd, timeout_s) -> tuple:
-    proc = subprocess.run(argv, env=env, cwd=cwd, capture_output=True,
-                          text=True, timeout=timeout_s)
-    return proc.stdout, proc.stderr, proc.returncode
+    """Run one orchestrator call under a HARD deadline, with no stdin.
+
+    ``subprocess.run(timeout=...)`` is not enough on its own for either half of
+    what this needs:
+
+    * It kills only the direct child. prime-agent spawns a daemon worker, so a
+      wedged call can leave the reaped parent's children holding the pipes and
+      ``communicate()`` blocks past the deadline anyway. ``start_new_session``
+      puts the call in its own process GROUP and the deadline kills the group.
+    * It inherits stdin. Every interactive prompt prime-agent can raise -- the
+      session picker on a bare ``--resume``, the "Fork this session into
+      current directory?" confirm on a cwd mismatch -- blocks on a read that
+      never returns when stdin is a terminal or an idle pipe. ``DEVNULL`` turns
+      each of those into an immediate EOF.
+    """
+    proc = subprocess.Popen(
+        argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=15)
+        except Exception:
+            stdout, stderr = "", ""
+        raise RoundTimeout(
+            f"orchestrator call exceeded its {timeout_s:g}s deadline and was "
+            f"killed (process group {proc.pid}). Command: "
+            f"{' '.join(str(a) for a in argv[:8])} ... "
+            f"[{len(argv)} argv items]. cwd={cwd}. "
+            f"TMPDIR={env.get('TMPDIR', '(inherited)')}. "
+            f"Last stderr: {(stderr or '')[-400:]!r}"
+        ) from None
+    return stdout, stderr, proc.returncode
+
+
+def _kill_group(proc) -> None:
+    """SIGKILL the call's whole process group; never raise."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            proc.wait(timeout=5)
+            return
+        except Exception:
+            continue
+    try:
+        proc.kill()
+    except Exception:
+        pass
 
 
 class SessionBase:
@@ -212,6 +355,15 @@ class SessionBase:
             "usage": dict(self.usage_total),
             "usage_available": self.usage_available,
             "spend_usd": round(self.spend_usd, 6),
+            # The hardening, made countable. A run whose orchestrator timed out
+            # four times had four rounds decided by the scripted fallback, and
+            # that must be readable from the summary rather than from the log.
+            "timeouts": getattr(self, "timeouts", 0),
+            "cwd_asserts": getattr(self, "cwd_asserts", 0),
+            "session_cwd": getattr(self, "session_cwd", ""),
+            "tmpdir": str(getattr(self, "tmpdir", "")),
+            "json_mode_policy": getattr(self, "json_mode_policy", ""),
+            "cost_usd_reported": round(getattr(self, "cost_usd_reported", 0.0), 6),
         }
 
     # -- logging ----------------------------------------------------------- #
@@ -223,6 +375,9 @@ class SessionBase:
             "wall_s": round(res.wall_s, 2), "usage": res.usage,
             "spend_usd": round(res.spend_usd, 6), "error": res.error,
             "continuity_broken": res.continuity_broken,
+            "timed_out": res.timed_out, "json_mode": res.json_mode,
+            "session_cwd": res.session_cwd, "session_file": res.session_file,
+            "cost_usd_reported": round(res.cost_usd_reported, 6),
             "argv": res.argv, "prompt": prompt, "reply": res.text,
             "sent_chars_cumulative": self.sent_chars, "t": time.time(),
         }
@@ -265,7 +420,8 @@ class PrimeAgentSession(SessionBase):
                  timeout_s: float = 900.0, runner: Optional[Runner] = None,
                  env: Optional[dict] = None, extra_args: Optional[list] = None,
                  summary_cap: int = 1500, context_chars: int = 400_000,
-                 kernel_venv: str = ""):
+                 kernel_venv: str = "", tmpdir=None,
+                 json_mode_policy: str = JSON_MODE_DISCOVERY_ONLY):
         super().__init__(work_dir=work_dir, log_path=log_path,
                          summary_cap=summary_cap, context_chars=context_chars)
         self.agent_dir = Path(agent_dir)
@@ -278,9 +434,75 @@ class PrimeAgentSession(SessionBase):
         self.base_env = env
         self.extra_args = list(extra_args or [])
         self.kernel_venv = kernel_venv
+        if json_mode_policy not in JSON_MODE_POLICIES:
+            raise ValueError(f"json_mode_policy must be one of "
+                             f"{sorted(JSON_MODE_POLICIES)}, not "
+                             f"{json_mode_policy!r}")
+        self.json_mode_policy = json_mode_policy
+        #: PRIVATE temp dir. Defaults under the agent dir, which is already
+        #: private per-run, so the daemon socket cannot be shared with another
+        #: tenant even if the caller forgets to pass one.
+        self.tmpdir = Path(tmpdir) if tmpdir else (self.agent_dir / "tmp")
+        self.tmpdir.mkdir(parents=True, exist_ok=True)
         self.session_id: str = ""
+        #: The cwd the session's own header records. Discovered on round 1 and
+        #: asserted before every resumed launch.
+        self.session_cwd: str = ""
+        self.session_file: str = ""
+        self.timeouts = 0
+        self.cwd_asserts = 0
+        #: Provider-reported USD, summed from the session file. Kept beside the
+        #: price-table estimate rather than replacing it, so a divergence
+        #: between what we model and what we are billed is visible.
+        self.cost_usd_reported = 0.0
+
+    # -- the fixed cwd ----------------------------------------------------- #
+
+    @property
+    def launch_cwd(self) -> str:
+        """The one directory every round of this session launches from."""
+        return str(self.work_dir.resolve())
+
+    def assert_cwd(self) -> None:
+        """Refuse a resumed launch from anywhere but the session's own cwd.
+
+        The check that costs nothing and saves the run. A ``--resume`` whose
+        cwd does not match the session's recorded one takes prime-agent's
+        "global" branch and asks an interactive confirm that a non-interactive
+        driver never answers -- so this raises instead, BEFORE the subprocess
+        is created. Called on every round, not only after a suspicious one:
+        the mismatch that kills a run is the one nobody suspected.
+        """
+        self.cwd_asserts += 1
+        if not self.session_cwd:
+            return  # nothing to resume yet; round 1 is where cwd is recorded
+        actual = self.launch_cwd
+        if os.path.realpath(actual) != os.path.realpath(self.session_cwd):
+            raise SessionCwdMismatch(
+                f"REFUSING to resume session {self.session_id} from the wrong "
+                f"directory. The session's own header records "
+                f"cwd={self.session_cwd!r}; this process would launch from "
+                f"{actual!r}. prime-agent resolves that as a foreign session "
+                f"and asks an interactive 'Fork this session into current "
+                f"directory?' confirm, which hangs a non-interactive driver "
+                f"forever. Re-run the orchestrator from {self.session_cwd!r}."
+            )
 
     # -- argv -------------------------------------------------------------- #
+
+    def use_json_mode(self) -> bool:
+        """Whether THIS round runs ``--mode json``.
+
+        Default policy ``discovery_only``: json mode exactly once, on the round
+        that has no session id yet and therefore no other way to learn one.
+        Every resumed round runs plain text ``--print``, because json mode +
+        ``--resume`` was measured hanging where the same text call succeeded.
+        """
+        if self.json_mode_policy == JSON_MODE_ALWAYS:
+            return True
+        if self.json_mode_policy == JSON_MODE_NEVER:
+            return False
+        return not self.session_id
 
     def build_argv(self, prompt: str) -> list:
         """The orchestrator's command line. See the module docstring for why.
@@ -288,8 +510,10 @@ class PrimeAgentSession(SessionBase):
         ``--`` before the prompt, matching the harness (``__init__.py:670``):
         without it a prompt that begins with a dash is parsed as a flag.
         """
-        argv = [self.binary, "--print", "--mode", "json",
-                "--provider", self.provider, "--model", self.model]
+        argv = [self.binary, "--print"]
+        if self.use_json_mode():
+            argv += ["--mode", "json"]
+        argv += ["--provider", self.provider, "--model", self.model]
         if self.session_id:
             argv += ["--resume", self.session_id]
         argv += self.extra_args
@@ -301,6 +525,11 @@ class PrimeAgentSession(SessionBase):
         env[ENV_AGENT_DIR] = str(self.agent_dir)
         env.setdefault("PI_SKIP_VERSION_CHECK", "1")
         env.setdefault("PI_TELEMETRY", "0")
+        # PRIVATE DAEMON SOCKET. Set on THIS dict only -- never exported, never
+        # written into os.environ -- because the player rollouts inherit the
+        # real environment and a TMPDIR they cannot see inside their bwrap
+        # sandbox breaks them. See the module docstring: 900s -> 3.5s.
+        env["TMPDIR"] = str(self.tmpdir)
         if self.kernel_venv:
             # ORCH_KERNEL_VENV's lesson: the PRIME_ name leaks into sandboxed
             # rollouts where the path is not bound, so the ORCHESTRATOR sets it
@@ -308,21 +537,137 @@ class PrimeAgentSession(SessionBase):
             env["PRIME_AGENT_KERNEL_VENV"] = self.kernel_venv
         return env
 
+    # -- the session file, which is where the truth lives ------------------ #
+
+    @property
+    def sessions_dir(self) -> Path:
+        return self.agent_dir / SESSIONS_SUBDIR
+
+    def _snapshot(self) -> dict:
+        """``{filename: size}`` for every session file, before a round."""
+        if not self.sessions_dir.is_dir():
+            return {}
+        out = {}
+        for p in self.sessions_dir.glob("*.jsonl"):
+            try:
+                out[p.name] = p.stat().st_size
+            except OSError:
+                continue
+        return out
+
+    def _scan_session_files(self, before: dict) -> dict:
+        """What one round did to the session files on disk.
+
+        Returns ``{"file", "header_id", "cwd", "usage", "cost_usd",
+        "records"}``. This is how a TEXT-mode round recovers everything json
+        mode used to print: the header id (first record of the file, and NOT
+        the filename stem -- ``setSessionFile`` mints a fresh uuid for the
+        header and keeps the old path), the cwd the session was opened in, and
+        the per-message ``usage``/``cost`` the provider reported.
+        """
+        out = {"file": "", "header_id": "", "cwd": "", "records": [],
+               "usage": {}, "cost_usd": 0.0}
+        after = self._snapshot()
+        touched = sorted(n for n, sz in after.items() if before.get(n) != sz)
+        if not touched:
+            return out
+        # Prefer OUR file when several moved (another tenant should not be
+        # writing here at all, but the private agent dir is a policy, not a
+        # kernel guarantee).
+        name = touched[0]
+        if self.session_file and self.session_file in touched:
+            name = self.session_file
+        path = self.sessions_dir / name
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            return out
+        lines = text.splitlines()
+        if not lines:
+            return out
+        out["file"] = name
+        try:
+            head = json.loads(lines[0])
+            if isinstance(head, dict) and head.get("type") == "session":
+                out["header_id"] = str(head.get("id") or "")
+                out["cwd"] = str(head.get("cwd") or "")
+        except json.JSONDecodeError:
+            pass
+        # Only the records this round appended.
+        prior = before.get(name, 0)
+        tail = text[prior:] if prior and prior <= len(text) else (
+            "" if prior else text)
+        usage = {"prompt_tokens": 0, "completion_tokens": 0,
+                 "cached_input_tokens": 0}
+        found = False
+        cost = 0.0
+        for line in tail.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            out["records"].append(rec)
+            u = (rec.get("message") or {}).get("usage") if isinstance(rec, dict) else None
+            if not isinstance(u, dict):
+                continue
+            found = True
+            usage["prompt_tokens"] += int(u.get("input") or u.get("prompt_tokens") or 0)
+            usage["completion_tokens"] += int(u.get("output") or u.get("completion_tokens") or 0)
+            usage["cached_input_tokens"] += int(
+                u.get("cacheRead") or u.get("cached_input_tokens") or 0)
+            c = u.get("cost")
+            if isinstance(c, dict):
+                cost += float(c.get("total") or 0.0)
+        out["usage"] = usage if found else {}
+        out["cost_usd"] = cost
+        return out
+
     # -- one round --------------------------------------------------------- #
 
     def ask(self, prompt: str, *, kind: str = "round") -> RoundResult:
+        # GUARD FIRST, LAUNCH SECOND. The cwd assertion runs before the round
+        # counter moves and before any subprocess exists, because the thing it
+        # prevents is unkillable-by-timeout in the worst case and always
+        # invisible: a driver waiting on a confirm nobody will type.
+        self.assert_cwd()
         self.rounds += 1
         self.sent_chars += len(prompt)
+        json_mode = self.use_json_mode()
         argv = self.build_argv(prompt)
+        before = self._snapshot()
         t0 = time.time()
-        res = RoundResult(argv=argv)
+        res = RoundResult(argv=argv, json_mode=json_mode)
         try:
             stdout, stderr, rc = self.runner(argv, self._env(),
-                                             str(self.work_dir), self.timeout_s)
+                                             self.launch_cwd, self.timeout_s)
+        except RoundTimeout as exc:
+            self.timeouts += 1
+            res.timed_out = True
+            res.error = f"RoundTimeout: {exc}"
+            res.exit_code = -1
+            res.wall_s = time.time() - t0
+            res.session_id = self.session_id
+            self._log(kind, prompt, res)
+            return res
+        except subprocess.TimeoutExpired as exc:
+            # An injected runner that used subprocess.run's own timeout.
+            self.timeouts += 1
+            res.timed_out = True
+            res.error = (f"RoundTimeout: orchestrator call exceeded its "
+                         f"{self.timeout_s:g}s deadline ({exc})")
+            res.exit_code = -1
+            res.wall_s = time.time() - t0
+            res.session_id = self.session_id
+            self._log(kind, prompt, res)
+            return res
         except Exception as exc:
             res.error = f"{type(exc).__name__}: {exc}"
             res.exit_code = -1
             res.wall_s = time.time() - t0
+            res.session_id = self.session_id
             self._log(kind, prompt, res)
             return res
         res.wall_s = time.time() - t0
@@ -334,11 +679,27 @@ class PrimeAgentSession(SessionBase):
         if rc != 0 and not res.error:
             res.error = f"prime-agent exited {rc}: {(stderr or '')[:300]}"
 
-        new_id = (header or {}).get("id") or ""
+        # THE SESSION FILE IS THE AUTHORITY. json mode's stdout header agrees
+        # with it on the discovery round; on a text-mode round it is the only
+        # source, and it carries the cwd and the provider's own cost besides.
+        scan = self._scan_session_files(before)
+        res.session_file = scan["file"]
+        res.session_cwd = scan["cwd"]
+        if not usage and scan["usage"]:
+            usage = scan["usage"]
+            res.usage = usage
+        res.cost_usd_reported = float(scan["cost_usd"] or 0.0)
+        self.cost_usd_reported += res.cost_usd_reported
+
+        new_id = (header or {}).get("id") or scan["header_id"] or ""
         if new_id:
             if not self.session_id:
                 self.session_id = new_id
                 self.session_ids.append(new_id)
+                # RECORD THE CWD THE SESSION WAS BORN IN. Everything after this
+                # round is asserted against it.
+                self.session_cwd = scan["cwd"] or self.launch_cwd
+                self.session_file = scan["file"]
             elif new_id != self.session_id:
                 # The conversation forked. Recorded loudly: a run that believes
                 # it had one long conversation and actually had two is making a
@@ -347,6 +708,16 @@ class PrimeAgentSession(SessionBase):
                 self.continuity_breaks += 1
                 self.session_id = new_id
                 self.session_ids.append(new_id)
+                self.session_file = scan["file"] or self.session_file
+        elif self.session_id and scan["file"] and self.session_file \
+                and scan["file"] != self.session_file:
+            # No header id recoverable, but a DIFFERENT file grew. In text mode
+            # that is the only shape a silent fork can take, and reporting a
+            # continuity we did not verify is the failure this module exists to
+            # avoid.
+            res.continuity_broken = True
+            self.continuity_breaks += 1
+            self.session_file = scan["file"]
         res.session_id = self.session_id
         res.spend_usd = self._price(usage)
         self.spend_usd += res.spend_usd
@@ -629,11 +1000,17 @@ __all__ = [
     "DEFAULT_PROVIDER",
     "Decision",
     "ENV_AGENT_DIR",
+    "JSON_MODE_ALWAYS",
+    "JSON_MODE_DISCOVERY_ONLY",
+    "JSON_MODE_NEVER",
+    "JSON_MODE_POLICIES",
     "PRIME_AGENT_BIN",
     "PrimeAgentSession",
     "ReplaySession",
     "RoundResult",
+    "RoundTimeout",
     "SessionBase",
+    "SessionCwdMismatch",
     "parse_decision",
     "parse_json_mode_stdout",
     "seed_agent_dir",
