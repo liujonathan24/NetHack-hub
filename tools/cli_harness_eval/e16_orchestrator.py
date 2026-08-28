@@ -3039,6 +3039,12 @@ def _attempt_dir_evidence(out_dir: Path) -> dict:
 ENV_CRASH_LOG_NAME = "env_crash.log"
 ENV_CRASH_MARKER = "Fatal Python error"
 
+#: How quiet a progress sample has to be before it stops counting as "the
+#: attempt was still playing here". Well under the stall watchdog's 300 s so a
+#: normal slow turn still counts, well over a sampling interval so one late
+#: sample does not.
+PROGRESS_IDLE_FLOOR_S = 120.0
+
 
 def env_crash_evidence(out_dir) -> str:
     """The env tool server's dying words, or "" if it did not die that way.
@@ -3091,18 +3097,35 @@ def progress_spend_estimate(out_dir) -> dict:
     nothing ever read it back: when the rollout failed to report, the attempt
     was booked at $0.00 and the estimate died in the log.
 
+    THE SAMPLE IS TAKEN WHERE PLAY STOPPED, NOT WHERE THE ATTEMPT DID. The
+    estimate is wall-clock * a $/hour rate, and a crashed attempt's wall clock
+    runs on long after the game process is gone: the stall watchdog needs its
+    full 300 s of silence before it will act, and no tokens are bought in that
+    time. Charging it anyway inflates the lower bound by minutes of nothing --
+    and because the bound is booked against a HARD ceiling, an inflated one
+    shortens every later attempt through the in-flight guard. So take the last
+    sample the attempt was still moving in (`idle_s` under the stall floor),
+    and fall back to the final sample only if no sample was ever live.
+
     Returns `{}` when there is nothing to read. Every key keeps its
     `spend_so_far_*` name so it can never be mistaken for a measurement.
     """
-    rows = read_jsonl(Path(out_dir) / "progress.jsonl")
-    for rec in reversed(rows):
-        if isinstance(rec.get("spend_so_far_usd"), (int, float)):
-            return {k: rec[k] for k in (
-                "spend_so_far_usd", "spend_so_far_upper_usd",
-                "spend_so_far_source", "spend_so_far_is_estimate",
-                "spend_so_far_rate_usd_per_hour", "spend_so_far_rate_source",
-                "spend_so_far_safety_factor") if k in rec}
-    return {}
+    keys = ("spend_so_far_usd", "spend_so_far_upper_usd",
+            "spend_so_far_source", "spend_so_far_is_estimate",
+            "spend_so_far_rate_usd_per_hour", "spend_so_far_rate_source",
+            "spend_so_far_safety_factor")
+    rows = [r for r in read_jsonl(Path(out_dir) / "progress.jsonl")
+            if isinstance(r.get("spend_so_far_usd"), (int, float))]
+    if not rows:
+        return {}
+    live = [r for r in rows
+            if isinstance(r.get("idle_s"), (int, float))
+            and r["idle_s"] < PROGRESS_IDLE_FLOOR_S]
+    rec = live[-1] if live else rows[-1]
+    out = {k: rec[k] for k in keys if k in rec}
+    out["spend_so_far_sampled_at_wall_s"] = rec.get("wall_s")
+    out["spend_so_far_sampled_while_playing"] = bool(live)
+    return out
 
 
 def _partial_spend(out_dir: Path) -> tuple:

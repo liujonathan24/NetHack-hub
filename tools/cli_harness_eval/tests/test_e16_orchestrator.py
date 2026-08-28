@@ -2476,6 +2476,40 @@ def test_an_attempt_that_left_no_evidence_reports_null_not_zero(tmp_path):
     assert E.progress_spend_estimate(tmp_path / "nothing-here") == {}
 
 
+def test_the_lower_bound_stops_where_play_stopped_not_where_the_attempt_did(
+        tmp_path):
+    """The estimate is wall-clock times a rate, and a crashed attempt's wall
+    clock keeps running through the stall watchdog's 300 s of silence. Nothing
+    is bought in that time, and the bound is booked against a HARD ceiling --
+    so charging it would shorten every later attempt for no reason."""
+    out = tmp_path / "a001"
+    out.mkdir()
+    with (out / "progress.jsonl").open("w") as fh:
+        for wall, idle, usd in ((100.0, 12.0, 2.0), (300.0, 15.0, 6.0),
+                                (450.0, 165.0, 9.0), (600.0, 315.0, 12.0)):
+            fh.write(json.dumps({
+                "event": "progress", "wall_s": wall, "idle_s": idle,
+                "spend_so_far_usd": usd, "spend_so_far_upper_usd": usd * 2,
+                "spend_so_far_is_estimate": True}) + "\n")
+    est = E.progress_spend_estimate(out)
+    assert est["spend_so_far_usd"] == 6.0, "the last sample that was still moving"
+    assert est["spend_so_far_sampled_at_wall_s"] == 300.0
+    assert est["spend_so_far_sampled_while_playing"] is True
+
+
+def test_an_attempt_that_never_moved_still_reports_its_last_estimate(tmp_path):
+    """No live sample is not a reason to report nothing -- it is a reason to
+    say the bound was not taken while playing."""
+    out = tmp_path / "a001"
+    out.mkdir()
+    (out / "progress.jsonl").write_text(json.dumps({
+        "event": "attempt_end", "wall_s": 600.0, "idle_s": 590.0,
+        "spend_so_far_usd": 12.0, "spend_so_far_upper_usd": 24.0}) + "\n")
+    est = E.progress_spend_estimate(out)
+    assert est["spend_so_far_usd"] == 12.0
+    assert est["spend_so_far_sampled_while_playing"] is False
+
+
 def test_a_measured_attempt_is_not_labelled_a_lower_bound(tmp_path):
     """The flags must stay off on the normal path, or they say nothing."""
     cfg = cfg_for(tmp_path / "run", selector="scripted",
