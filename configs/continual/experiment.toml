@@ -14,7 +14,7 @@
 #   # edit this file + the reflection prompt + (optionally) the skill package
 #   tools/cli_harness_eval/run_e13.sh
 
-id = "e16-s10-reflect"
+id = "e17-s6-level-then-descend"
 replicate = 1
 
 # How many reflect -> play rounds. Each round is len(corpus_seeds) games.
@@ -22,7 +22,7 @@ rounds = 5
 
 # The games the agent plays and reflects on. The other arm of the headline
 # comparison sets this to a single seed and asks the same lessons to generalise.
-corpus_seeds = [10]
+corpus_seeds = [6]
 
 # HELD OUT. Never played during the experiment and never reflected on; the
 # frozen store is evaluated on these by tools/cli_harness_eval/eval_frozen.sh,
@@ -43,7 +43,7 @@ merge = "newest-wins"
 # The orchestrator's reflection instructions, relative to configs/continual/.
 # Appended AFTER the invariant contract, so a variant can add guidance but not
 # drop the output format, the entry budget, or the read-only rule.
-prompt = "default.md"
+prompt = "level_then_descend.md"
 
 # Tier the games run at. `continual` carries [base]'s flags plus the store, so a
 # measured gain is the agent's own edits rather than the hand-engineered fixes.
