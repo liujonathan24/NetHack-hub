@@ -82,13 +82,22 @@ class EpisodeOver(RuntimeError):
 
 
 def _log(record: dict[str, Any]) -> None:
-    """Append one beacon record. Never raises -- see the maintainer note."""
+    """Append one beacon record. Never raises -- see the maintainer note.
+
+    Every record carries the calling kernel's pid. A sub-agent spawned with
+    `rlm(...)` inherits NETPLAY_CALL_LOG and reaches the same live game, but
+    runs in its own kernel process, and nothing else in the recorded surface
+    distinguishes its calls from the root player's: the per-rollout NDJSON has
+    no caller field and every MCP client shares one dispatch_route. The pid is
+    the only handle that separates them after the fact.
+    """
     path = os.environ.get("NETPLAY_CALL_LOG")
     if not path:
         return
     try:
         with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+            fh.write(json.dumps({**record, "pid": os.getpid()},
+                                separators=(",", ":")) + "\n")
     except Exception:
         pass
 
