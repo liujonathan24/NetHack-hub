@@ -222,6 +222,10 @@ for r in $(seq 1 "$ROUNDS"); do
   play_round "$r"
   reset_daemon   # the orchestrator is a prime-agent process too
 
+  if [ "${NO_REFLECT:-}" = "1" ]; then
+    echo "[round] NO_REFLECT=1 -- skipping both orchestrators (mechanical merges only)"
+    continue
+  fi
   # STORE orchestrator (memory harness): reflects on traces -> writes the store.
   # Runs for every continual arm; its store is what continual-code layers ON TOP
   # of the code channel (both accumulate, they are not exclusive).
