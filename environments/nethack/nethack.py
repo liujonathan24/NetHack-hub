@@ -51,6 +51,76 @@ _sys_boot.modules[_ho_spec.name] = _harness_overlay
 _ho_spec.loader.exec_module(_harness_overlay)
 
 
+#: E16: how the orchestrator's per-attempt directive appears in the player's
+#: FIRST served observation. A MODULE CONSTANT, not an inline f-string, because
+#: the acceptance check for a directive is a served-bytes check -- extract what
+#: the model was actually sent and look for this block verbatim -- and the test
+#: and the renderer must be reading the same template or the check passes while
+#: measuring nothing. This project has shipped that exact failure twice (E15's
+#: wrong SKILL.md; a gate that fired after the descent it was gating).
+DIRECTIVE_BLOCK_FORMAT = "[ORCHESTRATOR DIRECTIVE for this attempt: {directive}]"
+
+#: E16 prefix continuity: how many (assistant, tool, observation) triples the
+#: running transcript keeps, and how many characters of each. A checkpoint's
+#: `prefix.jsonl` is meant to carry "the plan that was live when this state was
+#: saved", not the whole game -- an uncapped transcript on an uncapped player
+#: would be megabytes per checkpoint and would dominate the resume prompt.
+CONVERSATION_PREFIX_TURNS = 24
+CONVERSATION_PREFIX_CHARS = 1200
+
+#: Where the running transcript lives on the env, for the `save` skill to read.
+CONVERSATION_PREFIX_ATTR = "_conversation_prefix"
+
+
+def _append_conversation_prefix(state, env, assistant_msg, tool_calls, obs_text):
+    """Append one turn to the transcript a checkpoint's ``prefix.jsonl`` gets.
+
+    WHAT THIS IS, EXACTLY -- and the gap matters enough to name it here rather
+    than in a design doc. The design asks for prefix continuity: a resumed
+    player's CONVERSATION is the checkpoint's own ``prefix.jsonl``. The player
+    scaffolds cannot do that today. ``nethack_prime_agent`` launches every
+    rollout with ``--print --no-session`` (installed package, ``__init__.py``
+    around line 653) and its own relaunch docstring says what that costs --
+    "only the agent's own conversation is gone" -- while claude_code passes
+    ``--no-session-persistence``. There is no seam to hand either of them a
+    prior conversation, and the env only ever sees the MCP tool-call side of
+    the exchange.
+
+    So this records the LM-VISIBLE EXCHANGE -- what the model said, what it
+    called, what it was served -- which is a faithful transcript of the game
+    conversation and NOT the CLI's internal one (no system prompt, no scaffold
+    turns, no reasoning the harness did not receive). A resume replays it as
+    quoted text in the first observation, exactly as `resume_from` already
+    does for trace resumes. That is continuity of CONTENT, not of session, and
+    every run says which it had (``provenance.json``:
+    ``prefix_continuity: "text_only"``).
+
+    Writing it anyway is not busywork: it is the data a real implementation
+    would need, and without it ``prefix.jsonl`` stays empty and H4 -- "lessons
+    plus prefix continuity transfer" -- silently tests only the lessons half.
+    """
+    if env is None:
+        return
+    msg = assistant_msg
+    if isinstance(msg, dict):
+        msg = msg.get("content")
+    text = " ".join(str(msg or "").split())[:CONVERSATION_PREFIX_CHARS]
+    calls = [{"name": c.get("name"), "arguments": c.get("arguments")}
+             for c in (tool_calls or []) if isinstance(c, dict)]
+    served = " ".join(str(obs_text or "").split())[:CONVERSATION_PREFIX_CHARS]
+    buf = state.setdefault("_conversation_prefix", [])
+    if text or calls:
+        buf.append({"role": "assistant", "content": text, "tool_calls": calls})
+    if served:
+        buf.append({"role": "user", "content": served})
+    # Bounded, oldest dropped: the tail is the plan that was live at save time,
+    # which is the part a resume is for.
+    limit = 2 * CONVERSATION_PREFIX_TURNS
+    if len(buf) > limit:
+        del buf[:-limit]
+    setattr(env, CONVERSATION_PREFIX_ATTR, buf)
+
+
 # ---------- game spec ----------
 #
 # The env runs the standard full NetHack ascension game. The former 13-tier
@@ -516,12 +586,45 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # costs a few result tokens per call). The published tool schemas are
         # never touched either way.
         call_id_in_results: bool = True,
+        # ---- E16 Go-Explore -------------------------------------------------
+        # A checkpoint DIRECTORY (`archive/<run>/c<id>`) this rollout resumes
+        # from instead of starting at the dungeon entrance. Unlike `resume_from`
+        # (which REPLAYS a recorded turn file through a fresh engine), this
+        # loads engine state off disk: see nethack_harness/checkpoints.py. The
+        # restore is audited against the checkpoint's own meta.json and raises
+        # rather than continuing on a mismatch.
+        resume_checkpoint: Optional[str] = None,
+        # The archive root the published `save` skill writes new checkpoints
+        # into. Without it `save` is a no-op that says so.
+        checkpoint_archive: Optional[str] = None,
+        # The curated knowledge base the published `wiki` skill reads (the run
+        # directory's own COPY of the pages, so the served bytes are recoverable
+        # from the output tree).
+        wiki_dir: Optional[str] = None,
+        # Orchestrator-rendered ledger + lessons, injected ONCE into the first
+        # observation. Text only; it never contributes to any metric.
+        ledger_text: Optional[str] = None,
+        # The orchestrator's instruction for THIS attempt ("from c12, avoid the
+        # east corridor, try the south door"). Rendered as its own delimited
+        # block at the TOP of the first observation, ahead of the resume banner
+        # and the ledger, because it is the one thing in that observation that
+        # is about what to do next. Text only, like everything the orchestrator
+        # writes: it never contributes to any metric.
+        directive: Optional[str] = None,
+        # Where the restore-fidelity audit records are appended (JSONL).
+        fidelity_log: Optional[str] = None,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
         self.call_id_in_results = bool(call_id_in_results)
         self._resume_from = resume_from or None
+        self._resume_checkpoint = resume_checkpoint or None
+        self._checkpoint_archive = checkpoint_archive or None
+        self._wiki_dir = wiki_dir or None
+        self._ledger_text = ledger_text or None
+        self._directive = directive or None
+        self._fidelity_log = fidelity_log or None
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         # env_args flow through the eval CLI as dotted-scalar STRINGS, so
@@ -703,6 +806,81 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_character pins the role for standard tiers (e.g. full_nle);
         # None keeps the engine default. Curriculum envs own their character.
         obs, meta = env.reset(character=self._setup_character)
+
+        # ---- E16: resume from a persistent checkpoint -----------------------
+        # Done HERE, right after reset and before anything reads the engine,
+        # because it REPLACES engine state rather than replaying onto it. The
+        # env object identity is preserved (checkpoint_restore takes an env to
+        # reuse), so `state["env"]` below is still the object every skill sees.
+        #
+        # No try/except: a checkpoint that will not restore, or restores to a
+        # state its meta.json does not describe, must abort this rollout loudly.
+        # Swallowing it would start a "Go-Explore attempt from c7" that is
+        # actually a fresh level-1 game -- which is exactly the class of silent
+        # substitution that invalidated E15.
+        if self._resume_checkpoint:
+            from nethack_harness.checkpoints import checkpoint_restore
+            env, ck_meta = checkpoint_restore(
+                self._resume_checkpoint, env=env,
+                fidelity_log=self._fidelity_log,
+            )
+            # The restored frame, published by checkpoint_restore. Falling back
+            # to the reset's obs would show the level-1 starting room under the
+            # checkpoint's status line.
+            from nethack_harness.checkpoints import LAST_RESTORE_OBS_ATTR
+            _robs = getattr(env, LAST_RESTORE_OBS_ATTR, None)
+            if _robs is None:
+                raise RuntimeError(
+                    f"checkpoint {self._resume_checkpoint} restored but produced "
+                    f"no observation; refusing to serve the pre-restore frame")
+            obs = _robs
+            state["resumed_checkpoint"] = str(self._resume_checkpoint)
+            state["resumed_checkpoint_meta"] = {
+                k: ck_meta.get(k) for k in
+                ("id", "name", "note", "dlvl", "xl", "hp", "max_hp",
+                 "gameturn", "score", "balrog", "balrog_min", "attempts_from",
+                 "visits", "parent")
+            }
+            state["restore_fidelity"] = ck_meta.get("restore_fidelity")
+            # One-shot resume banner, rendered into the FIRST observation via
+            # the existing `_resume_notice` hook (env_response). The numbers in
+            # it come from the checkpoint's harness-computed meta, never from
+            # the model's own note -- the note is quoted as text and labelled.
+            _ck_lines = [
+                f"RESUMED FROM CHECKPOINT {ck_meta.get('id')} "
+                f"({ck_meta.get('name') or 'unnamed'!r}) -- you are NOT starting "
+                f"fresh. Dlvl {ck_meta.get('dlvl')}, XL {ck_meta.get('xl')}, "
+                f"HP {ck_meta.get('hp')}/{ck_meta.get('max_hp')}, "
+                f"game turn {ck_meta.get('gameturn')}. "
+                f"{int(ck_meta.get('attempts_from') or 0)} previous attempt(s) "
+                f"started from this state.",
+            ]
+            if ck_meta.get("note"):
+                _ck_lines.append(
+                    f"Why it was saved (author's own words): {ck_meta['note']}")
+            if self._ledger_text:
+                _ck_lines.append(self._ledger_text)
+            state["_resume_notice"] = "\n".join(_ck_lines)
+        elif self._ledger_text:
+            state["_resume_notice"] = self._ledger_text
+        # One-shot, and its OWN block rather than a line inside the resume
+        # banner: an experiment that has to measure whether the player followed
+        # the instruction cannot have that instruction blended into narration.
+        if self._directive:
+            state["_directive_notice"] = self._directive
+
+        # ---- E16: run resources the published skills read off the env -------
+        # `save` and `wiki` are tier-published tools; both look their resource
+        # up on the env object with getattr, so an arm that does not configure
+        # one gets an explicit "not configured" message instead of a crash.
+        from nethack_harness.tools.skills import (
+            CHECKPOINT_ARCHIVE_ATTR as _CK_ATTR, WIKI_KB_ATTR as _WIKI_ATTR,
+        )
+        if self._checkpoint_archive:
+            setattr(env, _CK_ATTR, self._checkpoint_archive)
+        if self._wiki_dir:
+            setattr(env, _WIKI_ATTR, self._wiki_dir)
+
         from nethack_harness.tools.skills import bootstrap_character
         character = bootstrap_character(env)
 
@@ -1151,6 +1329,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             applied=True,
             dispatch_route=route,
         )
+        # E16 PREFIX CONTINUITY (write half). The same three facts the trace
+        # record gets -- what the model said, what it called, what it was
+        # served back -- appended to a bounded in-memory transcript that
+        # `save()` writes into the checkpoint's `prefix.jsonl`. See
+        # `_append_conversation_prefix` for what this can and cannot be.
+        try:
+            _append_conversation_prefix(state, state.get("env"),
+                                        state.get("_last_assistant_msg"),
+                                        trace_calls, obs_text)
+        except Exception:
+            pass  # transcript bookkeeping must never break a turn
         return content
 
     async def _apply_tool_call_inner(self, state: vf.State, skill_name: str, skill_args: dict):
@@ -1748,6 +1937,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["balrog_progression"] = progression_score(
             state["max_dlvl_reached"], s.get("experience_level", 1)
         )
+        # E16: mirror the RUN's high-water marks onto the env so the published
+        # `save` skill can reach them. The skill is handed only `(env, obs)`,
+        # and BALROG scores the deepest level a rollout TOUCHED -- without this
+        # a checkpoint written after climbing back up would carry a BALROG pair
+        # for a shallower run than the one that happened. Cheap, and the ONLY
+        # channel from harness state to a skill.
+        try:
+            from nethack_harness.checkpoints import (
+                HIGH_WATER_DLVL_ATTR as _HW_D, HIGH_WATER_XL_ATTR as _HW_X,
+            )
+            setattr(env, _HW_D, int(state["max_dlvl_reached"]))
+            setattr(env, _HW_X, int(state["max_xp_level"]))
+        except Exception:
+            pass  # never let bookkeeping break a turn
         # E16 INTEGRITY GATE — must run BEFORE any death detector.
         #
         # NetHack's done(TRICKED) is not a game outcome, it is an abort: the
@@ -2161,6 +2364,15 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         _rnote = state.pop("_resume_notice", None)
         if _rnote:
             prefix_parts.insert(0, f"[{_rnote}]")
+        # E16: the orchestrator's directive for this attempt, inserted AFTER the
+        # resume banner so it lands at index 0 -- first thing in the first
+        # observation. The wording is fixed and greppable on purpose: the
+        # served-bytes check for a directive is "does this exact block appear
+        # in what the model was sent", and a template that drifts breaks the
+        # check silently.
+        _dirnote = state.pop("_directive_notice", None)
+        if _dirnote:
+            prefix_parts.insert(0, DIRECTIVE_BLOCK_FORMAT.format(directive=_dirnote))
         # Post-skill prompt/menu cleanup, deliberately NOT under the autohalt
         # label -- a closed prompt is not an interrupted plan.
         _dn = state.pop("_dismiss_notice", None)

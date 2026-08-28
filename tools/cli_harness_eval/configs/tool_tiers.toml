@@ -190,6 +190,49 @@ skill_doc_coords = false
 [v2_odjson.contract]
 variant = "BBOX_BJSON_OD"
 
+# ---------------------------------------------------------------------------
+# E16 GO-EXPLORE (2026-08-28). The GE-wiki arm of the Go-Explore-on-one-seed
+# design: an orchestrator resumes players from an archive of persistent
+# checkpoints instead of starting each attempt cold.
+#
+# THE ONLY DELTA FROM [base] IS THE SKILL SET. Doc, model, character,
+# task_spec, variant (BBOX_MIN), tune.reveal_map, auto_dismiss, max_calls (0 =
+# uncapped, which the design requires: the deepest run in the program took 353
+# calls and a cap would truncate exactly the deep pushes this experiment exists
+# to produce), allow_batching, max_relaunches, and all three fix flags are
+# inherited unchanged. Diff against [base] with:
+#     tool_tiers.py flags base | diff - <(tool_tiers.py flags e16_gewiki)
+# which must show the skill_set line and the tier-name/hash provenance lines,
+# and nothing else.
+#
+# skill_set = base + rollback + save + wiki.
+#   rollback  -- kept, not added for novelty: it is the proven converter
+#                behaviour from [p3_rollback], and publishing it is also what
+#                arms the per-turn engine snapshot ring (nethack.py:1675 gates
+#                the snapshot on the tool being published, so no other arm pays
+#                for it).
+#   save      -- the model-driven half of the checkpoint archive.
+#   wiki      -- the curated two-page knowledge base (why_do_i_keep_dying,
+#                standard_strategy), copied into the run directory at launch.
+#
+# `save` and `wiki` are in helpers._E16_UNPUBLISHED_BY_DEFAULT, which every
+# PRESET filters out, so they reach a served prompt only through an explicit
+# token in a comma-separated skill_set -- i.e. only through this line. No other
+# tier's served bytes move.
+#
+# SEEDS: the design runs seed 1 only (the program's proven deep seed: D13 in
+# the base control, D15 in forced-revive rep 2). That is NOT pinned here,
+# because the contract's seed list is a [base] factor and changing it would
+# make this tier non-comparable on a second axis; the E16 launcher passes
+# SEEDS=[1] N=1, which launch_cell.sh records in the cell's config.toml as
+# `seeds_overridden = true`.
+[e16_gewiki]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki.contract]
+skill_set = "np_core,request_map,search,rollback,save,wiki"
+
 [continual]
 # STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
 # store the agent writes for itself, so its floor must be the same floor the

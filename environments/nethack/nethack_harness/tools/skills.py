@@ -2513,8 +2513,13 @@ def save(env: NetHackCoreEnv, obs: StructuredObservation,
         )
     directory = _next_checkpoint_dir(root)
     try:
+        # High-water marks and the conversation prefix are NOT passed here:
+        # `checkpoint_save` reads them off the env itself (HIGH_WATER_*_ATTR,
+        # CONVERSATION_PREFIX_ATTR), because a skill is handed only `(env, obs)`
+        # and adding them to this signature would put two harness-owned numbers
+        # in a schema the model can write to.
         meta = checkpoint_save(env, directory, name=label or directory.name,
-                               note=note or "")
+                               note=note or "", created_by="save")
     except _CheckpointIntegrityError:
         raise  # a broken game must not be silently checkpointed
     except Exception as exc:
@@ -2528,3 +2533,103 @@ def save(env: NetHackCoreEnv, obs: StructuredObservation,
             f"{meta['id']}."
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# E16 knowledge tool — `wiki(page, query, section)`
+#
+# UNPUBLISHED BY DEFAULT, for the same reason as `save`: `skill_set="full"`
+# publishes every registered skill, so a bare @register would add a tool to
+# every existing arm's served prompt and silently break the served-bytes
+# comparison against the frozen E14/E15 control. `wiki` is therefore listed in
+# `_HARNESS_OWNED` (nethack_harness/helpers.py), which every skill_set branch
+# filters out; only a tier that names it explicitly (`e16_gewiki`) publishes it.
+#
+# NOT `wiki_lookup`/`wiki_search`: those read the 2k-page snapshot index
+# (tools/wiki.py) and are part of other arms' surfaces. This one reads the
+# curated two-page subset copied into the run directory, so what the model saw
+# is recoverable byte-for-byte from the run's own output tree.
+# --------------------------------------------------------------------------- #
+
+#: Where `wiki` reads from when the caller has not put a KB on the env.
+#: Set by the E16 launcher to `<run>/wiki/` (the copied pages).
+WIKI_KB_ATTR = "_wiki_kb_dir"
+
+#: Env-var fallback. The tool server is a SEPARATE process (`python -m
+#: nethack_v1`) that inherits the launcher's environment, so a run directory
+#: that is decided by the orchestrator can reach the skill this way without a
+#: config round-trip.
+WIKI_KB_ENV = "NLD_E16_WIKI_DIR"
+
+#: Parsed KBs, keyed by directory. The pages are immutable for a run's
+#: lifetime, so parsing them once per process is safe and keeps the tool's
+#: latency off the game clock.
+_WIKI_KB_CACHE: dict = {}
+
+
+def _wiki_kb(env):
+    """The `WikiKB` for this run, or ``None`` if no knowledge base is configured."""
+    import os as _os
+    from pathlib import Path as _Path
+
+    root = getattr(env, WIKI_KB_ATTR, None) or _os.environ.get(WIKI_KB_ENV)
+    if not root:
+        return None
+    key = str(_Path(root))
+    if key not in _WIKI_KB_CACHE:
+        from nethack_harness.wiki_kb import WikiKB
+        _WIKI_KB_CACHE[key] = WikiKB(key)
+    return _WIKI_KB_CACHE[key]
+
+
+@registry.register("wiki", schema={
+    "description": (
+        "Look up NetHack knowledge (two curated pages: 'Why do I keep dying?' "
+        "and 'Standard strategy'). Call with no arguments for the list of "
+        "pages and their sections; page= to read a page (optionally with "
+        "section=); query= to search every section for a word. Costs no game "
+        "time. Use it BEFORE engaging an unfamiliar monster or spending a "
+        "one-shot resource such as prayer."
+    ),
+    "parameters": {
+        "page": {"type": "string",
+                 "description": "Page id or title, e.g. 'why_do_i_keep_dying'.",
+                 "default": ""},
+        "query": {"type": "string",
+                  "description": "Word to search for, e.g. 'wraith'.",
+                  "default": ""},
+        "section": {"type": "string",
+                    "description": "Section within page=, e.g. 'Praying'.",
+                    "default": ""},
+    },
+})
+def wiki(env: NetHackCoreEnv, obs: StructuredObservation,
+         page: str = "", query: str = "", section: str = "") -> SkillResult:
+    """Read the curated knowledge base. No engine actions, no game time.
+
+    ``interrupted=True`` matches the existing knowledge tools: the answer is
+    the whole result, and the caller should not have the observation re-pushed
+    as if a game action had happened.
+    """
+    try:
+        kb = _wiki_kb(env)
+    except Exception as exc:
+        return SkillResult(actions=[], feedback=f"wiki unavailable: {exc}",
+                           interrupted=True)
+    if kb is None:
+        return SkillResult(
+            actions=[],
+            feedback="wiki unavailable: no knowledge base is configured for this run.",
+            interrupted=True,
+        )
+    try:
+        if query:
+            body = kb.search(query)
+        elif page:
+            body = kb.read(page, section or None)
+        else:
+            body = kb.toc()
+    except Exception as exc:  # a KB read must never end a rollout
+        return SkillResult(actions=[], feedback=f"wiki failed: {exc}",
+                           interrupted=True)
+    return SkillResult(actions=[], feedback=body, interrupted=True)

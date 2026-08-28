@@ -547,6 +547,71 @@ if [ -n "${CONTINUAL_HARNESS:-}" ]; then
   echo "[launch_cell] continual: run_id=${CONTINUAL_RUN_ID} store=${CONTINUAL_HARNESS}"
 fi
 
+# E16_ARGS: a JSON object of E16 Go-Explore env_args, allowed ALONGSIDE
+# TOOL_TIER. That is the difference from ENV_ARGS, and it is a whitelist, not a
+# relaxation.
+#
+# ENV_ARGS is refused next to TOOL_TIER because both write arbitrary
+# `--taskset.env_args.*` paths and the eval CLI resolves duplicates last-wins,
+# SILENTLY -- measured: ENV_ARGS='{"netplay_telemetry":true}' with TOOL_TIER=base
+# produced a cell labelled base running a human-tier fix. That reasoning is about
+# COLLISION, not about the mechanism: keys no tier can ever write cannot collide.
+#
+# So this knob accepts exactly five keys, all of which name E16 run RESOURCES
+# (which archive, which pages, which checkpoint, where to log) rather than
+# experiment factors. Every experiment factor -- doc, model, surface, encoding,
+# budget, fix flags -- still comes only from the tier. The whitelist is enforced
+# below and an unknown key is a hard error, so this cannot become a second,
+# quieter ENV_ARGS.
+#
+#   resume_checkpoint   archive/<run>/c<id> this rollout resumes from
+#   checkpoint_archive  archive root the published `save` skill writes into
+#   wiki_dir            the run's own COPY of the curated wiki pages
+#   ledger_text         orchestrator-rendered ledger for the first observation
+#   fidelity_log        JSONL the restore-fidelity audit appends to
+#   directive           the orchestrator's instruction for THIS attempt, served
+#                       verbatim in the player's first observation
+if [ -n "${E16_ARGS:-}" ]; then
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*|*" claude_code "*) ;;
+    *)
+      echo "launch_cell: E16_ARGS is for the CLI arms (it writes taskset.env_args)." >&2
+      exit 2
+      ;;
+  esac
+  mapfile -t _E16_FLAGS < <(E16_ARGS="${E16_ARGS}" "$PY_BIN" - <<'PYE16'
+import json, os, sys
+ALLOWED = {"resume_checkpoint", "checkpoint_archive", "wiki_dir",
+           "ledger_text", "fidelity_log", "directive"}
+try:
+    obj = json.loads(os.environ["E16_ARGS"])
+except Exception as exc:
+    print(f"launch_cell: E16_ARGS is not valid JSON: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+if not isinstance(obj, dict):
+    print("launch_cell: E16_ARGS must be a JSON object", file=sys.stderr)
+    raise SystemExit(2)
+bad = sorted(set(obj) - ALLOWED)
+if bad:
+    print(f"launch_cell: E16_ARGS keys not allowed: {bad}. Allowed: "
+          f"{sorted(ALLOWED)}. An experiment FACTOR belongs in "
+          f"configs/tool_tiers.toml as its own tier, never here.", file=sys.stderr)
+    raise SystemExit(2)
+for k in sorted(obj):
+    v = obj[k]
+    if isinstance(v, (dict, list)):
+        print(f"launch_cell: E16_ARGS.{k} must be a scalar", file=sys.stderr)
+        raise SystemExit(2)
+    print(f"--taskset.env_args.{k}")
+    print(v if isinstance(v, str) else json.dumps(v))
+PYE16
+) || { echo "launch_cell: E16_ARGS rejected (see above)." >&2; exit 2; }
+  OVERRIDES+=("${_E16_FLAGS[@]}")
+  # The ledger text can be long; log the KEYS only, and let the resolved
+  # config.toml carry the values (which is where an audit should read them).
+  echo "[launch_cell] E16 env_args: $(printf '%s\n' "${_E16_FLAGS[@]}" | grep '^--' | tr '\n' ' ')"
+fi
+
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
 # EXTRA_EVAL_FLAGS: whitespace-separated eval-CLI flags appended LAST (they win

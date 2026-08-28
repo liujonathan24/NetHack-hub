@@ -270,13 +270,28 @@ def test_meta_records_the_full_e16_field_set(tmp_path):
     )
     for field in ("id", "parent", "name", "note", "dlvl", "xl", "hp", "max_hp",
                   "gameturn", "score", "balrog", "balrog_min", "visits",
-                  "attempts_from", "created_by"):
+                  "attempts_from", "created_by", "max_dlvl_reached",
+                  "max_xp_level", "balrog_metric"):
         assert field in meta, f"meta.json is missing {field}"
     assert meta["id"] == "7" and meta["parent"] == "3"
     assert meta["dlvl"] == 2
-    # balrog is the RUN's high-water progression, balrog_min what this
-    # checkpoint alone guarantees on resume (it sits at dlvl 2, not 4).
-    assert meta["balrog"] > meta["balrog_min"] > 0
+    # THE PAIR IS THE HOUSE METRIC, and this assertion was wrong before.
+    #
+    # It used to read `balrog > balrog_min > 0`, encoding an invented meaning
+    # ("balrog_min is what this checkpoint alone guarantees on resume") on top
+    # of `progression_score` -- the analytic proxy whose own module says
+    # "DEPRECATED ... do not quote it as BALROG". Two errors at once: the wrong
+    # function, and a `min` that was not BALROG's min. `balrog_both` is what
+    # nethack_v1's finalize publishes as balrog_pct / balrog_min_pct: max and
+    # min over the (Dlvl, XL) axes of the real achievement table. At Dlvl 4 /
+    # XL 1 the min is legitimately 0.0 -- an XL-1 character has reached no Xp
+    # achievement -- and that zero is the SIGNAL, not a bug: it says this state
+    # is deep-but-unlevelled.
+    from nethack_harness.prompt.balrog import balrog_both
+    hi, lo = balrog_both(4, 1)
+    assert (meta["balrog"], meta["balrog_min"]) == (hi, lo)
+    assert meta["balrog"] > meta["balrog_min"] == 0.0
+    assert meta["max_dlvl_reached"] == 4 and meta["max_xp_level"] == 1
     assert (ck / LESSONS_MD).read_text() == "mines are east\n"
     assert checkpoint_list(ck.parent) == [ck]
 

@@ -1292,16 +1292,33 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
     import inspect
     from typing import Optional as _Opt
 
-    # Skills the harness owns (never exposed as agent tools). Menu/inventory
-    # selection is auto-dismissed in env_response; eat/quaff/read take an
-    # `item` arg and bundle the selection in-skill. Exposing these as agent
-    # tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
-    # `save` (E16 persistent checkpoints) is here for a different reason: it is
-    # a finished, dispatchable skill that is not published to ANY tier yet.
-    # `skill_set="full"` publishes every registered skill, so without this line
-    # merely registering it would add a tool to every existing arm's served
-    # prompt. Publishing it must be a deliberate edit to a tier's tool list.
-    _HARNESS_OWNED = {"inventory_item", "menu_option", "save"}
+    # Skills the harness owns (NEVER exposed as agent tools, by any skill_set).
+    # Menu/inventory selection is auto-dismissed in env_response; eat/quaff/read
+    # take an `item` arg and bundle the selection in-skill. Exposing these as
+    # agent tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
+    _HARNESS_OWNED = {"inventory_item", "menu_option"}
+
+    # E16 skills: registered and dispatchable, but published by NO PRESET.
+    #
+    # These are a weaker guard than _HARNESS_OWNED and deliberately so. The
+    # danger they defend against is `skill_set="full"` (and every other preset)
+    # publishing every registered skill, which would have added tools to every
+    # existing arm's served prompt the moment `save` was registered -- defeating
+    # the served-bytes comparison against the frozen E14/E15 control with no
+    # error anywhere. So every PRESET branch filters them, exactly as it filters
+    # _HARNESS_OWNED, and no existing tier's bytes move.
+    #
+    # What they must still allow is publication: a comma-separated skill_set
+    # that names one EXPLICITLY gets it. That is the "deliberate tier edit" the
+    # design asks for -- `e16_gewiki`'s
+    # `np_core,request_map,search,rollback,save,wiki` -- and it cannot happen by
+    # accident, because a preset name never expands to these and a typo does not
+    # spell `save`. _HARNESS_OWNED stays absolute: naming `menu_option` in a
+    # comma list still publishes nothing.
+    _E16_UNPUBLISHED_BY_DEFAULT = {"save", "wiki"}
+
+    # What a PRESET must never publish: both sets.
+    _PRESET_EXCLUDED = _HARNESS_OWNED | _E16_UNPUBLISHED_BY_DEFAULT
 
     # Namespace prefix of the vendored NetPlay skills (see tools/netplay_true.py).
     _NETPLAY_TRUE_PREFIX = "np_"
@@ -1331,7 +1348,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         for tname, dir_canon in _DIR_NAMES:
             out.append(_make_fixed_direction_adapter(tname, dir_canon))
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
+            if name in _PRESET_EXCLUDED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
@@ -1357,7 +1374,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         # comma-`skill_set` (e.g. "<netplay tools>,reveal,request_map").
         out = []
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
+            if name in _PRESET_EXCLUDED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
@@ -1373,7 +1390,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
                 "wiki_lookup", "wiki_search"}
         out = []
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
+            if name in _PRESET_EXCLUDED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
@@ -1485,6 +1502,8 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
                         out.append(adapter)
         keep = {t for t in tokens if t not in presets}
         for name, schema in skill_registry.all_schemas().items():
+            # _HARNESS_OWNED, not _PRESET_EXCLUDED: an EXPLICIT token in a
+            # comma-separated skill_set is how E16 publishes `save`/`wiki`.
             if name in _HARNESS_OWNED: continue
             if name not in keep or name in seen: continue
             params = schema.get("parameters", {}) or {}
@@ -1494,7 +1513,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
     # default 'full'
     out = []
     for name, schema in skill_registry.all_schemas().items():
-        if name in _HARNESS_OWNED:
+        if name in _PRESET_EXCLUDED:
             continue
         # The vendored NetPlay skills register themselves globally the moment
         # nethack_harness.tools.netplay_true is imported (by the
