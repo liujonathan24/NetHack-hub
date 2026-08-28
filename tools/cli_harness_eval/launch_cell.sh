@@ -662,6 +662,47 @@ fi
 
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
 
+# ROLLOUT_MAX_RETRIES: the WHOLE-ROLLOUT retry bound (verifiers'
+# `[retries.rollout] max_retries`). This is a COST MULTIPLIER, not a reliability
+# knob: `verifiers/v1/retries.py:run_with_retry` replays the entire trajectory
+# from turn 1, so an attempt with max_retries=2 can pay for THREE full rollouts.
+# Measured (E16 method test): a provider `429 Rate limit reached` storm drove
+# `retry 1/2` then `retry 2/2`, billing $31.43 for one attempt that then
+# recorded `censored:harness_error`.
+#
+# WHY THE ARMS DEFAULT TO 1 AND NOT 2. The knob was added to survive Prime's
+# intermittent `finish_reason: "error"` (see the arm configs) -- a FIRST-CALL
+# schema rejection that costs nothing to replay and is independent per attempt,
+# so a single retry already recovers essentially all of it. The second retry
+# only ever pays off on a failure that is CORRELATED in time, and the headline
+# correlated failure is a rate-limit storm -- which `run_with_retry` re-enters
+# immediately, because unlike the framework's `retrying()` policy it passes no
+# `wait=` at all, so there is no backoff between attempts. Retry 2 therefore
+# buys a third full rollout at the exact moment retrying cannot work. Capping
+# at 1 halves the worst-case multiplier (3x -> 2x); on a $385 run that is the
+# difference between $1,155 and $770 of exposure.
+#
+# Set explicitly to override; hard-capped, because a typo here is precisely the
+# unbounded-cost failure this exists to bound.
+if [ -n "${ROLLOUT_MAX_RETRIES:-}" ]; then
+  case "${ROLLOUT_MAX_RETRIES}" in
+    ''|*[!0-9]*)
+      echo "launch_cell: ROLLOUT_MAX_RETRIES must be a non-negative integer" \
+           "(got '${ROLLOUT_MAX_RETRIES}')" >&2
+      exit 2 ;;
+  esac
+  if [ "${ROLLOUT_MAX_RETRIES}" -gt "${ROLLOUT_MAX_RETRIES_CAP:-2}" ]; then
+    echo "launch_cell: ROLLOUT_MAX_RETRIES=${ROLLOUT_MAX_RETRIES} exceeds the cap" \
+         "of ${ROLLOUT_MAX_RETRIES_CAP:-2}. Each retry replays a WHOLE rollout;" >&2
+    echo "  N retries means an attempt can bill (N+1)x. Raise" \
+         "ROLLOUT_MAX_RETRIES_CAP deliberately if that is really intended." >&2
+    exit 2
+  fi
+  OVERRIDES+=("--retries.rollout.max_retries" "${ROLLOUT_MAX_RETRIES}")
+  echo "[launch_cell] rollout retries: max_retries=${ROLLOUT_MAX_RETRIES}" \
+       "(an attempt can bill up to $((ROLLOUT_MAX_RETRIES + 1)) full rollouts)"
+fi
+
 # EXTRA_EVAL_FLAGS: whitespace-separated eval-CLI flags appended LAST (they win
 # on duplicate dotted paths). Added for the localhost interception override
 # (--interception.tunnel.type custom ...): the default prime tunnel counts

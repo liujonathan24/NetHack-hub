@@ -17,6 +17,7 @@ mode this suite is written against.
 import json
 import os
 import random
+import time
 import sys
 from pathlib import Path
 
@@ -1939,3 +1940,282 @@ def test_recovery_reads_the_launched_id_out_of_the_selection_log(tmp_path):
 # module into the test's top level twice.
 E.AUDIT_FIELDS_FOR_TEST = tuple(__import__(
     "nethack_harness.checkpoints", fromlist=["AUDIT_FIELDS"]).AUDIT_FIELDS)
+
+
+# --------------------------------------------------------------------------- #
+# 2b. IN-FLIGHT SPEND: the ceiling enforced DURING an attempt
+# --------------------------------------------------------------------------- #
+#
+# `Budget.check()` is a PRE-LAUNCH gate, and its own docstring says cost "is
+# therefore controlled by refusing the NEXT launch". That is only sound if an
+# attempt's cost is bounded, and it is not -- players are uncapped by design.
+# One runaway attempt can cross the ceiling with nothing able to notice until
+# it returns: measured on a $9 smoke that reached an estimated $22.
+#
+# There is NO in-flight usage source (traces.jsonl is written at rollout
+# completion; the interception proxy holds usage in memory; the turn files
+# carry no token fields; both player arms run with session persistence off).
+# So the guard runs on an ESTIMATE, and these tests pin that the estimate is
+# labelled as one everywhere it appears.
+
+
+def test_the_spend_rate_is_calibrated_from_this_runs_own_attempts():
+    """$/hour across ALL experiments spreads 8.4x (p10 $9.75, p90 $82.15 over
+    349 real rollouts) and is useless as a global constant. WITHIN one cell it
+    spreads 2.4x median, which is usable — so the rate must come from this
+    run's own completed attempts as soon as it has any, and from the prior only
+    until then."""
+    cold = E.calibrate_spend_rate([])
+    assert cold["rate_source"] == "prior"
+    assert cold["rate_usd_per_hour"] == E.DEFAULT_SPEND_RATE_USD_PER_HOUR
+    assert cold["rate_basis_attempts"] == 0
+
+    warm = E.calibrate_spend_rate([{"wall_s": 3600.0, "spend_usd": 20.0},
+                                   {"wall_s": 3600.0, "spend_usd": 40.0}])
+    assert warm["rate_source"] == "run_calibrated"
+    assert warm["rate_basis_attempts"] == 2
+    assert warm["rate_usd_per_hour"] == pytest.approx(30.0)
+
+
+def test_calibration_uses_what_was_BILLED_not_what_was_costed():
+    """A retried attempt's `spend_usd` costs one rollout out of the two or
+    three it paid for. Calibrating on that number would teach the guard a rate
+    lower than the run's real burn, which is the wrong direction for a
+    ceiling."""
+    rate = E.calibrate_spend_rate([
+        {"wall_s": 3600.0, "spend_usd": 10.0, "spend_usd_billed_upper_est": 30.0}])
+    assert rate["rate_usd_per_hour"] == pytest.approx(30.0)
+
+
+def test_short_attempts_do_not_poison_the_rate():
+    """Under two minutes is mostly launch overhead; its ratio says nothing
+    about burn rate and would swing the pooled number either way."""
+    rate = E.calibrate_spend_rate([{"wall_s": 30.0, "spend_usd": 9.0}])
+    assert rate["rate_source"] == "prior", "a 30s attempt calibrated the rate"
+
+
+def test_in_flight_spend_never_claims_to_be_a_measurement(tmp_path):
+    """No in-flight usage source exists. Every field says so, so that nothing
+    downstream can mistake this for the costed number from `traces.jsonl`."""
+    rate = {"rate_usd_per_hour": 36.0, "rate_source": "prior",
+            "rate_basis_attempts": 0}
+    est = E.estimate_inflight_spend(tmp_path, 3600.0, rate, safety_factor=2.0)
+    assert est["spend_so_far_usd"] == pytest.approx(36.0)
+    assert est["spend_so_far_upper_usd"] == pytest.approx(72.0)
+    assert est["spend_so_far_is_estimate"] is True
+    assert est["spend_so_far_source"] == "wall_clock_rate"
+    assert est["spend_so_far_rate_source"] == "prior"
+
+
+def test_rollouts_started_is_the_live_retry_signal(tmp_path):
+    """`eval.log` is written by the eval CLI as it goes, unlike `launch.log`
+    which only lands after the process exits. It is therefore the one place a
+    retry storm is visible WHILE it is costing money."""
+    assert E.rollouts_started(tmp_path) == 0, "no log means unobservable, not zero"
+    (tmp_path / "eval.log").write_text(
+        "INFO rollout start: id=aaa task=0 harness=nethack-prime-agent\n"
+        "WARNING retrying rollout aaa (retry 1/2) after error: ProviderError\n"
+        "INFO rollout start: id=bbb task=0 harness=nethack-prime-agent\n"
+        "WARNING retrying rollout bbb (retry 2/2) after error: ProviderError\n"
+        "INFO rollout start: id=ccc task=0 harness=nethack-prime-agent\n")
+    assert E.rollouts_started(tmp_path) == 3
+
+
+def test_progress_stream_carries_spend_so_far(tmp_path):
+    """(a) of the fix: `progress.jsonl` already streamed depth, HP and turns
+    while an attempt played, but the only money on it was
+    `cumulative_spend_usd_before` — frozen at attempt start. A run could not be
+    watched for spend at all."""
+    cfg = cfg_for(tmp_path, budget_ceiling_usd=1000.0, progress_interval_s=0.1)
+    cfg.archive_dir.mkdir(parents=True, exist_ok=True)
+    seen = []
+
+    def player(ctx):
+        # Let the monitor take at least one sample while "playing".
+        time.sleep(0.5)
+        seen.append(ctx)
+        return E.PlayerResult(died=True, spend_usd=1.0)
+
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=1)
+
+    rows = [json.loads(ln) for ln in
+            (cfg.run_dir / "progress.jsonl").read_text().splitlines() if ln.strip()]
+    assert rows, "no progress samples"
+    assert all("spend_so_far_usd" in r for r in rows), \
+        "spend_so_far missing from the progress stream"
+    assert all(r["spend_so_far_is_estimate"] is True for r in rows)
+    # And it MOVES — a frozen number would be the bug this replaces.
+    vals = [r["spend_so_far_usd"] for r in rows]
+    assert vals[-1] > vals[0], vals
+
+
+def test_the_ceiling_is_enforced_during_an_attempt_not_only_before_it(tmp_path):
+    """(b) of the fix, and the headline case. The pre-launch gate passes — the
+    run has plenty of headroom when the attempt starts — and then the attempt
+    itself runs past the ceiling. Nothing in the old design could notice."""
+    cfg = cfg_for(tmp_path, budget_ceiling_usd=10.0, min_headroom_usd=1.0,
+                  progress_interval_s=0.1,
+                  # $3600/hr == $1/s: this attempt blows a $10 ceiling in
+                  # seconds instead of hours, with no inference and no waiting.
+                  inflight_spend_prior_usd_per_hour=3600.0,
+                  inflight_spend_safety_factor=1.0)
+    cfg.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    class Runaway:
+        """A player that would never stop on its own — the uncapped case."""
+
+        def __init__(self):
+            self.stopped = False
+            self.ran_s = None
+
+        def __call__(self, ctx):
+            t0 = time.time()
+            for _ in range(300):          # ~30s worst case, stopped far sooner
+                if self.stopped:
+                    break
+                time.sleep(0.1)
+            self.ran_s = time.time() - t0
+            return E.PlayerResult(stop_condition="error",
+                                  error="SIGTERM: killed mid-rollout",
+                                  spend_usd=9.0)
+
+        def terminate_active(self, grace_s=60.0):
+            self.stopped = True
+            return True
+
+    player = Runaway()
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=1)
+
+    assert player.stopped, "the guard never stopped the runaway attempt"
+    assert player.ran_s < 25, "the attempt ran to completion instead of being stopped"
+
+    rows = [json.loads(ln) for ln in
+            (cfg.attempts_path).read_text().splitlines() if ln.strip()]
+    assert len(rows) == 1
+    row = rows[0]
+    # The row says WHY it ended. Left alone it would have read
+    # `censored:harness_error` — a SIGTERM looks exactly like a crash — and the
+    # run's censoring table would have been wrong about its own decision.
+    assert row["outcome"] == E.OUTCOME_CENSORED
+    assert row["censor_reason"] == E.CENSOR_BUDGET_STOP
+    assert row["stop_condition"] == "budget_stop"
+    # And it carries the evidence for the stop, including the admission that
+    # the decision was made on an estimate.
+    stop = row["budget_stop"]
+    assert stop["decided_on"] == "estimate"
+    assert stop["ceiling_usd"] == 10.0
+    assert stop["projected_total_usd"] >= stop["ceiling_usd"] - stop["min_headroom_usd"]
+    assert stop["rate_source"] == "prior"
+
+
+def test_a_launcher_that_cannot_be_stopped_still_records_the_breach(tmp_path):
+    """Degrade, never go silent. Injected launchers (every test in this file,
+    and anything embedding the orchestrator) expose no `terminate_active`. The
+    attempt then runs to completion — but the breach is on the progress stream,
+    and the run still halts at the next pre-launch gate."""
+    cfg = cfg_for(tmp_path, budget_ceiling_usd=5.0, min_headroom_usd=1.0,
+                  progress_interval_s=0.1,
+                  inflight_spend_prior_usd_per_hour=3600.0,
+                  inflight_spend_safety_factor=1.0)
+    cfg.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    def unstoppable(ctx):
+        time.sleep(6.0)                   # past a $5 ceiling at $1/s
+        return E.PlayerResult(died=True, spend_usd=6.0)
+
+    orch = E.Orchestrator(cfg, unstoppable)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=2)
+
+    rows = [json.loads(ln) for ln in
+            (cfg.run_dir / "progress.jsonl").read_text().splitlines() if ln.strip()]
+    assert any(r["event"] == "budget_stop" for r in rows), \
+        "the breach was not recorded"
+    assert orch.stop_reason == E.STOP_BUDGET
+
+
+def test_the_in_flight_guard_can_be_turned_off(tmp_path):
+    """It runs on an estimate, so it has to be possible to say no to it."""
+    cfg = cfg_for(tmp_path, budget_ceiling_usd=5.0, min_headroom_usd=1.0,
+                  progress_interval_s=0.1, enforce_inflight_budget=False,
+                  inflight_spend_prior_usd_per_hour=3600.0)
+    cfg.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    def player(ctx):
+        time.sleep(3.0)
+        return E.PlayerResult(died=True, spend_usd=1.0)
+
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=1)
+    rows = [json.loads(ln) for ln in
+            (cfg.attempts_path).read_text().splitlines() if ln.strip()]
+    assert rows[0]["outcome"] == E.OUTCOME_DIED, "guard fired while disabled"
+    # The estimate is still STREAMED — observing is free, acting is what was
+    # turned off.
+    prog = [json.loads(ln) for ln in
+            (cfg.run_dir / "progress.jsonl").read_text().splitlines() if ln.strip()]
+    assert all("spend_so_far_usd" in r for r in prog)
+
+
+# --------------------------------------------------------------------------- #
+# 2c. a retried rollout's cost is VISIBLE
+# --------------------------------------------------------------------------- #
+
+def test_a_retried_attempt_says_how_many_rollouts_it_paid_for(tmp_path):
+    """`run_with_retry` replays the whole trajectory and returns only the LAST
+    attempt's trace, so `traces.jsonl` costs one rollout for an attempt that
+    billed three. Measured: $31.43 for one `censored:harness_error` attempt
+    that ran `retry 1/2` then `retry 2/2`. The count comes from the eval CLI's
+    own warning lines, which `SubprocessPlayer` captures into `launch.log`."""
+    out = tmp_path / "a001"
+    out.mkdir()
+    (out / "launch.log").write_text(
+        "INFO rollout start: id=aaa task=0\n"
+        "WARNING retrying rollout aaa (retry 1/2) after error: ProviderError\n"
+        "WARNING retrying rollout bbb (retry 2/2) after error: ProviderError\n"
+        "INFO rollout done: id=ccc task=0 reward=0.000 turns=193 stop=ProviderError\n")
+    billed = E.rollouts_billed(out)
+    assert billed["rollouts_paid"] == 3
+    assert billed["retries_observed"] == 2
+    assert billed["retry_errors"] == ["ProviderError", "ProviderError"]
+
+
+def test_an_attempt_with_no_retries_is_not_marked_as_paying_extra(tmp_path):
+    out = tmp_path / "a001"
+    out.mkdir()
+    (out / "launch.log").write_text("INFO rollout done: id=aaa task=0 reward=1.0\n")
+    assert E.rollouts_billed(out)["rollouts_paid"] == 1
+    # A missing log is "unobservable", and must not be reported as a retry.
+    assert E.rollouts_billed(tmp_path / "nope")["source"] == "unavailable"
+
+
+def test_the_attempt_record_flags_spend_as_a_lower_bound_when_retried(tmp_path):
+    """The point of the count: an attempt that cost 3x must not be averaged
+    into the per-attempt cost curve as though it were a normal one."""
+    cfg = cfg_for(tmp_path, budget_ceiling_usd=1000.0)
+    cfg.archive_dir.mkdir(parents=True, exist_ok=True)
+
+    def player(ctx):
+        return E.PlayerResult(died=True, spend_usd=10.0, rollouts_paid=3,
+                              retry_errors=["ProviderError", "ProviderError"])
+
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=1)
+    row = [json.loads(ln) for ln in
+           (cfg.attempts_path).read_text().splitlines() if ln.strip()][0]
+    assert row["rollouts_paid"] == 3
+    assert row["spend_is_lower_bound"] is True
+    assert row["spend_usd"] == pytest.approx(10.0), "the costed number is untouched"
+    assert row["spend_usd_billed_upper_est"] == pytest.approx(30.0)
+    assert row["retry_errors"] == ["ProviderError", "ProviderError"]

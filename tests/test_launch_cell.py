@@ -519,3 +519,55 @@ def test_e16_args_carries_the_reseed_pair(tmp_path):
                     "E16_ARGS": json.dumps({"directive": "descend"}),
                     **_tier_env()})
     assert "--taskset.env_args.reseed" not in _pairs(argv)
+
+
+# --------------------------------------------------------------------------
+# ROLLOUT RETRIES ARE A COST MULTIPLIER, SO THEY ARE BOUNDED
+# --------------------------------------------------------------------------
+#
+# `verifiers/v1/retries.py:run_with_retry` replays the WHOLE trajectory, so
+# `max_retries = N` means one attempt can bill N+1 full rollouts. Measured in
+# the E16 method test: a `429 Rate limit reached` storm drove `retry 1/2` then
+# `retry 2/2` and billed $31.43 for an attempt that ended
+# `censored:harness_error`. The knob has to be settable per launch AND capped,
+# because a typo here is the unbounded-cost failure itself.
+
+
+def test_rollout_retries_are_not_overridden_unless_asked(tmp_path):
+    """Unset means "whatever the arm config pins" — the launcher must not
+    silently inject a retry policy the config did not choose."""
+    _result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"])
+    assert "--retries.rollout.max_retries" not in argv
+
+
+def test_rollout_max_retries_reaches_the_eval_cli(tmp_path):
+    _result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                         env_extra={"ROLLOUT_MAX_RETRIES": "0"})
+    assert argv[argv.index("--retries.rollout.max_retries") + 1] == "0"
+
+
+def test_rollout_max_retries_above_the_cap_is_refused(tmp_path):
+    """The cap is the whole point: 5 retries is a 6x bill, and nothing else in
+    this pipeline would notice until the invoice arrived."""
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                        env_extra={"ROLLOUT_MAX_RETRIES": "5"})
+    assert result.returncode == 2, result.stdout
+    assert "exceeds the cap" in result.stderr
+    assert argv is None, "the eval CLI must never be reached"
+
+
+def test_rollout_max_retries_must_be_an_integer(tmp_path):
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                        env_extra={"ROLLOUT_MAX_RETRIES": "2; rm -rf /"})
+    assert result.returncode == 2
+    assert "non-negative integer" in result.stderr
+    assert argv is None
+
+
+def test_the_cap_itself_can_be_raised_deliberately(tmp_path):
+    """Bounded, not forbidden: a deliberate override must still be possible, and
+    must have to say so."""
+    _result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                         env_extra={"ROLLOUT_MAX_RETRIES": "4",
+                                    "ROLLOUT_MAX_RETRIES_CAP": "4"})
+    assert argv[argv.index("--retries.rollout.max_retries") + 1] == "4"

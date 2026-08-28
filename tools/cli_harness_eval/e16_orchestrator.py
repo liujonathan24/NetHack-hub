@@ -174,6 +174,14 @@ ROLE_SOLO = "solo"
 ROLE_TREATMENT = "treatment"
 ROLE_CONTROL = "control"
 
+#: Cross-experiment fallback $/hour spend rate, used by the in-flight spend
+#: estimator only until this run has completed an attempt to calibrate against.
+#: Set just above the p90 ($82.15/hr) measured over 349 real rollouts in this
+#: tree's `outputs/`. Defined here because `OrchestratorConfig` defaults to it;
+#: the reasoning, the measurements and the estimator live together further down
+#: under "in-flight spend".
+DEFAULT_SPEND_RATE_USD_PER_HOUR = 90.0
+
 
 # --------------------------------------------------------------------------- #
 # config
@@ -238,6 +246,22 @@ class OrchestratorConfig:
     #: uncapped player can cost anything, so this is a floor on remaining
     #: headroom, not a prediction.
     min_headroom_usd: float = 5.0
+    #: Enforce the ceiling DURING an attempt, not only before launching one.
+    #: Off, the ceiling is only a pre-launch gate and a single runaway attempt
+    #: can blow through it unnoticed -- measured on a $9 smoke that reached an
+    #: estimated $22. On, the progress monitor terminates the attempt cleanly
+    #: as `censored:budget_stop` when its ESTIMATED spend would breach.
+    enforce_inflight_budget: bool = True
+    #: The $/hour rate used before this run has a completed attempt to
+    #: calibrate against. See `DEFAULT_SPEND_RATE_USD_PER_HOUR`.
+    inflight_spend_prior_usd_per_hour: float = DEFAULT_SPEND_RATE_USD_PER_HOUR
+    #: Multiplier on the estimated rate for the ENFORCEMENT number only. See
+    #: `estimate_inflight_spend`: the two errors are not symmetric.
+    inflight_spend_safety_factor: float = 2.0
+    #: Seconds between SIGTERM and SIGKILL when the guard stops an attempt.
+    #: The eval CLI is given a chance to finalize `traces.jsonl` first -- a
+    #: clean stop is what makes the spend of the stopped attempt knowable.
+    inflight_stop_grace_s: float = 60.0
 
     # Stop conditions.
     max_attempts: int = 200
@@ -1480,6 +1504,12 @@ class PlayerResult:
     summary: str = ""
     lesson: str = ""
     exit_code: int = 0
+    #: How many FULL rollouts this attempt was billed for. >1 means the eval CLI
+    #: replayed the trajectory (see `rollouts_billed`) and `spend_usd` -- costed
+    #: from the single surviving trace -- is a LOWER BOUND on what was paid.
+    rollouts_paid: int = 1
+    #: The error type behind each discarded attempt, in order.
+    retry_errors: list = field(default_factory=list)
     raw: dict = field(default_factory=dict)
 
 
@@ -2292,6 +2322,148 @@ def _id_key_name(name: str) -> tuple:
     return _id_key(str(name).lstrip("c"))
 
 
+# --------------------------------------------------------------------------- #
+# in-flight spend: what an attempt has cost SO FAR
+# --------------------------------------------------------------------------- #
+#
+# THERE IS NO IN-FLIGHT USAGE SOURCE. This was investigated exhaustively before
+# anything below was written, and the answer is negative on every channel:
+#
+#   * `traces.jsonl` -- the only file carrying per-call `usage` -- is written by
+#     `verifiers/v1/cli/output.py:write_trace` when a ROLLOUT COMPLETES, and
+#     `save_config` truncates it to zero bytes at launch. An interrupted attempt
+#     has an empty one (confirmed: e16_runs/mechcheck/attempts/a001).
+#   * The interception server holds usage in memory only
+#     (`verifiers/v1/interception/server.py` appends `ModelCall(usage=...)` to
+#     `session.trace.calls`, an in-memory list) and exposes no metrics route.
+#     `stall_watchdog.py` already documents this: usage "lives only in the
+#     interception proxy's memory, which died with the process".
+#   * The per-turn NDJSON carries NO token fields at all -- `helpers.py`'s
+#     `_write_trace_entry` writes game state and messages; grep for
+#     `prompt_tokens|usage|input_tokens` over the harness finds nothing.
+#   * `eval.log` (which IS written live) logs only FAILED model calls and
+#     rollout start/done -- no per-call usage.
+#   * The one format in this tree that does carry live per-message
+#     `usage.cost.total` is the agent session file, and BOTH player arms
+#     disable it (`--no-session`, `--no-session-persistence`). Turning that on
+#     would change what the agent itself does, i.e. change the experiment, and
+#     is not something to do to a $385 run for a bookkeeping convenience.
+#
+# So what follows is AN ESTIMATE, and every field it produces says so. It is a
+# spend RATE times elapsed generation time, because wall clock is the one
+# quantity that is perfectly observable in flight.
+#
+# WHY A RATE, AND WHY PER HOUR. Measured over 349 real rollouts in this tree's
+# own `outputs/`:
+#     $/hour   median 25.7   p10  9.8   p90  82.2   (p90/p10 = 8.4x)
+#     $/call   median 0.064  p10  0.026 p90  0.161  (p90/p10 = 6.2x)
+#     $/LM-turn: USELESS -- 0.071 in gewiki_pilot vs 1.428 in methodtest, a 20x
+#         spread, because calls-per-turn ranges from 1.0 to 9.3.
+# Model calls are not observable in flight, so $/call is unusable however tight
+# it is. That leaves $/hour. Across ALL experiments its spread is 8.4x, which
+# would be useless -- but WITHIN one cell (same arm, same model, same config)
+# the max/min ratio is median 2.4x and p90 4.1x over 67 cells with >=4 rollouts.
+# That is why the rate is calibrated from THIS RUN's own completed attempts
+# whenever there are any, and the cross-experiment prior is used only until the
+# first one lands.
+
+# `DEFAULT_SPEND_RATE_USD_PER_HOUR` (90.0) is defined at the top of this module
+# because `OrchestratorConfig` defaults to it. It sits just above the measured
+# p90 of $82.15/hr: the prior's job is to keep an early runaway from hiding
+# behind an optimistic rate, and it is replaced by this run's own data as soon
+# as one attempt finishes.
+
+_ROLLOUT_START_RE = re.compile(r"rollout start: id=(\S+)")
+
+
+def rollouts_started(out_dir) -> int:
+    """How many rollouts the eval CLI has STARTED for this attempt, live.
+
+    `eval.log` is written by the eval CLI as it goes (unlike `launch.log`,
+    which `SubprocessPlayer` writes in one shot after the process exits), so
+    this is the one retry signal available WHILE an attempt is in flight. On
+    the methodtest attempt it reads 3, matching the three turn files and the
+    two `retrying rollout` warnings. 0 means "not observable", not "none".
+    """
+    try:
+        text = (Path(out_dir) / "eval.log").read_text(errors="replace")
+    except OSError:
+        return 0
+    return len(_ROLLOUT_START_RE.findall(text))
+
+
+def calibrate_spend_rate(attempts: list, *,
+                         prior_usd_per_hour: float = DEFAULT_SPEND_RATE_USD_PER_HOUR
+                         ) -> dict:
+    """A $/hour spend rate for this run, from its own completed attempts.
+
+    Uses `spend_usd_billed_upper_est` (which accounts for whole-rollout
+    retries) over `wall_s`, pooled rather than averaged per attempt -- a pooled
+    ratio is not dominated by a 90-second attempt that happened to cost a
+    dollar. Attempts shorter than two minutes are dropped entirely: their
+    ratio is mostly launch overhead and would bias the rate either way.
+    """
+    spend = 0.0
+    wall = 0.0
+    n = 0
+    for row in attempts or []:
+        try:
+            w = float(row.get("wall_s") or 0.0)
+            s = float(row.get("spend_usd_billed_upper_est")
+                      or row.get("spend_usd") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if w < 120.0 or s <= 0.0:
+            continue
+        spend += s
+        wall += w
+        n += 1
+    if n and wall > 0:
+        return {"rate_usd_per_hour": round(spend / wall * 3600.0, 4),
+                "rate_source": "run_calibrated", "rate_basis_attempts": n}
+    return {"rate_usd_per_hour": round(float(prior_usd_per_hour), 4),
+            "rate_source": "prior", "rate_basis_attempts": 0}
+
+
+def estimate_inflight_spend(out_dir, elapsed_s: float, rate: dict, *,
+                            safety_factor: float = 2.0) -> dict:
+    """`spend_so_far` for the attempt in flight. ALWAYS an estimate.
+
+    Two numbers, deliberately:
+      * `spend_so_far_usd` -- the best guess, rate x elapsed. This is what a
+        human reading `progress.jsonl` wants.
+      * `spend_so_far_upper_usd` -- the same times `safety_factor`. This is
+        what the budget guard enforces against, because the two errors are not
+        symmetric: over-estimating stops an attempt early and keeps its
+        checkpoints, while under-estimating overshoots a hard ceiling, which is
+        the failure this exists to prevent (a $9 smoke reached an estimated $22
+        with nothing able to notice).
+
+    `safety_factor` defaults to 2.0 against a measured within-cell rate spread
+    of 2.4x median / 4.1x p90 -- i.e. it covers the typical attempt and not the
+    worst one, which is the honest reading of what a 2x guard buys.
+    """
+    elapsed = max(0.0, float(elapsed_s or 0.0))
+    per_hour = float(rate.get("rate_usd_per_hour") or 0.0)
+    best = per_hour * elapsed / 3600.0
+    started = rollouts_started(out_dir)
+    return {
+        "spend_so_far_usd": round(best, 4),
+        "spend_so_far_upper_usd": round(best * float(safety_factor), 4),
+        # Never let this be mistaken for a measurement. There is no in-flight
+        # usage source; see the block comment above.
+        "spend_so_far_is_estimate": True,
+        "spend_so_far_source": "wall_clock_rate",
+        "spend_so_far_rate_usd_per_hour": round(per_hour, 4),
+        "spend_so_far_rate_source": rate.get("rate_source"),
+        "spend_so_far_rate_basis_attempts": rate.get("rate_basis_attempts", 0),
+        "spend_so_far_safety_factor": float(safety_factor),
+        # Live retry signal: >1 means the eval CLI is replaying the trajectory
+        # and this attempt is billing for more than one rollout.
+        "rollouts_started": started,
+    }
+
+
 class AttemptProgressMonitor:
     """A daemon thread that makes a running attempt tail-able.
 
@@ -2304,12 +2476,24 @@ class AttemptProgressMonitor:
     def __init__(self, *, paths: list, attempt: int, turns_dir, archive_dir,
                  interval_s: float = 15.0, baseline: frozenset = frozenset(),
                  started_at: Optional[float] = None,
-                 extra: Optional[dict] = None):
+                 extra: Optional[dict] = None,
+                 spend_fn: Optional[Callable] = None,
+                 guard: Optional[Callable] = None):
         import threading
         self.paths = [Path(p) for p in paths]
         self.attempt = attempt
         self.turns_dir = Path(turns_dir)
         self.archive_dir = Path(archive_dir)
+        #: `() -> dict` of `spend_so_far_*` fields merged into every sample.
+        #: Still not a watchdog: this monitor only WRITES the estimate.
+        self.spend_fn = spend_fn
+        #: `(record) -> None`, run after the record is written. This is the one
+        #: thing in this class that can act, and it is injected rather than
+        #: implemented here so the monitor stays a pure observer and the
+        #: decision to stop an attempt stays with the orchestrator that owns
+        #: the budget. Wrapped like everything else: a raising guard must not
+        #: take down the run it is guarding.
+        self.guard = guard
         self.interval_s = max(1.0, float(interval_s))
         self.baseline = frozenset(baseline)
         self.started_at = started_at or time.time()
@@ -2337,9 +2521,21 @@ class AttemptProgressMonitor:
                                       baseline=self.baseline))
         except Exception as exc:
             rec["sample_error"] = f"{type(exc).__name__}: {exc}"
+        if self.spend_fn is not None:
+            try:
+                rec.update(self.spend_fn())
+            except Exception as exc:
+                rec["spend_sample_error"] = f"{type(exc).__name__}: {exc}"
         rec.update(extra)
         self.samples += 1
         self.emit(rec)
+        # The record is on disk BEFORE the guard runs, so the sample that
+        # justified a budget stop is durable even if the stop itself explodes.
+        if self.guard is not None:
+            try:
+                self.guard(rec)
+            except Exception:
+                pass
         return rec
 
     # -- lifecycle --------------------------------------------------------- #
@@ -3119,6 +3315,11 @@ class Orchestrator:
         self._open: Optional[dict] = None
         #: The live progress sampler for the in-flight attempt.
         self._monitor: Optional[AttemptProgressMonitor] = None
+        #: Set by `_inflight_budget_guard` when it stops an attempt mid-flight;
+        #: read (and cleared) by `_launch_one` so the row is labelled
+        #: `censored:budget_stop` rather than looking like a harness error.
+        self._budget_stop: Optional[dict] = None
+        self._spend_rate: dict = {}
         #: What `reconcile_run` found at startup. Carried into the summary so a
         #: recovered run says out loud that it was recovered.
         self.recovery: dict = {}
@@ -3739,6 +3940,7 @@ you intend to do next. Write it for yourself. No JSON this round.
         # what it was told, when it started and under which pid. Everything the
         # player writes into the archive from now on is attributable even if
         # this process never runs another line of Python.
+        self._budget_stop = None
         self.open_attempt(ctx, before, t0)
         try:
             result = self.launcher(ctx)
@@ -3757,7 +3959,47 @@ you intend to do next. Write it for yourself. No JSON this round.
             raise
         if not result.wall_s:
             result.wall_s = time.time() - t0
+        result = self._apply_budget_stop(result)
         return self.ingest(ctx, result, before, before_front)
+
+    def _apply_budget_stop(self, result: PlayerResult) -> PlayerResult:
+        """Relabel an attempt the in-flight guard stopped.
+
+        The player was SIGTERMed, so whatever it reports back -- a nonzero exit,
+        a missing `traces.jsonl`, a `ProviderError` from a call cut off
+        mid-flight -- would otherwise classify as `censored:harness_error` and
+        be indistinguishable from a real infrastructure failure. It is neither:
+        it is this run deciding to stop spending, and the record has to say so
+        or the run's own censoring table is wrong about why its attempts ended.
+
+        `budget_stop` maps to `CENSOR_BUDGET_STOP` through `_STOP_TO_CENSOR`,
+        so the row reads `censored:budget_stop`. The measured spend, the depth
+        and the checkpoints are all left exactly as reported -- only the label
+        changes, and the evidence for the relabel travels with it.
+        """
+        stop = self._budget_stop
+        if stop is None:
+            return result
+        self._budget_stop = None
+        result.stop_condition = "budget_stop"
+        # `classify_outcome` censors on `error` FIRST and with the wrong
+        # reason, so the harness-side error text is moved out of the field that
+        # drives classification and kept as evidence instead.
+        if result.error:
+            stop["player_error"] = result.error
+            result.error = ""
+        raw = dict(result.raw or {})
+        raw["budget_stop"] = stop
+        result.raw = raw
+        self._say(
+            f"[budget] attempt {stop.get('attempt')} STOPPED in flight: "
+            f"estimated ${stop.get('spend_so_far_upper_usd')} on top of "
+            f"${stop.get('spend_before_usd')} would reach "
+            f"${stop.get('projected_total_usd')} against a "
+            f"${stop.get('ceiling_usd')} ceiling "
+            f"(rate {stop.get('rate_usd_per_hour')}/hr, "
+            f"{stop.get('rate_source')}; ESTIMATE, not a measurement)")
+        return result
 
     # -- durability: the in-flight attempt ---------------------------------- #
 
@@ -3798,14 +4040,35 @@ you intend to do next. Write it for yourself. No JSON this round.
                          json.dumps(rec, indent=2, sort_keys=True, default=str) + "\n")
         except Exception:
             pass
+        # THE IN-FLIGHT BUDGET GUARD. `cumulative_spend_usd_before` below is
+        # frozen at attempt start, so without this the stream says nothing
+        # about the money the attempt is spending RIGHT NOW -- which is how a
+        # $9 smoke reached an estimated $22 with nothing able to notice. The
+        # estimator is honest about being an estimate (see
+        # `estimate_inflight_spend`); the guard enforces against its UPPER
+        # number, never its best guess.
+        rate = calibrate_spend_rate(
+            self.attempts, prior_usd_per_hour=cfg.inflight_spend_prior_usd_per_hour)
+        self._spend_rate = rate
+
+        def _spend_fn(_t0=t0, _out=ctx.out_dir, _rate=rate):
+            return estimate_inflight_spend(
+                _out, time.time() - _t0, _rate,
+                safety_factor=cfg.inflight_spend_safety_factor)
+
         self._monitor = AttemptProgressMonitor(
             paths=[cfg.progress_path, ctx.out_dir / "progress.jsonl"],
             attempt=ctx.attempt, turns_dir=ctx.out_dir / "turns",
             archive_dir=cfg.archive_dir, interval_s=cfg.progress_interval_s,
             baseline=frozenset(before), started_at=t0,
+            spend_fn=_spend_fn,
+            guard=(self._inflight_budget_guard
+                   if cfg.enforce_inflight_budget else None),
             extra={"from_checkpoint": ctx.checkpoint_id,
                    "directive_kind": ctx.directive_kind,
                    "pair_role": ctx.pair_role,
+                   "spend_rate_usd_per_hour": rate["rate_usd_per_hour"],
+                   "spend_rate_source": rate["rate_source"],
                    "cumulative_spend_usd_before": round(self.budget.spent_usd, 6)})
         self._monitor.sample("attempt_start", directive=ctx.directive)
         self._monitor.start()
@@ -3813,6 +4076,84 @@ you intend to do next. Write it for yourself. No JSON this round.
         # first completed attempt, and says which attempt is in flight.
         self.write_summary()
         return rec
+
+    # -- the in-flight budget guard ---------------------------------------- #
+    def _inflight_budget_guard(self, rec: dict) -> None:
+        """Stop the attempt in flight if its estimated spend breaches the
+        ceiling. Called from the progress monitor's thread, after the sample
+        that justified it is already on disk.
+
+        WHY THIS EXISTS. `Budget.check()` is a PRE-LAUNCH gate -- its own
+        docstring says cost "is therefore controlled by refusing the NEXT
+        launch". That is sound only if an attempt's cost is bounded, and it is
+        not: players are uncapped by design. One runaway attempt can therefore
+        cross the ceiling with nothing in the system able to notice until it
+        returns, which is exactly what happened on the $9 smoke that reached an
+        estimated $22. On $385 that is not tolerable.
+
+        Enforced against `spend_so_far_upper_usd`, never the best guess: see
+        `estimate_inflight_spend` for why the two errors are not symmetric.
+        Fires at most once per attempt -- a second SIGTERM to a process already
+        shutting down would just make a clean stop into a dirty one.
+        """
+        if self._budget_stop is not None:
+            return
+        try:
+            est = float(rec.get("spend_so_far_upper_usd") or 0.0)
+        except (TypeError, ValueError):
+            return
+        projected = self.budget.spent_usd + est
+        if projected < self.budget.ceiling_usd - self.budget.min_headroom_usd:
+            return
+        reason = {
+            "attempt": rec.get("attempt"),
+            "wall_s": rec.get("wall_s"),
+            "spend_so_far_usd": rec.get("spend_so_far_usd"),
+            "spend_so_far_upper_usd": round(est, 4),
+            "spend_before_usd": round(self.budget.spent_usd, 4),
+            "projected_total_usd": round(projected, 4),
+            "ceiling_usd": self.budget.ceiling_usd,
+            "min_headroom_usd": self.budget.min_headroom_usd,
+            "rate_usd_per_hour": rec.get("spend_so_far_rate_usd_per_hour"),
+            "rate_source": rec.get("spend_so_far_rate_source"),
+            "rollouts_started": rec.get("rollouts_started"),
+            # Said out loud on the record: this stop was decided on an
+            # estimate, because no in-flight usage source exists.
+            "decided_on": "estimate",
+        }
+        self._budget_stop = reason
+        if self._monitor is not None:
+            try:
+                self._monitor.sample("budget_stop", budget_stop=reason)
+            except Exception:
+                pass
+        self._stop_active_player(reason)
+
+    def _stop_active_player(self, reason: dict) -> None:
+        """Ask the launcher to end the running attempt cleanly.
+
+        Best-effort and duck-typed: the real player exposes `terminate_active`,
+        and an injected test launcher generally does not. A launcher that
+        cannot be stopped still gets the `budget_stop` record and the run still
+        halts at the next pre-launch gate -- degraded, but never silent.
+        """
+        stop = getattr(self.launcher, "terminate_active", None)
+        if not callable(stop):
+            self._say(f"[budget] in-flight ceiling breach on attempt "
+                      f"{reason.get('attempt')} but this launcher cannot be "
+                      f"stopped; the run will halt at the next launch gate")
+            return
+        try:
+            stop(grace_s=self.cfg.inflight_stop_grace_s)
+        except Exception as exc:
+            self._say(f"[budget] terminate_active failed: {exc!r}")
+
+    def _say(self, msg: str) -> None:
+        try:
+            sys.stderr.write(msg.rstrip("\n") + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
 
     def close_attempt(self, record: dict) -> None:
         """Journal an attempt as CLOSED and stop its progress stream."""
@@ -3983,6 +4324,7 @@ you intend to do next. Write it for yourself. No JSON this round.
                                   wall_s=time.time() - t0)
         if not result.wall_s:
             result.wall_s = time.time() - t0
+        result = self._apply_budget_stop(result)
         return self.ingest(ctx, result, before, before_front)
 
     # -- reseeding ---------------------------------------------------------- #
@@ -4123,12 +4465,33 @@ you intend to do next. Write it for yourself. No JSON this round.
             "error": result.error,
             "calls": int(result.calls or 0),
             "spend_usd": round(float(result.spend_usd or 0.0), 6),
+            # WHAT THIS ATTEMPT ACTUALLY BILLED. A whole-rollout retry replays
+            # the trajectory from turn 1 and the discarded attempts' usage never
+            # reaches `traces.jsonl`, so `spend_usd` above costs ONE rollout for
+            # an attempt that may have paid for two. Recorded, not corrected:
+            # an attempt that cost 2x must be visible as such instead of being
+            # averaged into the per-attempt cost curve as though it were normal.
+            # `spend_usd_billed_upper_est` is exactly what its name says -- an
+            # UPPER estimate that assumes each discarded attempt got as far as
+            # the surviving one, which is right for a rate-limit storm late in a
+            # rollout and too high for a first-call schema rejection. It exists
+            # to be looked at, never to be summed as if it were measured.
+            "rollouts_paid": int(getattr(result, "rollouts_paid", 1) or 1),
+            "retry_errors": list(getattr(result, "retry_errors", []) or []),
+            "spend_is_lower_bound": int(getattr(result, "rollouts_paid", 1) or 1) > 1,
+            "spend_usd_billed_upper_est": round(
+                float(result.spend_usd or 0.0)
+                * int(getattr(result, "rollouts_paid", 1) or 1), 6),
             "wall_s": round(float(result.wall_s or 0.0), 2),
             "max_dlvl": int(result.max_dlvl or 0),
             # Recorded, never smoothed over: a metric and the turn files
             # disagreeing about depth is a fact about the harness, and the one
             # place it can be noticed is here.
             "depth_disagreement": (result.raw or {}).get("depth_disagreement"),
+            # Present only when the in-flight guard stopped this attempt. Says
+            # what was estimated, against which ceiling, on which rate -- so a
+            # `censored:budget_stop` row can be audited rather than believed.
+            "budget_stop": (result.raw or {}).get("budget_stop"),
             "max_xl": int(result.max_xl or 1),
             "new_checkpoints": [p.name for p in new_dirs],
             "frontier_advanced": bool(advanced),
@@ -4721,6 +5084,42 @@ class SubprocessPlayer:
         self.repo = Path(repo)
         self.timeout_s = timeout_s
         self.env = env
+        #: The running `launch_cell.sh` (which `exec`s the eval CLI, so this
+        #: handle IS the eval process). Published so the orchestrator's
+        #: in-flight budget guard can end the attempt from the monitor thread.
+        self._active: Optional[subprocess.Popen] = None
+
+    def terminate_active(self, grace_s: float = 60.0) -> bool:
+        """End the running attempt: SIGTERM, then SIGKILL after `grace_s`.
+
+        SIGTERM first and with a real grace period because the eval CLI writes
+        `traces.jsonl` on the way out -- a clean stop is the difference between
+        a stopped attempt whose spend is KNOWN and one more row carrying
+        `spend_known: false`, which is the accounting hole this whole area
+        exists to close. Deliberately NOT `start_new_session`: the player stays
+        in the orchestrator's process group so an operator's Ctrl-C still
+        reaches it, which `finalize_interrupted` depends on.
+
+        Returns True if there was something to stop. Safe to call from another
+        thread and safe to call when nothing is running.
+        """
+        proc = self._active
+        if proc is None or proc.poll() is not None:
+            return False
+        try:
+            proc.terminate()
+        except OSError:
+            return False
+        deadline = time.monotonic() + max(0.0, float(grace_s))
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                return True
+            time.sleep(0.2)
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return True
 
     def __call__(self, ctx: PlayerContext) -> PlayerResult:
         e16 = {
@@ -4750,9 +5149,22 @@ class SubprocessPlayer:
         cmd = [str(self.repo / "tools" / "cli_harness_eval" / "launch_cell.sh"),
                ctx.arm, str(ctx.out_dir), "0", "1"]
         t0 = time.time()
-        proc = subprocess.run(cmd, env=env, capture_output=True, text=True,
-                              timeout=self.timeout_s)
-        (ctx.out_dir / "launch.log").write_text(proc.stdout + "\n" + proc.stderr)
+        # Popen, not `subprocess.run`: the handle has to be reachable from the
+        # progress-monitor thread so the in-flight budget guard can stop the
+        # attempt. Same semantics otherwise -- captured output, same timeout,
+        # same process group (see `terminate_active`).
+        proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self._active = proc
+        try:
+            stdout, stderr = proc.communicate(timeout=self.timeout_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        finally:
+            self._active = None
+        (ctx.out_dir / "launch.log").write_text((stdout or "") + "\n" + (stderr or ""))
         res = read_trace_result(ctx.out_dir)
         res.exit_code = proc.returncode
         res.wall_s = time.time() - t0
@@ -4760,6 +5172,50 @@ class SubprocessPlayer:
             res.error = f"launch_cell exited {proc.returncode}"
             res.stop_condition = res.stop_condition or "error"
         return res
+
+
+# `verifiers/v1/retries.py:run_with_retry` logs exactly this when it throws a
+# rollout away and replays the whole trajectory:
+#     retrying rollout <trace-id> (retry 1/2) after error: ProviderError
+_ROLLOUT_RETRY_RE = re.compile(
+    r"retrying rollout (\S+) \(retry (\d+)/(\d+)\) after error: (\S+)")
+
+
+def rollouts_billed(out_dir) -> dict:
+    """How many FULL rollouts this attempt actually paid for.
+
+    THE PROBLEM THIS EXISTS FOR. A whole-rollout retry replays the trajectory
+    from turn 1, but `run_with_retry` returns only the LAST attempt's trace --
+    the discarded attempts' per-call `usage` never reaches `traces.jsonl`, so
+    `read_trace_result` costs one rollout for an attempt that billed two or
+    three. Measured: $31.43 for one `censored:harness_error` attempt that ran
+    `retry 1/2` and `retry 2/2`. Averaged into a per-attempt cost curve
+    unlabelled, that silently understates the run's real burn rate.
+
+    The only surviving record of those discarded attempts is the eval CLI's own
+    warning line, which `SubprocessPlayer` captures into `launch.log`. That is
+    the source used here -- no patching of vendored `verifiers`, and it is
+    written whether the attempt succeeded on retry or failed on all of them
+    (the trace's `errors` are NOT: `run_with_retry` prepends the retry history
+    only `if trace.errors`, so a rollout that SUCCEEDS on retry 2 leaves no
+    trace-side evidence at all).
+
+    An E16 attempt is one rollout (`SubprocessPlayer` launches n=1), so
+    `rollouts_paid` is exact here; with more rollouts per cell it is a lower
+    bound on the billed count, never an over-claim.
+    """
+    out = {"rollouts_paid": 1, "retries_observed": 0, "retry_errors": [],
+           "source": "launch.log"}
+    try:
+        text = (Path(out_dir) / "launch.log").read_text(errors="replace")
+    except OSError:
+        out["source"] = "unavailable"   # no log == no evidence, not "no retries"
+        return out
+    errs = [m.group(4) for m in _ROLLOUT_RETRY_RE.finditer(text)]
+    out["retries_observed"] = len(errs)
+    out["rollouts_paid"] = 1 + len(errs)
+    out["retry_errors"] = errs
+    return out
 
 
 def read_trace_result(out_dir) -> PlayerResult:
@@ -4774,9 +5230,12 @@ def read_trace_result(out_dir) -> PlayerResult:
     """
     out_dir = Path(out_dir)
     path = out_dir / "traces.jsonl"
+    billed = rollouts_billed(out_dir)
     if not path.is_file():
         return PlayerResult(stop_condition="error",
-                            error=f"no traces.jsonl in {out_dir}")
+                            error=f"no traces.jsonl in {out_dir}",
+                            rollouts_paid=int(billed["rollouts_paid"]),
+                            retry_errors=list(billed["retry_errors"]))
     traces = []
     for line in path.read_text(errors="replace").splitlines():
         line = line.strip()
@@ -4788,7 +5247,9 @@ def read_trace_result(out_dir) -> PlayerResult:
             continue
     if not traces:
         return PlayerResult(stop_condition="error",
-                            error=f"empty traces.jsonl in {out_dir}")
+                            error=f"empty traces.jsonl in {out_dir}",
+                            rollouts_paid=int(billed["rollouts_paid"]),
+                            retry_errors=list(billed["retry_errors"]))
     trace = traces[-1]
     metrics = trace.get("metrics") or {}
     # DEPTH IS CROSS-CHECKED, NOT TRUSTED. `metrics.max_dlvl_reached` is what
@@ -4825,7 +5286,10 @@ def read_trace_result(out_dir) -> PlayerResult:
         max_dlvl=max_dlvl,
         max_xl=int(metrics.get("max_xp_level") or 1),
         summary=_final_text(trace),
-        raw={"metrics": metrics, "depth_disagreement": depth_disagreement},
+        rollouts_paid=int(billed["rollouts_paid"]),
+        retry_errors=list(billed["retry_errors"]),
+        raw={"metrics": metrics, "depth_disagreement": depth_disagreement,
+             "rollouts_billed": billed},
     )
 
 
@@ -4988,6 +5452,24 @@ def main(argv=None) -> int:
     ap.add_argument("--budget", type=float, default=385.0,
                     help="USD ceiling for this run (hard).")
     ap.add_argument("--min-headroom", type=float, default=5.0)
+    ap.add_argument("--no-inflight-budget", action="store_true",
+                    help="Do NOT enforce the ceiling during an attempt, only "
+                         "before launching one. The pre-launch gate alone "
+                         "cannot stop a single runaway attempt, because "
+                         "players are uncapped -- a $9 smoke reached an "
+                         "estimated $22 that way.")
+    ap.add_argument("--inflight-rate", type=float,
+                    default=DEFAULT_SPEND_RATE_USD_PER_HOUR,
+                    help="USD/hour assumed for an attempt in flight until this "
+                         "run has a completed attempt to calibrate against "
+                         "(default %(default)s, just above the p90 measured "
+                         "over 349 real rollouts).")
+    ap.add_argument("--inflight-safety-factor", type=float, default=2.0,
+                    help="Multiplier applied to the estimated in-flight spend "
+                         "for the ENFORCEMENT decision only. There is no "
+                         "in-flight usage source, so this is a guard on an "
+                         "estimate; 2.0 covers the median within-cell rate "
+                         "spread (2.4x) and not the p90 (4.1x).")
     ap.add_argument("--max-attempts", type=int, default=200)
     ap.add_argument("--stall-attempts", type=int, default=8)
     ap.add_argument("--selector", choices=("llm", "scripted"), default="llm",
@@ -5070,6 +5552,9 @@ def main(argv=None) -> int:
         w_novelty=args.w_novelty, w_attempts=args.w_attempts,
         temperature=args.temperature, budget_ceiling_usd=args.budget,
         min_headroom_usd=args.min_headroom, max_attempts=args.max_attempts,
+        enforce_inflight_budget=not args.no_inflight_budget,
+        inflight_spend_prior_usd_per_hour=args.inflight_rate,
+        inflight_spend_safety_factor=args.inflight_safety_factor,
         stall_attempts=args.stall_attempts, no_directive=args.no_directive,
         paired_control=args.paired_control,
         reseed_on_restore=args.reseed,

@@ -237,6 +237,145 @@ def test_refuses_to_kill_a_recycled_pid(turns):
     finally:
         _reap([proc])
 
+# --------------------------------------------------------------------------
+# RELAUNCHED ROLLOUTS — the hole that wedged a run for 45 minutes
+# --------------------------------------------------------------------------
+#
+# `max_relaunches: 2`: when a player wedges, the harness starts a NEW one. The
+# ORIGINAL turn file's owner PID then dies, and the watchdog used to file that
+# entry as "finished, its files are final" and stop inspecting it — while the
+# relaunched player owns no turn file at all, so scan() saw nothing to watch.
+# A retried or relaunched rollout therefore had ZERO coverage. Confirmed twice
+# independently (e16_runs/mechcheck, e16_runs/methodtest).
+#
+# The fix keeps watching when the writer PID is dead but the ROLLOUT is not,
+# and kills the live process instead of the dead file owner. These four tests
+# pin both halves: it now fires on a relaunch, and it still leaves a genuinely
+# completed rollout alone.
+
+
+def _eval_cli(seconds: int = 3600) -> subprocess.Popen:
+    """Stand-in for the eval CLI process the watchdog is armed against
+    (`--parent-pid`). Must be started BEFORE any turn file, exactly as the real
+    one is — the PID-reuse guard rejects a "parent" younger than its own data."""
+    return subprocess.Popen([sys.executable, "-c",
+                             f"import time; time.sleep({seconds})"])
+
+
+def _write_traces(turns: Path, *seeds: int) -> Path:
+    """The `traces.jsonl` the eval CLI writes when a rollout FINISHES, in the
+    cell dir beside `turns/`. Its presence is what makes a dead writer's files
+    genuinely final."""
+    path = turns.parent / "traces.jsonl"
+    with path.open("a") as fh:
+        for seed in seeds:
+            fh.write(json.dumps({
+                "id": f"trace-{seed}", "task": {"data": {"idx": seed}},
+                "is_completed": True, "stop_condition": "game_over",
+            }) + "\n")
+    return path
+
+
+def test_a_relaunched_rollout_is_still_watched_after_its_writer_dies(turns):
+    """THE BUG. Writer PID dies (the harness relaunched the player), the eval
+    process is still alive, no new turn file appears. That is a wedged relaunch
+    and the watchdog must fire on it — previously it filed the entry as
+    finished and never looked again."""
+    parent = _eval_cli()
+    proc = _spawn(turns, seed=5, n=2, interval=0.05)
+    try:
+        fname = os.path.basename(list(turns.glob(f"5_{proc.pid}_*.ndjson"))[0])
+        proc.kill()                       # the relaunch: this writer is gone
+        proc.wait(timeout=10)
+        assert not sw.pid_alive(proc.pid)
+        time.sleep(1.2)                   # and nothing writes in its place
+
+        wd = _wd(turns, timeout=1.0, parent_pid=parent.pid)
+        kills = wd.check_dir(str(turns))
+
+        assert len(kills) == 1, "a relaunched rollout got no watchdog coverage"
+        k = kills[0]
+        # The record separates the dead evidence-owner from the live victim.
+        assert k["pid"] == proc.pid, "writer pid identifies the evidence"
+        assert k["kill_pid"] == parent.pid, "the LIVE rollout process is killed"
+        assert k["relaunched"] is True
+        assert k["seeds"] == [5]
+
+        # The live rollout is actually dead, not merely logged about.
+        parent.wait(timeout=15)
+        assert not sw.pid_alive(parent.pid)
+
+        # And the truncated original file is quarantined, so the relaunch's
+        # NDJSON cannot merge with it during grading (HARNESS_DEFECTS §4.6).
+        assert list(turns.glob("*.ndjson")) == []
+        qroot = Path(str(turns) + ".stalled")
+        assert len(list(qroot.glob(f"*_pid{proc.pid}/{fname}"))) == 1
+        # The attempt is still counted rather than vanishing from every table.
+        partial = turns.parent / sw.PARTIAL_TRACES_BASENAME
+        assert partial.exists()
+        assert json.loads(partial.read_text().splitlines()[0])["task"]["data"]["idx"] == 5
+    finally:
+        _reap([proc, parent])
+
+
+def test_a_genuinely_completed_rollout_is_still_left_alone(turns):
+    """THE REGRESSION GUARD. The branch this fix reaches into exists to protect
+    a rollout that simply FINISHED: its writer is gone and its files are final.
+    A finished rollout has a `traces.jsonl` record, and a relaunched one does
+    not — that is the discriminator. With the record present, the watchdog must
+    keep its hands off even though the eval process is still alive (it is still
+    running the cell's other work)."""
+    parent = _eval_cli()
+    proc = _spawn(turns, seed=6, n=2, interval=0.05)
+    try:
+        proc.kill()
+        proc.wait(timeout=10)
+        _write_traces(turns, 6)           # the CLI finalized this rollout
+        time.sleep(1.2)
+
+        wd = _wd(turns, timeout=1.0, parent_pid=parent.pid)
+        assert wd.check_dir(str(turns)) == [], "killed a completed rollout"
+        assert sw.pid_alive(parent.pid), "killed the eval process over final files"
+        assert len(list(turns.glob("*.ndjson"))) == 1, "final data was quarantined"
+        assert list(Path(str(turns) + ".stalled").glob("*_pid*")) == []
+    finally:
+        _reap([proc, parent])
+
+
+def test_a_relaunch_that_is_writing_again_is_not_killed(turns):
+    """The other half of the no-kill contract. A relaunch that came back and is
+    producing turns under a NEW pid is progress. The dead original's entry must
+    not fire on it — the dead writer is judged on the whole CELL's silence, not
+    on its own orphaned file's age."""
+    parent = _eval_cli()
+    dead = _spawn(turns, seed=8, n=2, interval=0.05)
+    dead.kill()
+    dead.wait(timeout=10)
+    time.sleep(1.2)                        # the original file is now stale
+    live = _spawn(turns, seed=8, n=200, interval=0.2)   # the relaunch, writing
+    try:
+        wd = _wd(turns, timeout=1.0, poll=0.25, parent_pid=parent.pid)
+        assert wd.run(max_seconds=3.0) == 0
+        assert wd.kills == []
+        assert sw.pid_alive(parent.pid), "killed a rollout that was making progress"
+        assert live.poll() is None
+    finally:
+        _reap([dead, live, parent])
+
+
+def test_no_parent_pid_means_a_dead_writer_is_still_treated_as_finished(turns):
+    """Un-parented invocations are unchanged. Without `--parent-pid` there is no
+    evidence the rollout is still live, so a dead writer's files stay final —
+    the conservative reading, and the pre-existing behaviour."""
+    proc = _spawn(turns, seed=9, n=1, interval=0.0)
+    proc.kill()
+    proc.wait(timeout=10)
+    time.sleep(1.2)
+
+    wd = _wd(turns, timeout=1.0)           # no parent_pid
+    assert wd.check_dir(str(turns)) == []
+    assert len(list(turns.glob("*.ndjson"))) == 1
+
 
 # --------------------------------------------------------------------------
 # arming / re-arming
