@@ -35,6 +35,24 @@ from nethack_harness.checkpoints import (  # noqa: E402
 
 WIKI_SRC = Path("/root/nld/e15-wiki/configs/continual/wiki")
 
+#: The archive the interrupted mechcheck attempt left behind: 24 real
+#: checkpoints from ONE trajectory, D1 -> D8, XL 1 -> 4. Read-only, and every
+#: test that uses it copies it first. It is the evidence for the defect this
+#: section is about: the Pareto frontier over (Dlvl, XL, score) collapses to
+#: exactly ONE of those 24, because a single trajectory rises on all three
+#: objectives at once.
+REAL_ARCHIVE = Path("/root/nld/e16_runs/mechcheck/archive")
+needs_real_archive = pytest.mark.skipif(
+    not (REAL_ARCHIVE / "c24" / "meta.json").is_file(),
+    reason="the mechcheck 24-checkpoint archive is not on this box")
+
+
+def copy_real_archive(dest: Path) -> Path:
+    """A WRITABLE copy of the real archive. The original is never touched."""
+    import shutil
+    shutil.copytree(REAL_ARCHIVE, dest)
+    return dest
+
 
 # --------------------------------------------------------------------------- #
 # fixtures / helpers
@@ -160,12 +178,38 @@ def test_ledger_renders_empty_one_and_many():
                                  note="fresh game")])
     assert "entrance" in one and "fresh game" in one and " 3 " in one
 
-    many = E.render_ledger([mkrow(i, dlvl=i, xl=i, score=i * 10,
-                                  name=f"n{i}", created_by="save")
-                            for i in range(1, 31)])
-    body = [ln for ln in many.splitlines() if ln.strip().startswith(("->", "1", "2", "3"))]
-    assert len(body) <= 40  # capped, not the whole archive
+    # MANY: every id is still a choice. The old rendering showed the Pareto
+    # frontier plus named saves and capped the result; these 30 rows are a
+    # totally ordered chain, so that cap used to be a filter with one survivor.
+    rows = [mkrow(i, dlvl=i, xl=i, score=i * 10, name=f"n{i}",
+                  created_by="save") for i in range(1, 31)]
+    many, cands = E.build_ledger(rows)
     assert "measured by the harness" in many
+    for r in rows:
+        assert f"c{r.id} " in many or f"c{r.id}\n" in many, \
+            f"c{r.id} is not choosable from the rendered ledger"
+    assert {c["id"] for c in cands} == {r.id for r in rows}
+    assert "not listed" not in many
+
+
+def test_a_large_archive_stays_legible_without_hiding_any_state():
+    """Past the detail budget states go COMPACT, never missing.
+
+    "Group or paginate, but never make a state unchoosable" -- so the overflow
+    still carries id, branch, depth, XL, HP, turn, score and kind; what it
+    drops is the free text.
+    """
+    rows = [mkrow(i, dlvl=1 + i % 12, xl=1 + i % 5, score=i, name=f"n{i}",
+                  created_by="auto", note=f"automatic checkpoint: tick {i}")
+            for i in range(1, 201)]
+    cfg = E.OrchestratorConfig(run_dir=Path("/tmp/x"), ledger_max_rows=25)
+    text, cands = E.build_ledger(rows, cfg)
+    assert len(cands) == 200
+    assert {c["shown_as"] for c in cands} == {"detail", "compact"}
+    assert sum(1 for c in cands if c["shown_as"] == "detail") <= 25 * 1
+    for r in rows:
+        assert f"c{r.id} " in text, f"c{r.id} vanished from a 200-row ledger"
+    assert "EQUALLY CHOOSABLE" in text
 
 
 def test_ledger_shows_the_directive_next_to_the_outcome():
@@ -1276,11 +1320,18 @@ def test_dry_run_select_restore_play_save_ingest_over_four_attempts(tmp_path):
     assert summary["cumulative_spend_usd"] == pytest.approx(6.5)
 
     # -- every selection was recorded with its probabilities ----------------
+    # The scripted selector's record lives under `scripted` now, where its own
+    # `chosen_id` can no longer overwrite the id that was launched.
     sels = [json.loads(l) for l in cfg.selection_path.read_text().splitlines() if l.strip()]
     assert len(sels) == 4
     for s in sels:
-        assert abs(sum(c["prob"] for c in s["candidates"]) - 1.0) < 1e-9
-        assert s["chosen_id"] in {c["id"] for c in s["candidates"]}
+        cands = s["scripted"]["candidates"]
+        assert abs(sum(c["prob"] for c in cands) - 1.0) < 1e-9
+        assert s["chosen_id"] in {c["id"] for c in cands}
+        # This IS the scripted arm, so the two picks must agree -- and the
+        # record must say so rather than leaving it to be inferred.
+        assert s["scripted_would_pick"] == s["chosen_id"]
+        assert s["scripted_agreed"] is True
 
     # -- provenance ---------------------------------------------------------
     prov = json.loads(cfg.provenance_path.read_text())
@@ -1639,6 +1690,249 @@ def test_stall_stop_fires_after_n_attempts_with_no_frontier_advance(tmp_path):
     orch.run(max_attempts=10)
     assert orch.stop_reason == E.STOP_STALL
     assert len(orch.attempts) == 2
+
+
+# --------------------------------------------------------------------------- #
+# 20. the whole archive is the menu
+#
+# The defect: the round prompt showed the Pareto frontier over (Dlvl, XL,
+# score) and told the orchestrator "Only ids that appear in the table are
+# accepted". On one trajectory that frontier is a single row -- so an LLM
+# hired to judge states was handed a candidate set of size one and could only
+# justify a forced move. `parse_decision` had ALWAYS accepted any archive id;
+# the table and the sentence were the whole constraint.
+# --------------------------------------------------------------------------- #
+
+@needs_real_archive
+def test_the_real_archive_collapses_to_one_frontier_row(tmp_path):
+    """The measurement the fix is answering. 24 states, 1 survivor."""
+    rows = E.ledger_rows(copy_real_archive(tmp_path / "archive"))
+    assert len(rows) == 24
+    assert [r.id for r in E.pareto_frontier(rows)] == ["24"], (
+        "if this ever fails the premise changed: the objective is no longer "
+        "monotone along a single trajectory")
+
+
+@needs_real_archive
+def test_every_one_of_the_24_real_checkpoints_is_choosable(tmp_path):
+    rows = E.ledger_rows(copy_real_archive(tmp_path / "archive"))
+    attempts = [{"attempt": 1, "from_checkpoint": "1", "outcome": "censored",
+                 "censor_reason": "interrupted", "max_dlvl": 8, "calls": 249,
+                 "directive": "take the down-stairs on each level",
+                 "directive_compliance": {"class": "unclassified"}}]
+    text, cands = E.build_ledger(rows, attempts=attempts)
+
+    # 1. EVERY id is in the ledger and in the recorded candidate set.
+    assert {c["id"] for c in cands} == {str(i) for i in range(1, 25)}
+    for i in range(1, 25):
+        assert f"c{i} " in text or f"c{i}\n" in text, f"c{i} is unreachable"
+    # And the sentence that used to hide 23 of them is gone.
+    assert "dominated auto-checkpoint" not in text
+    assert "not listed" not in text
+
+    # 2. THE AXES THE OBJECTIVE CANNOT SEE are on every row.
+    assert "Dungeons of Doom" in text and "branch" in text
+    assert "hp%" in text
+    assert "  96%" in text, "c17's 24/25 HP must be legible as a fraction"
+    assert "level-entry" in text and "cadence" in text and "level-up" in text
+    assert "seed" in text
+    assert "entered Dlvl 6" in text, "the purpose note must survive"
+    assert "censored:interrupt" in text, "outcomes of past resumes from c1"
+
+    # 3. DUPLICATES COLLAPSED, not dropped. c13/c14 and c19/c20 are identical
+    #    on every measured axis; each pair is one row that names both ids.
+    assert "22 distinct measured position" in text
+    assert "same measured state, each id choosable: c13 c14" in text
+    assert "same measured state, each id choosable: c19 c20" in text
+    dup = {c["id"]: c for c in cands}
+    assert dup["14"]["same_state_as"] == "13"
+    assert dup["20"]["same_state_as"] == "19"
+    assert dup["13"]["duplicate_group_size"] == 2
+    assert dup["17"]["same_state_as"] is None
+
+    # 4. The branch and HP the selector needs are in the RECORD too, so a
+    #    later analysis can ask what kind of state got picked.
+    c17 = dup["17"]
+    assert c17["branch"] == "Dungeons of Doom" and c17["dungeon_number"] == 0
+    assert c17["kind"] == "level-entry"
+    assert c17["hp_fraction"] == pytest.approx(24 / 25)
+    assert c17["on_frontier"] is False and dup["24"]["on_frontier"] is True
+    assert dup["1"]["outcomes"] == ["censored:interrupted@D8"]
+
+
+def test_the_round_prompt_no_longer_claims_the_table_is_the_whole_menu():
+    """A regression on the sentence that made 23 of 24 states unchoosable.
+
+    It was also FALSE: `parse_decision` is handed every archive id, so the
+    prompt was describing a constraint the code did not have.
+    """
+    p = E.Orchestrator.ROUND_PROMPT
+    assert "Only ids that appear in the table are accepted" not in p
+    assert "id from the table above" not in p
+    assert "Any checkpoint id in the archive above is a legal choice." in p
+    # The retry prompt lists ids for the same reason and must not narrow them.
+    assert "appears in the table above" not in E.Orchestrator.DIRECTIVE_RETRY_PROMPT
+
+
+def test_the_launched_id_is_never_shadowed_by_the_scripted_pick():
+    """The selection-plumbing root cause, as a unit.
+
+    The record used to end with ``**choice["selection"]``, and
+    `Selection.to_json` carries a ``chosen_id`` of its own -- the SCRIPTED
+    pick. Python applies ``**`` last, so the scripted id overwrote the launched
+    one in every round. It looked harmless only because a one-row frontier made
+    the two agree.
+    """
+    rows = [mkrow(17, dlvl=6, xl=2, score=391), mkrow(24, dlvl=8, xl=4, score=731)]
+    cfg = E.OrchestratorConfig(run_dir=Path("/tmp/x"))
+    scripted = E.select(rows, cfg, random.Random(0))
+    assert scripted.chosen_id == "24"          # the frontier's only row
+
+    choice = {"checkpoint_id": "17", "directive": "go back to D6 and take the "
+              "other staircase", "source": "llm",
+              "selection": scripted.to_json(),
+              "candidates_shown": [{"id": "17"}, {"id": "24"}],
+              "decision": {"valid": True}}
+    rec = E.selection_record(3, choice, rows)
+
+    assert rec["chosen_id"] == "17", "the launched id was overwritten again"
+    assert rec["chosen_on_frontier"] is False
+    assert rec["scripted_would_pick"] == "24"
+    assert rec["scripted_agreed"] is False
+    assert rec["n_candidates_shown"] == 2
+    assert rec["frontier_ids"] == ["24"]
+    # The scripted record is kept whole, where it cannot collide.
+    assert rec["scripted"]["candidates"][0]["id"] == "24"
+    assert "chosen_id" not in rec["scripted"]
+
+
+@needs_real_archive
+def test_a_dominated_checkpoint_is_accepted_launched_and_recorded(tmp_path):
+    """End to end, on the real 24-checkpoint archive, with no inference.
+
+    The orchestrator names c17 -- Dlvl 6, XL 2, score 391, dominated by c24 on
+    all three objectives and therefore invisible to the old ledger. It must be
+    accepted, the player must actually resume THAT state, and
+    `selection.jsonl` must say c17 rather than the scripted selector's c24.
+    """
+    run = tmp_path / "run"
+    cfg = cfg_for(run, selector="llm", budget_ceiling_usd=1000.0,
+                  max_attempts=1, milestone_dlvl=99, milestone_dungeon=-1)
+    cfg.archive_dir.parent.mkdir(parents=True, exist_ok=True)
+    copy_real_archive(cfg.archive_dir)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+
+    shown = {}
+
+    def runner(argv, env, cwd, timeout_s):
+        text = argv[-1] if argv else ""
+        if "ROUND" in text:
+            shown["ledger"] = text
+            body = ("c17 is at D6 with 24/25 HP and an unexplored side "
+                    "passage; branching there.\n" + json.dumps(
+                        {"checkpoint": "c17",
+                         "directive": "from c17 take the north staircase and "
+                                      "do not descend past D7 this attempt",
+                         "rationale": "branch off the deepest line"}))
+        else:
+            body = _STUB_PLAN
+        return _stub_stdout(argv, cwd, body), "", 0
+
+    session = S.PrimeAgentSession(
+        work_dir=cfg.orchestrator_dir, agent_dir=cfg.orchestrator_dir / "agent",
+        log_path=cfg.orchestrator_log, runner=runner)
+    player = StubPlayer([{"died": True, "spend": 1.0}])
+    orch = E.Orchestrator(cfg, player, session=session)
+    orch.prepare()
+    summary = orch.run(max_attempts=1)
+
+    # -- the model was shown all 24, and c17's row said what it needed to ----
+    ledger = shown["ledger"]
+    assert "c17" in ledger and "c24" in ledger
+    assert "Any checkpoint id in the archive above is a legal choice." in ledger
+
+    # -- the dominated choice was ACCEPTED and actually resumed -------------
+    assert orch.llm_fallbacks == 0
+    assert len(player.seen) == 1
+    ctx = player.seen[0]
+    assert ctx.checkpoint_id == "17"
+    assert Path(ctx.checkpoint_dir).name == "c17"
+    # ...from the real bundle, through the audited restore path.
+    fid = [json.loads(l) for l in
+           cfg.fidelity_path.read_text().splitlines() if l.strip()]
+    assert fid and fid[-1]["id"] == "17" and fid[-1]["ok"] is True
+    assert fid[-1]["fields"]["dlvl"]["engine"] == 6
+    assert fid[-1]["fields"]["xl"]["engine"] == 2
+
+    # -- and the record says c17, not the scripted selector's c24 -----------
+    sels = [json.loads(l) for l in
+            cfg.selection_path.read_text().splitlines() if l.strip()]
+    assert len(sels) == 1
+    s = sels[0]
+    assert s["chosen_id"] == "17"
+    assert s["source"] == "llm"
+    assert s["chosen_on_frontier"] is False
+    assert s["scripted_would_pick"] == "24"
+    assert s["scripted_agreed"] is False
+    assert s["frontier_ids"] == ["24"]
+    assert s["n_candidates_shown"] == 24
+    ids = {c["id"] for c in s["candidates_shown"]}
+    assert ids == {str(i) for i in range(1, 25)}
+    c17 = next(c for c in s["candidates_shown"] if c["id"] == "17")
+    assert c17["dlvl"] == 6 and c17["kind"] == "level-entry"
+    assert c17["hp_fraction"] == pytest.approx(24 / 25)
+
+    # -- every downstream record agrees ------------------------------------
+    assert orch.attempts[0]["from_checkpoint"] == "17"
+    journal = [json.loads(l) for l in
+               cfg.journal_path.read_text().splitlines() if l.strip()]
+    opened = next(r for r in journal if r["event"] == "open")
+    assert opened["from_checkpoint"] == "17"
+    assert summary["selection"]["dominated_choices"] == 1
+    assert summary["selection"]["dominated_ids"] == ["17"]
+    assert summary["selection"]["scripted_differed"] == 1
+    assert summary["selection"]["chosen_ids"] == ["17"]
+    assert summary["selection"]["scripted_would_pick"] == ["24"]
+
+
+@needs_real_archive
+def test_recovery_reads_the_launched_id_out_of_the_selection_log(tmp_path):
+    """The second half of the plumbing bug: it did not stop at the log.
+
+    `reconcile_run` fills a recovered attempt's `from_checkpoint` from
+    `selection.jsonl`, so a shadowed `chosen_id` became a WRONG resume in
+    `attempts.jsonl` -- and every checkpoint attributed to that attempt was
+    attributed to a resume that never happened.
+    """
+    run = tmp_path / "run"
+    cfg = cfg_for(run, selector="llm")
+    cfg.archive_dir.parent.mkdir(parents=True, exist_ok=True)
+    copy_real_archive(cfg.archive_dir)
+    rows = E.ledger_rows(cfg.archive_dir)
+    orch = E.Orchestrator(cfg, lambda ctx: E.PlayerResult())
+    orch.prepare()
+    E.clear_run_lock(cfg.run_dir)
+
+    choice = {"checkpoint_id": "17", "directive": "branch at D6",
+              "source": "llm",
+              "selection": E.select(rows, cfg, random.Random(0)).to_json(),
+              "candidates_shown": [], "decision": None}
+    E._append_jsonl(cfg.selection_path, E.selection_record(1, choice, rows))
+
+    out = cfg.run_dir / "attempts" / "a001"
+    (out / "turns").mkdir(parents=True)
+    (out / "turns" / "1_1_1787926656.ndjson").write_text(json.dumps({
+        "turn": 1, "dlvl": 6, "max_dlvl_reached": 6, "hp": 24, "max_hp": 25,
+        "applied": True,
+        "status": {"depth": 6, "experience_level": 2, "time": 1716,
+                   "hitpoints": 24, "max_hitpoints": 25, "score": 391},
+        "tool_calls": [{"name": "request_map", "arguments": {}}]}) + "\n")
+
+    E.reconcile_run(cfg, apply=True)
+    rec = [json.loads(l) for l in
+           cfg.attempts_path.read_text().splitlines() if l.strip()]
+    assert rec[0]["from_checkpoint"] == "17", (
+        "the recovered row named the scripted selector's pick again")
 
 
 # Exposed for the dry run's field-set assertion without importing the engine

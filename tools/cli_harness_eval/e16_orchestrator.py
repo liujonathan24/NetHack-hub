@@ -245,8 +245,13 @@ class OrchestratorConfig:
     milestone_dlvl: int = 20
     milestone_dungeon: int = SOKOBAN_DUNGEON_NUMBER
 
-    #: Rows the rendered ledger shows (frontier + named saves, ~20 per design).
-    ledger_max_rows: int = 20
+    #: Distinct states that get a FULL ledger row (name, note, lesson). Not a
+    #: cap on what the selector may choose: past this, the remaining states are
+    #: rendered one compact line each and stay legal choices. See
+    #: :func:`build_ledger` -- an archive of hundreds must stay readable
+    #: without any state becoming unchoosable, which is the defect this whole
+    #: rendering exists to undo.
+    ledger_max_rows: int = 40
     #: Lessons carried into a resumed player's first observation.
     ledger_max_lessons: int = 8
 
@@ -522,6 +527,87 @@ def pareto_frontier(rows: list) -> list:
     return out
 
 
+#: NetHack numbers its branches in dungeon.def order, and blstats carries the
+#: number (`checkpoints._status_snapshot`). Depth alone cannot express branch:
+#: a Mines D7 and a Dungeons-of-Doom D7 are different places with different
+#: monsters, different loot and different reasons to go there -- and on this
+#: seed that distinction is the single most decision-relevant thing about a
+#: state that (Dlvl, XL, score) cannot see.
+DUNGEON_NAMES = {
+    0: "Dungeons of Doom", 1: "Gehennom", 2: "Gnomish Mines", 3: "The Quest",
+    4: "Sokoban", 5: "Fort Ludios", 6: "Vlad's Tower", 7: "Elemental Planes",
+    8: "Astral Plane",
+}
+DUNGEON_SHORT = {0: "main", 1: "gehennom", 2: "MINES", 3: "quest", 4: "SOKO",
+                 5: "ludios", 6: "vlad", 7: "planes", 8: "astral"}
+
+#: Why a checkpoint exists. Derived from HARNESS-set fields only -- see
+#: :func:`checkpoint_kind` for why a model's `save` can never wear one of the
+#: automatic labels.
+KIND_SEED = "seed"
+KIND_MODEL_SAVE = "model-save"
+KIND_LEVEL_ENTRY = "level-entry"
+KIND_LEVEL_UP = "level-up"
+KIND_CADENCE = "cadence"
+KIND_AUTO = "auto"
+KIND_UNKNOWN = "?"
+
+
+def branch_name(dungeon_number: int) -> str:
+    return DUNGEON_NAMES.get(int(dungeon_number or 0),
+                             f"branch {int(dungeon_number or 0)}")
+
+
+def branch_short(dungeon_number: int) -> str:
+    return DUNGEON_SHORT.get(int(dungeon_number or 0),
+                             f"d{int(dungeon_number or 0)}")
+
+
+def checkpoint_kind(row: Row) -> str:
+    """What KIND of checkpoint this is, from harness-set provenance only.
+
+    ``created_by`` is set by the writer, not by the model's text: the seed
+    state is written by the orchestrator, automatic checkpoints by the harness
+    (`nethack.py:_maybe_auto_checkpoint`), and a model's ``save`` skill is
+    stamped ``save``. Only for ``created_by == "auto"`` -- states no model
+    named -- is the trigger read off the harness-written name/note, so a model
+    that saves a state called ``"auto level_entry_d9"`` still shows up as
+    ``model-save``. The label is a LABEL: nothing downstream measures it.
+    """
+    by = (row.created_by or "").strip().lower()
+    if by == "orchestrator":
+        return KIND_SEED
+    if by == "save":
+        return KIND_MODEL_SAVE
+    if by == "auto":
+        text = f"{row.name} {row.note}"
+        if "level_entry" in text or "entered Dlvl" in text:
+            return KIND_LEVEL_ENTRY
+        if "level_up" in text or "reached XL" in text:
+            return KIND_LEVEL_UP
+        if "turn_" in text or "game turns elapsed" in text:
+            return KIND_CADENCE
+        return KIND_AUTO
+    return by or KIND_UNKNOWN
+
+
+#: Kinds, most informative first. Used only to pick which member of a group of
+#: measurably identical states gets to be its display row.
+_KIND_RANK = {KIND_MODEL_SAVE: 0, KIND_SEED: 1, KIND_LEVEL_ENTRY: 2,
+              KIND_LEVEL_UP: 3, KIND_CADENCE: 4, KIND_AUTO: 5, KIND_UNKNOWN: 6}
+
+
+def hp_fraction(row: Row) -> Optional[float]:
+    """HP as a fraction of max, or ``None`` when max HP is unknown.
+
+    NOT part of the Pareto objective and deliberately so: a state at 8/43 and a
+    state at 43/43 are the same point in (Dlvl, XL, score) and are completely
+    different places to resume from. This is one of the axes the objective
+    cannot see, which is the whole reason the selector is a language model.
+    """
+    return (row.hp / row.max_hp) if row.max_hp else None
+
+
 def novelty(row: Row, rows: list) -> float:
     """How rare this checkpoint's DEPTH is in the archive, in ``[0, 1)``.
 
@@ -641,6 +727,73 @@ def _id_key(ident: str) -> tuple:
     return (0, int(ident), "") if str(ident).isdigit() else (1, 0, str(ident))
 
 
+def selection_record(attempt: int, choice: dict, rows: list,
+                     frontier: Optional[set] = None) -> dict:
+    """One round of `selection.jsonl`: what was chosen, out of what, vs what.
+
+    THE BUG THIS REPLACES, because it was silent and it defeated the whole
+    measurement. The record used to be built as::
+
+        {"chosen_id": chosen_id, ..., **choice["selection"]}
+
+    and ``choice["selection"]`` is :meth:`Selection.to_json`, which has a
+    ``chosen_id`` of its OWN -- the SCRIPTED selector's pick. Python applies
+    the ``**`` last, so the scripted pick overwrote the id that was actually
+    launched, in every round, of every LLM-selector run. While the frontier
+    collapsed to one row the two agreed by construction and nothing looked
+    wrong; the moment the model can choose a dominated state -- the point of
+    this whole change -- the log would have recorded the frontier state the
+    scripted selector wanted while a different checkpoint was resumed. It also
+    wrote ``chosen_id: null`` whenever the scripted selector declined to pick
+    (an empty candidate set), for an attempt that demonstrably launched.
+
+    It did not stop at the log. `reconcile_run` treats `selection.jsonl` as a
+    pre-launch record and fills a recovered attempt's ``from_checkpoint`` from
+    ``sel["chosen_id"]`` -- so the shadowed value propagated into
+    ``attempts.jsonl``, and every checkpoint attributed to that attempt was
+    attributed to a resume that never happened.
+
+    Now the launched id is written last and alone under ``chosen_id``, the
+    scripted selector's whole record lives under ``scripted`` where it cannot
+    collide, and the two are compared explicitly:
+
+    * ``candidates_shown`` -- one record per checkpoint the model was actually
+      shown, from the same call that rendered the table.
+    * ``scripted_would_pick`` / ``scripted_agreed`` -- the ablation comparison
+      the run is for: did the LM's judgement differ from the softmax's, and
+      how often. `round2_offline.py` had to reconstruct this by hand.
+    * ``chosen_on_frontier`` -- whether the choice was a dominated state, which
+      is the behaviour this change exists to make possible and therefore the
+      one that has to be counted.
+    """
+    scripted = dict(choice.get("selection") or {})
+    scripted_pick = scripted.pop("chosen_id", None)
+    directive = choice.get("directive") or ""
+    chosen_id = choice.get("checkpoint_id")
+    front = set(frontier if frontier is not None
+                else {r.id for r in pareto_frontier(rows)})
+    shown = choice.get("candidates_shown")
+    return {
+        "attempt": attempt,
+        "source": choice.get("source"),
+        # THE ID THAT WAS LAUNCHED. Nothing below may shadow it.
+        "chosen_id": chosen_id,
+        "chosen_on_frontier": (chosen_id in front) if chosen_id else None,
+        "directive": directive,
+        "directive_kind": classify_directive_kind(directive),
+        "directive_lint": lint_directive(directive),
+        "n_rows": len(rows),
+        "frontier_ids": sorted(front, key=_id_key),
+        "candidates_shown": shown,
+        "n_candidates_shown": (len(shown) if shown is not None else None),
+        "scripted_would_pick": scripted_pick,
+        "scripted_agreed": (None if (scripted_pick is None or chosen_id is None)
+                            else scripted_pick == chosen_id),
+        "scripted": scripted,
+        "llm": choice.get("decision"),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # rendering the ledger for the player
 # --------------------------------------------------------------------------- #
@@ -671,47 +824,321 @@ def render_attempt_history(attempts: list, limit: int = 12) -> str:
     return "\n".join(lines)
 
 
-def render_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
-                  current_id: Optional[str] = None,
-                  attempts: Optional[list] = None) -> str:
-    """The archive as text for a player's first observation.
+@dataclass
+class StateGroup:
+    """One measured POSITION in the archive, and every checkpoint sitting on it.
 
-    Frontier rows plus every NAMED save (the design's "~20 rows max"): a
-    dominated auto-checkpoint stays on disk and out of the prompt. Handles an
-    empty archive, one row, and many.
+    Two checkpoints written a few calls apart at the same depth, XL, score,
+    game turn and HP are, on every axis anything here can measure, the same
+    place. The last mechcheck attempt produced 5 checkpoints of which 4 were
+    pairwise identical that way, and the run before it produced c13/c14 and
+    c19/c20. A ledger that lists them separately spends its width on
+    repetition; one that DROPS them hides states from the selector. So they are
+    collapsed into one row that names every id in the group -- summarizing
+    duplicates, never states.
+    """
+
+    key: tuple
+    members: list                      # oldest first
+    rep: Row = None                    # the member the row is rendered from
+
+    @property
+    def ids(self) -> list:
+        return [m.id for m in self.members]
+
+    @property
+    def count(self) -> int:
+        return len(self.members)
+
+
+def state_key(row: Row) -> tuple:
+    """Everything measured about WHERE a checkpoint is. The dedupe key.
+
+    Includes branch and HP, which the Pareto objective excludes: two states
+    that differ in either are different places, however equal their
+    (Dlvl, XL, score) is.
+    """
+    return (row.dungeon_number, row.level_number, row.dlvl, row.xl, row.score,
+            row.gameturn, row.hp, row.max_hp)
+
+
+def group_states(rows: list) -> list:
+    """Collapse measurably-identical checkpoints. Order-stable, oldest first."""
+    groups: list = []
+    index: dict = {}
+    for r in rows:
+        k = state_key(r)
+        g = index.get(k)
+        if g is None:
+            g = StateGroup(key=k, members=[r], rep=r)
+            index[k] = g
+            groups.append(g)
+        else:
+            g.members.append(r)
+    for g in groups:
+        # The most informative member is the row's face -- a model's `save`
+        # over an automatic one, a level-entry over a cadence tick.
+        g.rep = min(g.members,
+                    key=lambda m: (_KIND_RANK.get(checkpoint_kind(m), 9),
+                                   m.created_at, _id_key(m.id)))
+    return groups
+
+
+def attempts_by_checkpoint(attempts: Optional[list]) -> dict:
+    """``{checkpoint id: [attempt record, ...]}`` in run order."""
+    out: dict = {}
+    for a in attempts or []:
+        cid = a.get("from_checkpoint")
+        if cid is None:
+            continue
+        out.setdefault(str(cid), []).append(a)
+    return out
+
+
+def outcome_label(attempt: dict) -> str:
+    """``died@D9`` / ``censored:wall_clock@D8`` -- what came of resuming here."""
+    o = str(attempt.get("outcome") or "?")
+    if attempt.get("censor_reason"):
+        o += f":{attempt['censor_reason']}"
+    d = attempt.get("max_dlvl")
+    return f"{o}@D{d}" if d else o
+
+
+#: Boilerplate the harness puts in front of every automatic note. Stripped for
+#: display only -- the note on disk is untouched.
+_NOTE_PREFIX = "automatic checkpoint: "
+
+
+def _trim(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    if text.startswith(_NOTE_PREFIX):
+        text = text[len(_NOTE_PREFIX):]
+    return text[:limit - 1] + "…" if len(text) > limit else text
+
+
+def lesson_excerpt(checkpoint_dir, max_chars: int = 90) -> str:
+    """The last line of this checkpoint's ``lessons.md``, flattened. TEXT."""
+    try:
+        text = read_lessons(checkpoint_dir)
+    except Exception:
+        return ""
+    body = [ln.strip() for ln in text.splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")]
+    if not body:
+        return ""
+    last = body[-1]
+    return last[:max_chars - 1] + "…" if len(last) > max_chars else last
+
+
+#: Header widths, in one place so the column line and the rows cannot drift.
+_TRIED_W = 22
+_LEDGER_HEADER = ("   id   branch  Dlvl  XL      HP   hp%    turn  score  dup  "
+                  "kind         " + "tried".ljust(_TRIED_W)
+                  + " name / why saved")
+
+
+def _state_line(g: StateGroup, *, current_id: Optional[str],
+                frontier: set, tried: dict, mark_lesson: bool = True) -> str:
+    r = g.rep
+    frac = hp_fraction(r)
+    pct = f"{round(100 * frac):>3d}%" if frac is not None else "   ?"
+    mark = "->" if current_id in g.ids else (" *" if g.ids and
+                                             (set(g.ids) & frontier) else "  ")
+    # `attempts_from` is the harness's own counter on the checkpoint and can
+    # exceed what this run's attempt history holds (it survives across runs);
+    # the outcomes come from the history. Both are shown, and neither is
+    # invented from the other.
+    runs = [a for i in g.ids for a in tried.get(i, [])]
+    n_from = max(sum(m.attempts_from for m in g.members), len(runs))
+    if runs:
+        tried_col = f"{n_from}: " + ",".join(outcome_label(a)
+                                             for a in runs[-2:])
+        if len(tried_col) > _TRIED_W:
+            tried_col = tried_col[:_TRIED_W - 1] + "…"
+    elif n_from:
+        tried_col = f"{n_from}: (no outcome on record)"[:_TRIED_W]
+    else:
+        tried_col = "-"
+    text = (r.name or "-")[:26]
+    note = _trim(r.note, 46)
+    if note:
+        text += f" | {note}"
+    line = (f"{mark} c{r.id:<4} {branch_short(r.dungeon_number):>7} "
+            f"{r.dlvl:>4}  {r.xl:>2}  {r.hp:>3}/{r.max_hp:<3} {pct}  "
+            f"{r.gameturn:>6} {r.score:>6}  "
+            f"{('x' + str(g.count)) if g.count > 1 else '  ':>3}  "
+            f"{checkpoint_kind(r):<12} {tried_col:<{_TRIED_W}} {text}")
+    extra = []
+    if g.count > 1:
+        extra.append(f"       same measured state, each id choosable: "
+                     + " ".join("c" + i for i in g.ids))
+    if mark_lesson:
+        lesson = lesson_excerpt(r.path)
+        if lesson:
+            extra.append(f"       lesson: {lesson}")
+    return "\n".join([line] + extra)
+
+
+def _compact_line(g: StateGroup) -> str:
+    r = g.rep
+    frac = hp_fraction(r)
+    pct = f"{round(100 * frac)}%" if frac is not None else "?"
+    ids = " ".join("c" + i for i in g.ids)
+    return (f"    {ids:<14} {branch_short(r.dungeon_number)} D{r.dlvl} XL{r.xl} "
+            f"{r.hp}/{r.max_hp} {pct} t{r.gameturn} s{r.score} "
+            f"{checkpoint_kind(r)}")
+
+
+def _detail_priority(g: StateGroup, frontier: set, tried: dict) -> tuple:
+    """Which groups get a full row when the archive outgrows the detail budget.
+
+    Lower sorts first. Nothing here can REMOVE a state from the ledger -- a
+    group that loses gets a compact line carrying every measured axis but the
+    free text, and its ids stay legal choices. This only decides who gets the
+    name, note and lesson.
+    """
+    r = g.rep
+    return (
+        0 if (set(g.ids) & frontier) else 1,
+        0 if checkpoint_kind(r) in (KIND_MODEL_SAVE, KIND_SEED) else 1,
+        0 if any(tried.get(i) for i in g.ids) else 1,
+        0 if checkpoint_kind(r) in (KIND_LEVEL_ENTRY, KIND_LEVEL_UP) else 1,
+        -r.dlvl, -r.gameturn,
+    )
+
+
+def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
+                 current_id: Optional[str] = None,
+                 attempts: Optional[list] = None) -> tuple:
+    """``(ledger text, candidate records)`` -- the archive as the selector sees it.
+
+    THE WHOLE ARCHIVE, NOT THE FRONTIER, and that is the point of this
+    function. It used to print the Pareto frontier over (Dlvl, XL, score) plus
+    named saves and hide the rest behind "(N dominated auto-checkpoint(s) not
+    listed)". On a single NetHack trajectory that objective is monotone in all
+    three coordinates at once -- later states dominate earlier ones by
+    construction -- so the frontier collapsed to ONE row out of 24, and an LLM
+    selector paid for its judgement was handed a candidate set of size one and
+    reduced to justifying a forced move. `parse_decision` had always accepted
+    any id in the archive; only the prompt and this table said otherwise.
+
+    So: every checkpoint is reachable as a choice here. What the rendering
+    spends its budget on is the axes the objective cannot see -- branch, HP
+    fraction, game turn, why the state was saved, and what happened to the
+    attempts that already resumed from it -- because those are exactly the
+    grounds on which a dominated state can be the better place to branch from.
+
+    LEGIBILITY AT SCALE, without hiding anything. Measurably identical
+    checkpoints collapse into one row that names all their ids
+    (:func:`group_states`); the archive is sectioned by dungeon branch and
+    ordered shallow-to-deep within it; and past ``cfg.ledger_max_rows`` groups
+    the remainder are rendered one compact line each, carrying every measured
+    axis but the free text. An archive of hundreds stays readable and every id
+    in it is still a legal choice.
+
+    The second return value is the candidate set AS SHOWN -- one record per
+    checkpoint, not per group -- so `selection.jsonl` can record what the model
+    was actually offered rather than what the scripted selector would have
+    offered, which are no longer the same set.
     """
     cfg = cfg or OrchestratorConfig(run_dir=Path("."))
     if not rows:
         base = ("CHECKPOINT ARCHIVE: empty. Nothing has been saved yet -- "
                 "this is the first attempt. Use save(label, note) at states "
                 "worth returning to.")
-        return base + ("\n\n" + render_attempt_history(attempts) if attempts else "")
-    front_ids = {r.id for r in pareto_frontier(rows)}
-    shown = [r for r in rows
-             if r.id in front_ids or (r.created_by == "save" and r.name)]
-    shown.sort(key=lambda r: (-r.dlvl, -r.xl, -r.score))
-    shown = shown[:cfg.ledger_max_rows]
+        if attempts:
+            base += "\n\n" + render_attempt_history(attempts)
+        return base, []
 
-    lines = [f"CHECKPOINT ARCHIVE ({len(rows)} saved state(s); "
-             f"{len(front_ids)} on the Dlvl/XL/score frontier). "
-             f"All numbers below are measured by the harness from the game "
-             f"engine, not written by anyone."]
-    lines.append("  id  Dlvl  XL   HP     turn   score  attempts  name / why it was saved")
-    for r in shown:
-        mark = "->" if r.id == current_id else "  "
-        lines.append(
-            f"{mark}{r.id:>4}  {r.dlvl:>4}  {r.xl:>2}  "
-            f"{r.hp:>3}/{r.max_hp:<3} {r.gameturn:>6} {r.score:>6}  "
-            f"{r.attempts_from:>8}  {(r.name or '-')[:28]}"
-            + (f" | {r.note[:60]}" if r.note else "")
-        )
-    if len(rows) > len(shown):
-        lines.append(f"  ({len(rows) - len(shown)} dominated auto-checkpoint(s) "
-                     f"not listed)")
+    frontier = {r.id for r in pareto_frontier(rows)}
+    tried = attempts_by_checkpoint(attempts)
+    groups = group_states(rows)
+    ranked = sorted(groups, key=lambda g: _detail_priority(g, frontier, tried))
+    detail = set(id(g) for g in ranked[:max(1, int(cfg.ledger_max_rows))])
+
+    lines = [
+        f"CHECKPOINT ARCHIVE: {len(rows)} saved state(s) in {len(groups)} "
+        f"distinct measured position(s). EVERY id below is a legal choice -- "
+        f"this is the WHOLE archive, not a shortlist and not a frontier.",
+        f"All numbers are measured by the harness from the game engine, not "
+        f"written by anyone; name, note and lesson are text and are never "
+        f"measured.",
+        f"  branch = which dungeon branch (main / MINES / SOKO ...). Depth "
+        f"alone cannot tell a Mines level from a Dungeons-of-Doom one.",
+        f"  hp%    = HP as a fraction of max. Two states with the same Dlvl, "
+        f"XL and score can be a full-strength state and a nearly-dead one.",
+        f"  dup    = how many checkpoints sit at this identical measured "
+        f"state; every one of their ids is listed and each is choosable.",
+        f"  kind   = why it was written: level-entry, level-up, cadence "
+        f"(periodic), model-save (a player chose to save it), seed.",
+        f"  tried  = how many attempts resumed from here (`attempts_from`) and "
+        f"how the ones this run recorded ended.",
+        f"  *      = on the (Dlvl, XL, score) Pareto frontier.",
+    ]
+
+    by_branch: dict = {}
+    for g in groups:
+        by_branch.setdefault(int(g.rep.dungeon_number or 0), []).append(g)
+    for dnum in sorted(by_branch):
+        bgroups = sorted(by_branch[dnum],
+                         key=lambda g: (g.rep.dlvl, g.rep.gameturn,
+                                        _id_key(g.rep.id)))
+        n_ck = sum(g.count for g in bgroups)
+        lines.append("")
+        lines.append(f"BRANCH {dnum} -- {branch_name(dnum)} "
+                     f"({branch_short(dnum)}): {n_ck} checkpoint(s), "
+                     f"{len(bgroups)} distinct, Dlvl "
+                     f"{min(g.rep.dlvl for g in bgroups)}-"
+                     f"{max(g.rep.dlvl for g in bgroups)}")
+        lines.append(_LEDGER_HEADER)
+        overflow = []
+        for g in bgroups:
+            if id(g) in detail:
+                lines.append(_state_line(g, current_id=current_id,
+                                         frontier=frontier, tried=tried))
+            else:
+                overflow.append(g)
+        if overflow:
+            lines.append(f"  ALSO IN THIS BRANCH AND EQUALLY CHOOSABLE "
+                         f"({sum(g.count for g in overflow)} checkpoint(s), "
+                         f"same measurements, name/note omitted for width):")
+            lines.extend(_compact_line(g) for g in overflow)
+
     if attempts:
         lines.append("")
         lines.append(render_attempt_history(attempts))
-    return "\n".join(lines)
+
+    cands = []
+    for g in groups:
+        shown = "detail" if id(g) in detail else "compact"
+        for m in g.members:
+            frac = hp_fraction(m)
+            cands.append({
+                "id": m.id,
+                "dlvl": m.dlvl, "xl": m.xl, "score": m.score,
+                "dungeon_number": m.dungeon_number,
+                "branch": branch_name(m.dungeon_number),
+                "level_number": m.level_number,
+                "hp": m.hp, "max_hp": m.max_hp,
+                "hp_fraction": (round(frac, 4) if frac is not None else None),
+                "gameturn": m.gameturn,
+                "kind": checkpoint_kind(m),
+                "attempts_from": m.attempts_from,
+                "outcomes": [outcome_label(a) for a in tried.get(m.id, [])],
+                "on_frontier": m.id in frontier,
+                "same_state_as": (g.rep.id if m.id != g.rep.id else None),
+                "duplicate_group_size": g.count,
+                "shown_as": shown,
+            })
+    cands.sort(key=lambda c: _id_key(c["id"]))
+    return "\n".join(lines), cands
+
+
+def render_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
+                  current_id: Optional[str] = None,
+                  attempts: Optional[list] = None) -> str:
+    """The archive as text. See :func:`build_ledger` for what it contains."""
+    return build_ledger(rows, cfg, current_id, attempts)[0]
 
 
 def read_lessons(checkpoint_dir) -> str:
@@ -2824,6 +3251,8 @@ before engaging anything on this floor"). The directive is served to the player
 verbatim at the top of its first observation, and whether it followed you is
 measured -- so make it checkable, not encouraging.
 
+Any checkpoint id in the archive above is a legal choice.
+
 HOW TO PHRASE IT SO IT CAN BE SCORED. Two rules, both learned from directives
 that could not be measured:
   * PROHIBIT OUTCOMES, NOT TOOLS. "Do not clear the level" is checkable against
@@ -2835,10 +3264,10 @@ that could not be measured:
     steering from an attempt that never started.
 
 Reply with a short rationale and then EXACTLY this JSON object on its own line:
-{{"checkpoint": "<id from the table above>", "directive": "<your instruction>", "rationale": "<one line>"}}
+{{"checkpoint": "<id from the archive above>", "directive": "<your instruction>", "rationale": "<one line>"}}
 
-Only ids that appear in the table are accepted; anything else falls back to the
-scripted selector and is recorded as your round having failed to decide.
+An id that is not in the archive falls back to the scripted selector and is
+recorded as your round having failed to decide.
 """
 
     OPENING_RETRY_PROMPT = """\
@@ -2852,7 +3281,7 @@ repeat yourself and do not restate sections you have already written.
 Your last reply could not be used: {reason}
 
 Reply again. Prose first if you want it, then EXACTLY this JSON object alone on
-the final line, with an id that appears in the table above ({ids}):
+the final line, with an id from the archive above ({ids}):
 {{"checkpoint": "<id>", "directive": "<your instruction>", "rationale": "<one line>"}}
 
 The directive must be a non-empty instruction. This attempt cannot be launched
@@ -2943,7 +3372,7 @@ you intend to do next. Write it for yourself. No JSON this round.
         """Who goes next and what they are told. Validated, then recorded.
 
         Returns ``{"checkpoint_id", "directive", "source", "selection",
-        "decision"}``. ``source`` is one of ``llm``, ``scripted``, or
+        "candidates_shown", "decision"}``. ``source`` is one of ``llm``, ``scripted``, or
         ``scripted_fallback`` -- the last one meaning the LM was asked and did
         not produce a usable answer. The distinction matters: an arm whose
         "LLM selections" were half fallbacks is not the arm it claims to be,
@@ -2955,7 +3384,7 @@ you intend to do next. Write it for yourself. No JSON this round.
         # fallback AND the record of what the ablation would have done.
         out = {"checkpoint_id": sel.chosen_id, "directive": "",
                "source": "scripted", "selection": sel.to_json(),
-               "decision": None}
+               "candidates_shown": None, "decision": None}
         if self.cfg.selector != "llm" or self.session is None:
             return out
 
@@ -2992,14 +3421,27 @@ you intend to do next. Write it for yourself. No JSON this round.
                 "\n\nNOTE: every directive you write is also run a second time "
                 "from the same checkpoint WITHOUT it, as its own control. Two "
                 "attempts per round is expected; the ledger shows both.")
+        # THE MENU AND THE RECORD OF IT ARE THE SAME OBJECT. `build_ledger`
+        # returns the text the model is shown and one record per checkpoint IN
+        # that text, so `selection.jsonl` cannot drift from what was offered --
+        # which is exactly how the old record came to log the scripted
+        # selector's one-row frontier as "the candidates" for rounds the model
+        # was shown the whole archive.
+        ledger_text, candidates_shown = build_ledger(rows, self.cfg,
+                                                     attempts=self.attempts)
+        out["candidates_shown"] = candidates_shown
         prompt = self.ROUND_PROMPT.format(
             round=n, player_usd=self.budget.player_usd,
             orch_usd=self.budget.orchestrator_usd,
             ceiling=self.cfg.budget_ceiling_usd,
             last_block=last_block,
-            ledger=render_ledger(rows, self.cfg, attempts=self.attempts),
+            ledger=ledger_text,
         )
         from e16_session import parse_decision
+        # EVERY id in the archive, and the prompt now says so. `parse_decision`
+        # has always validated against this set rather than against the
+        # frontier; for 24 checkpoints and a one-row table, the prompt was the
+        # only thing making 23 of them unchoosable.
         ids = [r.id for r in rows]
 
         # BOUNDED RETRY, THEN RAISE. A round that produces no decision used to
@@ -3195,11 +3637,8 @@ you intend to do next. Write it for yourself. No JSON this round.
         chosen_id = choice["checkpoint_id"]
         directive = choice["directive"]
         _append_jsonl(cfg.selection_path,
-                      {"attempt": n, "source": choice["source"],
-                       "chosen_id": chosen_id, "directive": directive,
-                       "directive_kind": classify_directive_kind(directive),
-                       "directive_lint": lint_directive(directive),
-                       "llm": choice["decision"], **choice["selection"]})
+                      selection_record(n, choice, rows,
+                                       frontier=self.frontier_ids(rows)))
 
         ck_dir = next((r.path for r in rows if r.id == chosen_id), None)
 
@@ -3503,15 +3942,23 @@ you intend to do next. Write it for yourself. No JSON this round.
         scratch = out_dir / "scratch_archive"
         scratch.mkdir(parents=True, exist_ok=True)
 
-        selection_record = {
+        # THE SAME SHAPE the go_explore rounds write, so one reader can count
+        # both arms -- with every "what was offered" field explicitly empty,
+        # because this arm offers nothing. `chosen_id` is the launched id here
+        # too, and there is no scripted pick to shadow it with.
+        _append_jsonl(cfg.selection_path, {
             "attempt": n, "source": "matched_restart_fixed_start",
-            "chosen_id": start.id, "directive": "", "directive_kind": "none",
+            "chosen_id": start.id,
+            "chosen_on_frontier": start.id in self.frontier_ids(rows),
+            "directive": "", "directive_kind": "none",
             "directive_lint": [], "llm": None,
             "reason": ("no selection: matched_restart restarts from one fixed "
                        "state by construction"),
-            "candidates": [], "n_rows": len(rows),
-        }
-        _append_jsonl(cfg.selection_path, selection_record)
+            "candidates_shown": [], "n_candidates_shown": 0,
+            "frontier_ids": sorted(self.frontier_ids(rows), key=_id_key),
+            "scripted_would_pick": None, "scripted_agreed": None,
+            "scripted": {}, "n_rows": len(rows),
+        })
 
         ctx = PlayerContext(
             attempt=n, checkpoint_dir=start.path, checkpoint_id=start.id,
@@ -3842,6 +4289,38 @@ you intend to do next. Write it for yourself. No JSON this round.
                      "player was never going to do."),
         }
 
+    def selection_stats(self) -> dict:
+        """The ablation comparison, rolled up from ``selection.jsonl``.
+
+        "The LLM orchestrator steered the search" is only measurable against
+        "the scripted softmax would have picked the same thing anyway", and
+        until the record carried both picks per round that comparison had to be
+        reconstructed by hand. ``dominated_choices`` counts the rounds the
+        model chose a state OFF the (Dlvl, XL, score) frontier -- the move the
+        old one-row table made impossible.
+        """
+        rounds = read_jsonl(self.cfg.selection_path)
+        rounds = [r for r in rounds if r.get("source") != "matched_restart_fixed_start"]
+        agreed = [r for r in rounds if r.get("scripted_agreed") is True]
+        differed = [r for r in rounds if r.get("scripted_agreed") is False]
+        dominated = [r for r in rounds if r.get("chosen_on_frontier") is False]
+        return {
+            "rounds": len(rounds),
+            "scripted_agreed": len(agreed),
+            "scripted_differed": len(differed),
+            "dominated_choices": len(dominated),
+            "dominated_ids": [r.get("chosen_id") for r in dominated],
+            "candidates_shown_per_round": [r.get("n_candidates_shown")
+                                           for r in rounds],
+            "chosen_ids": [r.get("chosen_id") for r in rounds],
+            "scripted_would_pick": [r.get("scripted_would_pick")
+                                    for r in rounds],
+            "note": ("`chosen_id` is the id that was LAUNCHED; "
+                     "`scripted_would_pick` is what the softmax ablation would "
+                     "have chosen from the same archive. They were the same "
+                     "field once, and the scripted pick won."),
+        }
+
     def summary(self) -> dict:
         rows = self.rows()
         best = max(rows, key=lambda r: r.key) if rows else None
@@ -3900,6 +4379,7 @@ you intend to do next. Write it for yourself. No JSON this round.
             "matched_pairs": self.pairs(),
             "selection_sources": _count(a.get("selection_source") or "scripted"
                                         for a in self.attempts),
+            "selection": self.selection_stats(),
             "wall_clock_s": round(time.time() - self.started_at, 1),
             "stop_reason": self.stop_reason,
             "frontier_advances": self.frontier_advances,
