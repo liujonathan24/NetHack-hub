@@ -1058,10 +1058,29 @@ def lesson_excerpt(checkpoint_dir, max_chars: int = 90) -> str:
 
 #: Header widths, in one place so the column line and the rows cannot drift.
 _TRIED_W = 22
-_LEDGER_HEADER = ("   id    from  branch  Dlvl  XL      HP   hp%     food"
+_LEDGER_HEADER = ("   id    from  branch  Dlvl  XL   dXL      HP   hp%     food"
                   "     turn  score  "
                   "dup  kind         " + "tried".ljust(_TRIED_W)
                   + " name / why saved")
+
+def _deficit_cell(r: Row) -> str:
+    """`dXL`: experience levels short of the winners' pace AT THIS STATE.
+
+    Computed from the checkpoint's OWN dlvl/xl -- the state it actually holds,
+    not the run's high-water marks. A hero drained from XL 6 to 3 is weak now,
+    and a node that once touched Dlvl 15 but sits at Dlvl 2 is a Dlvl 2 node.
+    The high-water pair is what BALROG scores and is kept separately; this
+    column is about survivability, which is a property of the current state.
+    """
+    try:
+        from e16_level_balance import deficit
+        d = deficit(r.dlvl, r.xl)
+    except Exception:
+        return "   -"
+    if d is None:
+        return "   ?"
+    return f"{d:>+4d}" if d > 0 else "   ."
+
 
 #: Hunger width in the ledger. "!Fainting" -- the impairment marker plus the
 #: longest label that matters -- is 9 characters, and truncating THAT word to
@@ -1122,7 +1141,7 @@ def _state_line(g: StateGroup, *, current_id: Optional[str],
         text += f" | {note}"
     line = (f"{mark} c{r.id:<4} {_parent_cell(r):>5} "
             f"{branch_short(r.dungeon_number):>7} "
-            f"{r.dlvl:>4}  {r.xl:>2}  {r.hp:>3}/{r.max_hp:<3} {pct}  "
+            f"{r.dlvl:>4}  {r.xl:>2} {_deficit_cell(r)}  {r.hp:>3}/{r.max_hp:<3} {pct}  "
             f"{_food_cell(r)} "
             f"{r.gameturn:>6} {r.score:>6}  "
             f"{('x' + str(g.count)) if g.count > 1 else '  ':>3}  "
@@ -1232,6 +1251,13 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
         f"alone cannot tell a Mines level from a Dungeons-of-Doom one.",
         f"  hp%    = HP as a fraction of max. Two states with the same Dlvl, "
         f"XL and score can be a full-strength state and a nearly-dead one.",
+        f"  dXL    = experience levels SHORT of the pace winning games keep at "
+        f"this depth (median XL at first reaching it, from 433 ascensions). "
+        f"`.` means at or above that pace. It is computed from THIS state's own "
+        f"Dlvl and XL, not the run's best-ever, because a hero that was drained "
+        f"is weak now. Being under it predicts dying, and predicts it harder "
+        f"the deeper you are. It is NOT a score: experience below XL 7 adds "
+        f"nothing to the headline number. It buys survival, which buys depth.",
         f"  food   = nutrition: Satiated / Normal / Hungry / Weak / Fainting / "
         f"Fainted / Starved, and `?` for a state saved before this was "
         f"recorded. A LEADING `!` MEANS THE HERO IS ALREADY IMPAIRED -- at "
@@ -4119,8 +4145,15 @@ player result.
         out["candidates_shown"] = candidates_shown
         try:
             from e16_level_balance import assess as _assess
-            _hi_d = max([r.max_dlvl_reached or r.dlvl for r in rows] or [0])
-            _hi_x = max([r.max_xp_level or r.xl for r in rows] or [0])
+            # ONE REAL STATE, NOT A MASHUP. Taking max(dlvl) over all rows and
+            # max(xl) over all rows independently manufactures a hero that
+            # never existed -- the depth of the deepest checkpoint welded to
+            # the experience of a different one -- and then reports its
+            # deficit as if it were the run's. Use the deepest node's OWN
+            # experience level, which is a state the run actually held.
+            _deep = max(rows, key=lambda r: (r.dlvl or 0, r.xl or 0), default=None)
+            _hi_d = (_deep.dlvl if _deep else 0)
+            _hi_x = (_deep.xl if _deep else 0)
             if _hi_d and _hi_x:
                 last_block += ("\n\nSTANDING OF THE RUN (computed, not opinion):\n  "
                                + _assess(_hi_d, _hi_x)["advice"])
