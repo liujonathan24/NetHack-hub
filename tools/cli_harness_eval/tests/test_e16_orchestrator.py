@@ -2946,3 +2946,39 @@ def test_hunger_is_not_added_to_the_restore_audit():
     from nethack_harness.checkpoints import AUDIT_FIELDS
 
     assert "hunger_state" not in AUDIT_FIELDS
+
+
+def test_the_players_account_survives_a_prime_agent_trace():
+    """The role is at item['message']['role'], not item['role'].
+
+    Reading the outer level returned "" for every trace, so the "player's own
+    account" block in every round prompt was a header and a blank line --
+    7 of 7 rounds in treesmoke7. The orchestrator theorised about a monster
+    while its own player was reporting starvation.
+    """
+    import e16_orchestrator as E
+
+    trace = {"nodes": [
+        {"logprobs": [], "message": {"role": "system", "content": "sys"}},
+        {"logprobs": [], "message": {"role": "user", "content": "obs"}},
+        {"logprobs": [], "message": {"role": "assistant",
+                                     "content": "Fainting from hunger - critical."}},
+        {"logprobs": [], "message": {"role": "tool", "content": "result"}},
+    ]}
+    assert E._final_text(trace) == "Fainting from hunger - critical."
+
+
+def test_a_flat_role_trace_still_works():
+    """The old shape must keep working -- this is a widening, not a swap."""
+    import e16_orchestrator as E
+
+    assert E._final_text({"messages": [
+        {"role": "assistant", "content": "flat shape"}]}) == "flat shape"
+
+
+def test_an_account_with_no_assistant_text_is_empty_not_an_error():
+    import e16_orchestrator as E
+
+    assert E._final_text({"nodes": [
+        {"message": {"role": "tool", "content": "only a tool result"}}]}) == ""
+    assert E._final_text({}) == ""

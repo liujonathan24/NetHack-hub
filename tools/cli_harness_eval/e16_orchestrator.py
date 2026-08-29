@@ -6081,15 +6081,45 @@ def _max_dlvl_from_turns(out_dir) -> Optional[int]:
 
 
 def _final_text(trace: dict, limit: int = 4000) -> str:
-    """The player's last assistant message -- its own account of the game."""
+    """The player's last assistant message -- its own account of the game.
+
+    THE DEFECT THIS FIXES, and it cost an entire run. This looked for
+    ``item["role"]``. In a prime-agent trace the role is one level down, in
+    ``item["message"]["role"]``; the outer node carries logprobs, masks and
+    token ids. So the lookup missed on every item, this returned "", and the
+    "The player's own account" block in every round prompt was a header
+    followed by a blank line. Measured: 7 of 7 rounds in treesmoke7, 3 chars
+    each -- two newlines and nothing else.
+
+    What was lost was not decoration. treesmoke7 attempt 7's last message read:
+
+        "I'm on Dlvl 7, 67/67 HP, but **Fainting** from hunger - that's
+         critical. There's a white unicorn at (27,4). I need to kill it for
+         food, and the directive says a level-draining monster is here. Let me
+         attack the unicorn - it's the only visible monster and I desperately
+         need to eat."
+
+    The player had diagnosed the real cause and said so plainly. The
+    orchestrator, receiving an empty account, spent four consecutive rounds
+    theorising about a level-draining monster that does not exist. The archive
+    was not the bottleneck; the feedback channel was closed.
+    """
+    def _role_of(item):
+        """Role, whether it sits on the item or on item['message']."""
+        if not isinstance(item, dict):
+            return None, None
+        inner = item.get("message")
+        if isinstance(inner, dict) and inner.get("role"):
+            return inner.get("role"), inner.get("content")
+        return item.get("role"), item.get("content")
+
     for key in ("completion", "messages", "nodes"):
         node = trace.get(key)
         if isinstance(node, list) and node:
             for item in reversed(node):
-                if isinstance(item, dict) and item.get("role") == "assistant":
-                    content = item.get("content")
-                    if isinstance(content, str) and content.strip():
-                        return content[:limit]
+                role, content = _role_of(item)
+                if role == "assistant" and isinstance(content, str) and content.strip():
+                    return content[:limit]
     return ""
 
 
