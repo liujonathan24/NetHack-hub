@@ -300,6 +300,11 @@ class OrchestratorConfig:
     #: paragraph and a half -- enough for "died to a wraith on D15 after
     #: melee'ing it", which is the whole informational content.
     orchestrator_summary_cap: int = 1500
+    #: HARD CAP ON LM CALLS PER ATTEMPT, 0 = uncapped (the historical default).
+    #: A capped attempt hands control back to the orchestrator on a schedule
+    #: instead of only when the hero dies, which turns the run from "8 lives"
+    #: into "N planning rounds" at the same total spend.
+    player_max_calls: int = 0
     #: THE HARD CONTEXT BOUND for the orchestrator's conversation, in TOKENS.
     #: Enforced by prime-agent's OWN threshold compaction, configured into the
     #: run's private agent dir at session build time
@@ -1738,6 +1743,11 @@ class PlayerContext:
     tier: str
     #: The LAUNCHER's arm (which scaffold to run), not the experiment arm.
     arm: str
+    #: Hard cap on this attempt's LM calls; 0 = uncapped. Reaches
+    #: `launch_cell.sh` as its MAX_CALLS argument. Defaulted, so it must sit
+    #: with the other defaulted fields -- a dataclass rejects a non-default
+    #: field after a defaulted one.
+    max_calls: int = 0
     directive: str = ""
     #: The experiment arm this attempt belongs to (`go_explore` /
     #: `matched_restart`), carried on the context so an attempt record is
@@ -3912,6 +3922,13 @@ it; an instruction the player cannot execute is worse than no instruction,
 because it spends the attempt discovering that. Name the OUTCOME you want and
 let the player choose how.
 
+This applies to ACTIONS that require those keys, not only to the keys
+themselves. "Write Elbereth" is the same instruction as "press E then -": it
+was issued in an earlier run and the player could not do it, because the key it
+needs is not on the tool surface. Before naming a specific NetHack technique,
+assume the player can move, explore, fight, rest, search, kick, pray, apply and
+read the wiki -- and nothing else.
+
 Any checkpoint id in the archive above is a legal choice.
 
 Reply with a short rationale and then EXACTLY this JSON object on its own line:
@@ -4084,6 +4101,15 @@ player result.
         ledger_text, candidates_shown = build_ledger(rows, self.cfg,
                                                      attempts=self.attempts)
         out["candidates_shown"] = candidates_shown
+        try:
+            from e16_level_balance import assess as _assess
+            _hi_d = max([r.max_dlvl_reached or r.dlvl for r in rows] or [0])
+            _hi_x = max([r.max_xp_level or r.xl for r in rows] or [0])
+            if _hi_d and _hi_x:
+                last_block += ("\n\nSTANDING OF THE RUN (computed, not opinion):\n  "
+                               + _assess(_hi_d, _hi_x)["advice"])
+        except Exception:
+            pass
         prompt = self.ROUND_PROMPT.format(
             round=n, player_usd=self.budget.player_usd,
             orch_usd=self.budget.orchestrator_usd,
@@ -4332,7 +4358,8 @@ player result.
             archive_dir=cfg.archive_dir, wiki_dir=cfg.wiki_dir,
             out_dir=out_dir, ledger_text=ledger_text,
             fidelity_log=cfg.fidelity_path, game_seed=cfg.game_seed,
-            tier=cfg.tier, arm=cfg.player_arm, directive=directive,
+            tier=cfg.tier, max_calls=cfg.player_max_calls,
+            arm=cfg.player_arm, directive=directive,
             experiment_arm=cfg.arm, pair_id=pair_id, pair_role=pair_role,
             directive_kind=(directive_kind_override
                             if directive_kind_override is not None
@@ -5866,8 +5893,11 @@ class SubprocessPlayer:
             "E16_ARGS": json.dumps(e16),
             "STALL_WATCHDOG": env.get("STALL_WATCHDOG", "1"),
         })
+        # arg 3 is launch_cell's MAX_CALLS; 0 means uncapped. It was hardcoded,
+        # so no E16 run could ever bound an attempt by calls.
         cmd = [str(self.repo / "tools" / "cli_harness_eval" / "launch_cell.sh"),
-               ctx.arm, str(ctx.out_dir), "0", "1"]
+               ctx.arm, str(ctx.out_dir), str(int(getattr(ctx, "max_calls", 0) or 0)),
+               "1"]
         t0 = time.time()
         # Popen, not `subprocess.run`: the handle has to be reachable from the
         # progress-monitor thread so the in-flight budget guard can stop the
@@ -6217,6 +6247,10 @@ def main(argv=None) -> int:
     ap.add_argument("run_dir")
     ap.add_argument("--wiki-src", default="/root/nld/e15-wiki/configs/continual/wiki")
     ap.add_argument("--tier", default="e16_gewiki")
+    ap.add_argument("--player-max-calls", type=int, default=0,
+                    help="Hard cap on LM calls per attempt (0 = uncapped). A "
+                         "capped attempt returns to the orchestrator on a "
+                         "schedule rather than only on death.")
     ap.add_argument("--arm", choices=ARMS, default=ARM_GO_EXPLORE,
                     help="THE EXPERIMENT ARM. go_explore = the method. "
                          "matched_restart = THE NULL: N independent attempts "
@@ -6349,7 +6383,8 @@ def main(argv=None) -> int:
     run_dir = Path(args.run_dir).resolve()
     cfg = OrchestratorConfig(
         run_dir=run_dir, wiki_src=Path(args.wiki_src),
-        tier=args.tier, arm=args.arm, player_arm=args.player_arm,
+        tier=args.tier,
+        player_max_calls=args.player_max_calls, arm=args.arm, player_arm=args.player_arm,
         start_checkpoint_id=args.start_checkpoint, selector=args.selector,
         game_seed=args.game_seed,
         rng_seed=args.rng_seed, w_balrog=args.w_balrog,

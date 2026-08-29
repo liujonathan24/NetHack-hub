@@ -178,8 +178,21 @@ def main() -> int:
         killable = (a.kill and h.get("zombie")) or (a.kill_runaway and not h.get("zombie"))
         if killable and h["alive"]:
             try:
+                # Escalate. A tool server spinning at 100% CPU inside a
+                # NetPlay skill call does not service signals, so SIGTERM alone
+                # leaves it running -- observed repeatedly: the same pid was
+                # re-flagged minutes after a "successful" TERM. Give it a short
+                # grace period to exit cleanly, then SIGKILL.
                 os.kill(h["pid"], signal.SIGTERM)
-                print(f"[runaway]   SIGTERM -> {h['pid']}")
+                for _ in range(20):          # up to 2s
+                    time.sleep(0.1)
+                    if not os.path.isdir(f"/proc/{h['pid']}"):
+                        break
+                if os.path.isdir(f"/proc/{h['pid']}"):
+                    os.kill(h["pid"], signal.SIGKILL)
+                    print(f"[runaway]   SIGTERM ignored -> SIGKILL {h['pid']}")
+                else:
+                    print(f"[runaway]   SIGTERM -> {h['pid']}")
             except OSError as e:
                 print(f"[runaway]   could not signal {h['pid']}: {e}")
     return 1 if hits else 0

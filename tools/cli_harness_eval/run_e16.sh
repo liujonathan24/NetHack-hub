@@ -177,6 +177,17 @@ ARGS=(
 [ -n "${E16_ORCH_TMPDIR:-}" ] && ARGS+=(--orch-tmpdir "$E16_ORCH_TMPDIR")
 [ -n "${E16_START_CHECKPOINT:-}" ] && ARGS+=(--start-checkpoint "$E16_START_CHECKPOINT")
 [ "${E16_NO_DIRECTIVE:-0}" = "1" ] && ARGS+=(--no-directive)
+# E16_NO_INFLIGHT_BUDGET=1 disables the mid-attempt budget guard. The guard
+# charges wall clock at DEFAULT_SPEND_RATE_USD_PER_HOUR ($90/hr) x a 2.0 safety
+# factor and there is NO in-flight usage source for prime_agent rollouts
+# (extra_usage is empty), so `spend_rate_source` never leaves `prior`: the rate
+# it enforces is a guess that no run can ever correct. Measured in treesmoke4
+# at E16_BUDGET=45 it capped attempt 1 at 800s of wall clock (it ran 811s) and
+# attempts 2/3 at 394s/191s, which is ~1/5 of the ~64 min a natural death takes
+# on this harness -- i.e. it made "play until the character dies" impossible by
+# construction. Turn it off when the run's purpose is to reach a natural end or
+# to MEASURE the real rate; leave it on for cost-controlled sweeps.
+[ "${E16_NO_INFLIGHT_BUDGET:-0}" = "1" ] && ARGS+=(--no-inflight-budget)
 [ "${E16_PAIRED_CONTROL:-0}" = "1" ] && ARGS+=(--paired-control)
 [ "${E16_RESEED:-0}" = "1" ] && ARGS+=(--reseed)
 
