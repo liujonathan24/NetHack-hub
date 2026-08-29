@@ -2982,3 +2982,43 @@ def test_an_account_with_no_assistant_text_is_empty_not_an_error():
     assert E._final_text({"nodes": [
         {"message": {"role": "tool", "content": "only a tool result"}}]}) == ""
     assert E._final_text({}) == ""
+
+
+def test_xl_is_a_high_water_mark_like_depth(tmp_path):
+    """A dead hero's last frame is the weakest number the attempt ever held.
+
+    Two measured reasons the last frame is wrong: level drain is real here
+    (treesmoke8 a012 went XL 6 -> 5 -> 4 -> 3 in fourteen turns), and a
+    post-death frame reports XL 0 (treesmoke8 a015, XL 7 -> 0).
+
+    This also matches what the metric consumes: nethack.py keeps
+    `state["max_xp_level"]` as a running max and BALROG is computed from it, so
+    a salvage path reading the last frame CONTRADICTED the primary path.
+    """
+    import e16_orchestrator as E
+
+    turns = tmp_path / "turns"
+    turns.mkdir()
+    (turns / "1_1_1.ndjson").write_text("\n".join(json.dumps(r) for r in [
+        {"lm_turn": 1, "status": {"experience_level": 1}, "dlvl": 1},
+        {"lm_turn": 2, "status": {"experience_level": 7}, "dlvl": 3},
+        {"lm_turn": 3, "status": {"experience_level": 3}, "dlvl": 3},   # drained
+        {"lm_turn": 4, "status": {"experience_level": 0}, "dlvl": 3},   # died
+    ]))
+    assert E._max_xl_from_turns(tmp_path) == 7
+    assert E._max_dlvl_from_turns(tmp_path) == 3
+
+
+def test_a_stalled_attempt_keeps_the_experience_it_earned(tmp_path):
+    """Salvage must not report zeros for an attempt that demonstrably played."""
+    import e16_orchestrator as E
+
+    turns = tmp_path / "turns"
+    turns.mkdir()
+    (turns / "1_1_1.ndjson").write_text("\n".join(json.dumps(r) for r in [
+        {"lm_turn": i, "status": {"experience_level": 2}, "dlvl": 2,
+         "tool_calls": [{"name": "np_move_to"}]} for i in range(1, 51)
+    ]))
+    ev = E._attempt_dir_evidence(tmp_path)
+    assert ev["max_xl"] == 2, ev
+    assert ev["calls"] == 50, ev

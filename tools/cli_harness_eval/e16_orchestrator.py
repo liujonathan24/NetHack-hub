@@ -3093,6 +3093,12 @@ def _attempt_dir_evidence(out_dir: Path) -> dict:
                                or rec.get("max_xp_level") or 1)
     ev["calls"] = len(calls_from_turns(out_dir))
     ev["max_dlvl"] = int(_max_dlvl_from_turns(out_dir) or 0)
+    # XL as a HIGH-WATER MARK, matching how depth is derived. The last-frame
+    # read above stands only when no turn ever showed more -- and a dead hero's
+    # last frame reports XL 0.
+    _hi_xl = _max_xl_from_turns(out_dir)
+    if _hi_xl is not None:
+        ev["max_xl"] = max(int(ev.get("max_xl") or 1), _hi_xl)
     if ev["ended_at"] is None:
         try:
             ev["ended_at"] = out_dir.stat().st_mtime
@@ -6082,17 +6088,63 @@ def read_trace_result(out_dir) -> PlayerResult:
         died=bool(metrics.get("died")),
         ascended=bool(metrics.get("ascended")),
         error=str(trace.get("error") or ""),
-        calls=int(metrics.get("skill_calls") or 0),
+        # CALLS AND XL GET THE SAME TREATMENT AS DEPTH. On a harness-aborted
+        # rollout the metrics block was written by an env that did not finish,
+        # and it under-reports: treesmoke10 attempt 2 reported `skill_calls: 0`
+        # and `max_xp_level: 1` for an attempt whose own turn files hold 405
+        # records and XL 2. The turn files are per-turn engine records; take
+        # whichever is larger rather than trusting one number written once.
+        calls=max(int(metrics.get("skill_calls") or 0),
+                  len(calls_from_turns(out_dir))),
         spend_usd=float(spend),
         spend_known=costed,
         max_dlvl=max_dlvl,
-        max_xl=int(metrics.get("max_xp_level") or 1),
+        max_xl=max(int(metrics.get("max_xp_level") or 1),
+                   int(_max_xl_from_turns(out_dir) or 1)),
         summary=_final_text(trace),
         rollouts_paid=int(billed["rollouts_paid"]),
         retry_errors=list(billed["retry_errors"]),
         raw={"metrics": metrics, "depth_disagreement": depth_disagreement,
              "rollouts_billed": billed},
     )
+
+
+def _max_xl_from_turns(out_dir) -> Optional[int]:
+    """The highest experience level the per-turn NDJSON actually recorded.
+
+    THE ASYMMETRY THIS FIXES. Depth was taken as a HIGH-WATER MARK across every
+    turn (`_max_dlvl_from_turns`); experience was read off the LAST turn record
+    alone. Those differ whenever the final frame is not the strongest one, and
+    in this game it usually is not, for two measured reasons:
+
+      * XL GOES DOWN. Level drain is real and frequent here -- treesmoke8
+        attempt 12 went XL 6 -> 5 -> 4 -> 3 inside fourteen LM turns.
+      * A POST-DEATH FRAME REPORTS XL 0. treesmoke8 attempt 15 records
+        XL 7 -> 0 at the moment it died.
+
+    So the last frame of a dead hero reports the weakest number the attempt
+    ever held. treesmoke10 attempt 2 played 405 turns and reached XL 2, and its
+    row recorded `max_xl: 1` -- on the very axis the run had been instrumented
+    to steer.
+
+    High-water is also what the metric wants: BALROG scores `max_xp_level`, not
+    the level the hero happened to hold when it died.
+    """
+    best = None
+    for path in all_turn_files(out_dir):
+        for line in path.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            st = rec.get("status") or {}
+            for v in (st.get("experience_level"), rec.get("max_xp_level")):
+                if isinstance(v, (int, float)) and v:
+                    best = int(v) if best is None else max(best, int(v))
+    return best
 
 
 def _max_dlvl_from_turns(out_dir) -> Optional[int]:
