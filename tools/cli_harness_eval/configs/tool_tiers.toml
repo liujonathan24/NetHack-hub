@@ -300,6 +300,35 @@ skill_doc_coords = false
 [e16_gewiki_norb.contract]
 skill_set = "np_core,request_map,search,save,wiki"
 
+# ---------------------------------------------------------------------------
+# THE ONLY DELTA FROM [e16_gewiki_norb] IS max_calls: an attempt ends after 50
+# LM calls instead of only when the hero dies.
+#
+# Why it needs its own tier rather than a CLI override: launch_cell refuses a
+# MAX_CALLS that contradicts the contract, and it is right to. The contract's
+# max_calls is part of what the reference numbers describe -- a capped arm is a
+# different experiment from an uncapped one, and saying so in the registry is
+# the difference between an arm and an undocumented flag.
+#
+# What the cap buys. treesmoke8 spent 489 of its 1018 calls on attempt 1 alone
+# and gave the orchestrator 8 decisions in the whole run. At 50 the same spend
+# buys ~20 decisions. If archive selection is the thing that works, more
+# selections per dollar should show up as a steeper progress curve; if it is
+# not, this arm will spend the same money for less depth and say so plainly.
+#
+# NOT comparable to the uncapped reference rows. E10 was call-capped at 200 and
+# measured 5.34 mean BALROG where the uncapped E14 control measured 9.96 -- the
+# cap censored the measurement. A 50-call cap censors harder. This arm's null
+# is treesmoke8 (same tier, uncapped) at matched TOTAL calls, not the published
+# baselines.
+[e16_gewiki_norb_c50]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki_norb_c50.contract]
+skill_set = "np_core,request_map,search,save,wiki"
+max_calls = 50
+
 [continual]
 # STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
 # store the agent writes for itself, so its floor must be the same floor the

@@ -1207,7 +1207,7 @@ def test_e16_tier_differs_from_base_only_in_the_skill_set():
 
 #: The E16 family. Every tier here publishes the archive + knowledge-base
 #: tools by design; every tier NOT here must leave its served bytes alone.
-E16_TIERS = {"e16_gewiki", "e16_gewiki_norb"}
+E16_TIERS = {"e16_gewiki", "e16_gewiki_norb", "e16_gewiki_norb_c50"}
 
 
 def test_no_other_tier_publishes_save_or_wiki():
