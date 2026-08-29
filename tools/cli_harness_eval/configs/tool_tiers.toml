@@ -77,11 +77,40 @@ honesty_pass = ["fd8aa13", "9b8d5a4"]
 launcher_restore = "0458275"
 
 [contract.reference]
-runs = "outputs/e10_baseline/NPCORE_v3H_r{1,2,3}__prime_agent"
+# RE-DERIVED FROM THE RAW ROLLOUTS, 2026-08-29. Two of these numbers were
+# wrong; both are corrected here and the derivation is stated so the next
+# reader can check rather than inherit.
+#
+# `runs` pointed at a path that does not exist in this tree. The E10 data
+# lives in the hub-eval checkout, not zombie-fix.
+runs = "/root/nld/hub-eval/outputs/e10_baseline/NPCORE_v3H_r{1,2,3}__prime_agent"
 median_balrog = 3.54
 mean_balrog = 5.34
-died = "14/15"
+# WAS "14/15", AND THAT DOES NOT REPRODUCE. All 15 rollouts terminate
+# `game_over` with `died = 1.0`. The three traces.jsonl files hold EIGHTEEN
+# rows, not fifteen: r2 seed 3, r3 seed 0 and r3 seed 2 were each interrupted
+# (2x harness_timeout, 1x call_budget_exhausted) and resumed, emitting a second
+# row for the same seed. Counting rows rather than rollouts gives 18, and one
+# of the interim rows was miscounted as a survivor. Depth and BALROG are
+# unaffected -- they are high-water marks.
+died = "15/15"
 ceiling_dlvl = 11
+# These numbers are CALL-CAPPED and are not on the same axis as any uncapped
+# arm. E10 ran max_turns = max_skill_calls = 200; E14, every E15 probe and E16
+# run uncapped. The uncapped control is outputs/e14_uncapped/base_r{1,2,3},
+# which measures mean 9.96 / median 6.96 / ceiling Dlvl 13 over the same 15
+# rollouts -- nearly double, because the cap was censoring the measurement.
+# Compare an uncapped arm against `uncapped_*` below, never against the E10
+# figures above.
+uncapped_runs = "outputs/e14_uncapped/base_r{1,2,3}__prime_agent"
+uncapped_mean_balrog = 9.96
+uncapped_median_balrog = 6.96
+uncapped_ceiling_dlvl = 13
+uncapped_died = "15/15"
+# registry.json reports [mean, STANDARD ERROR], not [mean, SD]. base's
+# [9.96, 2.19] is 8.464/sqrt(15). Multiply by sqrt(n) for SD.
+error_bars = "standard error, not SD"
+balrog_metric = "balrog_both (vendored BALROG achievement table), 0-100 percent"
 
 [base]
 # env-side (ENV_ARGS -> tool_flags)
