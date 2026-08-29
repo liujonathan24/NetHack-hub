@@ -1205,6 +1205,11 @@ def test_e16_tier_differs_from_base_only_in_the_skill_set():
         "np_core,request_map,search,rollback,save,wiki"
 
 
+#: The E16 family. Every tier here publishes the archive + knowledge-base
+#: tools by design; every tier NOT here must leave its served bytes alone.
+E16_TIERS = {"e16_gewiki", "e16_gewiki_norb"}
+
+
 def test_no_other_tier_publishes_save_or_wiki():
     import tool_tiers as T
 
@@ -1212,11 +1217,38 @@ def test_no_other_tier_publishes_save_or_wiki():
     for tier in T.tiers(cfg):
         skills = T.contract_for(tier, cfg)["skill_set"]
         tokens = {t.strip() for t in skills.split(",")}
-        if tier == "e16_gewiki":
+        if tier in E16_TIERS:
             assert {"save", "wiki"} <= tokens
         else:
             assert not ({"save", "wiki"} & tokens), (
                 f"tier {tier} would publish an E16 tool and change its served bytes")
+
+
+def test_the_norb_arm_differs_from_e16_by_rollback_and_nothing_else():
+    """`e16_gewiki_norb` is a one-factor arm: in-attempt recovery OFF.
+
+    Publishing `rollback` is what arms BOTH the model's own undo and the
+    automatic forced revive (nethack.py gates the post-death restore on the
+    token being in `_allowed_skill_names`). Dropping it must drop exactly that
+    one token -- if anything else moves, a result from this arm is not
+    attributable to selection.
+    """
+    import tool_tiers as T
+
+    def as_pairs(flat):
+        return {flat[i]: flat[i + 1] for i in range(0, len(flat), 2)}
+
+    e16 = as_pairs(T.flags("e16_gewiki", "prime_agent"))
+    norb = as_pairs(T.flags("e16_gewiki_norb", "prime_agent"))
+
+    differing = {k for k in set(e16) | set(norb) if e16.get(k) != norb.get(k)}
+    assert differing == {"--taskset.env_args.skill_set",
+                         "--taskset.env_args.tool_tier"}, differing
+
+    e_tokens = {t.strip() for t in e16["--taskset.env_args.skill_set"].split(",")}
+    n_tokens = {t.strip() for t in norb["--taskset.env_args.skill_set"].split(",")}
+    assert e_tokens - n_tokens == {"rollback"}
+    assert n_tokens - e_tokens == set()
 
 
 # --------------------------------------------------------------------------- #

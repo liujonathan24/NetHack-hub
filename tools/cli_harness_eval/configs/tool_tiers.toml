@@ -233,6 +233,44 @@ skill_doc_coords = false
 [e16_gewiki.contract]
 skill_set = "np_core,request_map,search,rollback,save,wiki"
 
+# ---------------------------------------------------------------------------
+# THE ONLY DELTA FROM [e16_gewiki] IS THAT `rollback` IS NOT PUBLISHED.
+#
+# Why this arm exists. In [e16_gewiki] the player recovers from disaster twice
+# over, and BOTH recoveries are gated on the same token:
+#
+#   1. the model's own `rollback(n)` -- measured in treesmoke6 attempt 1 at
+#      LM 436, HP 3/41, which undid the five calls that nearly killed it; and
+#   2. FORCED REVIVE, which is not a tool at all. nethack.py:2134 and :2604
+#      gate the automatic post-death restore on `"rollback" in
+#      _allowed_skill_names`, so publishing the tool silently grants up to
+#      `deaths_per_level` (3) free deaths per level with no model choice.
+#
+# Together those make an attempt very hard to end: treesmoke6 attempt 1 ran 61
+# minutes and 539 LM calls without terminating. An attempt that does not end is
+# an orchestrator round that never happens, and the selection loop -- the thing
+# E16 is actually testing -- goes unexercised. treesmoke6 has one selection
+# record with `n_candidates_shown: 1`.
+#
+# Dropping the token removes both halves at once. That is deliberate and it is
+# ONE factor, not two: in-attempt recovery ON vs OFF. With it OFF the first
+# death is final, attempts are short, deaths are plentiful, and the ONLY thing
+# that can carry progress across them is the archive plus the orchestrator's
+# choice of where to resume. Any gain measured here is attributable to
+# selection, because nothing else survives a death.
+#
+# `save` and `wiki` stay: the archive and the knowledge base are not the
+# variable. Auto-checkpointing is independent of the rollback ring (it is
+# driven by the LM-call counter and level/XL events), so the archive still
+# fills. nethack.py:1972 stops arming the per-turn snapshot ring, which is the
+# intended saving and not a side effect to correct for.
+[e16_gewiki_norb]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki_norb.contract]
+skill_set = "np_core,request_map,search,save,wiki"
+
 [continual]
 # STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
 # store the agent writes for itself, so its floor must be the same floor the
