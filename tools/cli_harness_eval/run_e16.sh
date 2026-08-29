@@ -190,6 +190,10 @@ ARGS=(
 [ "${E16_NO_INFLIGHT_BUDGET:-0}" = "1" ] && ARGS+=(--no-inflight-budget)
 [ "${E16_PAIRED_CONTROL:-0}" = "1" ] && ARGS+=(--paired-control)
 [ "${E16_RESEED:-0}" = "1" ] && ARGS+=(--reseed)
+# E16_PLAYER_MAX_CALLS caps each ATTEMPT's LM calls, handing control back to the
+# orchestrator on a schedule instead of only when the hero dies. 0/unset keeps
+# the historical uncapped behaviour.
+[ -n "${E16_PLAYER_MAX_CALLS:-}" ] && ARGS+=(--player-max-calls "$E16_PLAYER_MAX_CALLS")
 
 case "$CMD" in
   preflight) exec "$PY_BIN" "$PREFLIGHT" ;;
