@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Regenerate every E16 artifact dataset and rebuild both pages.
+#
+# Publishing is NOT done here -- only Claude can call the Artifact tool. This
+# script leaves two rebuilt HTML files ready to publish, and prints a short
+# status block so the caller can say what actually changed.
+#
+#   bash refresh_e16.sh
+set -uo pipefail
+SP="${E16_ART_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+REPO=/root/nld/zombie-fix
+PY="$REPO/.venv-cli-eval/bin/python"
+cd /root/nld/e16_runs || exit 1
+
+# Runs to include, newest-interesting first. A run with no attempts.jsonl is
+# skipped by the explorer generator but still picked up by the curve script,
+# which reads the turn stream -- that is deliberate, so an in-flight first
+# attempt still plots.
+RUNS="treesmoke8 treesmoke11 treesmoke7 nullsmoke1 treesmoke6 treesmoke10.aborted"
+
+"$PY" "$SP/gen_e16_data.py" $RUNS > "$SP/e16_data.json" 2>"$SP/.gen_data.err" || {
+  echo "[refresh] FAILED generating e16_data.json"; tail -3 "$SP/.gen_data.err"; exit 1; }
+
+"$PY" "$SP/gen_traces_data.py" $RUNS > "$SP/traces_data.json" 2>"$SP/.gen_tr.err" || {
+  echo "[refresh] FAILED generating traces_data.json"; tail -3 "$SP/.gen_tr.err"; exit 1; }
+
+ARGS=""; for r in $RUNS; do ARGS="$ARGS /root/nld/e16_runs/$r"; done
+"$PY" "$REPO/tools/cli_harness_eval/e16_progress_curve.py" $ARGS -o "$SP/curves.json" >/dev/null 2>&1 || {
+  echo "[refresh] FAILED generating curves.json"; exit 1; }
+
+(cd "$SP" && python3 build_explorer.py >/dev/null && python3 build_traces.py >/dev/null) || {
+  echo "[refresh] FAILED rebuilding pages"; exit 1; }
+
+# Status the caller can report without re-deriving anything.
+"$PY" - "$SP" <<'PY'
+import json,sys,os,glob
+SP=sys.argv[1]
+d=json.load(open(SP+'/e16_data.json')); c=json.load(open(SP+'/curves.json'))
+print("[refresh] ok  %s" % os.popen("date -u +%FT%TZ").read().strip())
+for r in c:
+    v=d.get(r)
+    cv=c[r]
+    closed=len(v['attempts']) if v else 0
+    print("  %-20s closed=%-3d turns=%-5d  BALROG max %-6s min %-5s"%(
+        r,closed,cv.get('total_turns',0),cv.get('final_best_max'),cv.get('final_best_min')))
+alive=0
+for p in glob.glob('/proc/[0-9]*'):
+    try: cm=open(p+'/cmdline','rb').read().decode(errors='replace')
+    except Exception: continue
+    if 'e16_orchestrator' in cm and '/bin/bash -c' not in cm: alive+=1
+print("  orchestrators alive: %d"%alive)
+PY
