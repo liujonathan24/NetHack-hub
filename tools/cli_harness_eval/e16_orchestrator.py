@@ -88,12 +88,14 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "environments" / "nethack"))
 
 from nethack_harness.checkpoints import (  # noqa: E402
+    HUNGER_IMPAIRED as _HUNGER_IMPAIRED,
     LESSONS_MD,
     META_JSON,
     PREFIX_JSONL,
     atomic_write,
     checkpoint_list,
     checkpoint_meta,
+    hunger_label as _hunger_label,
 )
 
 # --------------------------------------------------------------------------- #
@@ -508,6 +510,11 @@ class Row:
     created_at: float = 0.0
     created_by: str = ""
     parent: Optional[str] = None
+    #: blstats hunger_state, or None for a checkpoint written before this was
+    #: recorded. See the ledger's `food` column for why it is here: a state can
+    #: be Dlvl 7, XL 6 and 100% HP and still be lost before its first decision,
+    #: because the hero is fainting from starvation.
+    hunger_state: Optional[int] = None
     # TEXT. Displayed, never measured.
     name: str = ""
     note: str = ""
@@ -546,6 +553,12 @@ def row_from_meta(path: Path, meta: dict) -> Row:
         created_at=num("created_at", 0.0),
         created_by=str(meta.get("created_by") or ""),
         parent=(str(meta["parent"]) if meta.get("parent") is not None else None),
+        # None, not 0. A checkpoint written before hunger was recorded is
+        # UNKNOWN, and 0 is "Satiated" -- the most reassuring value there is.
+        # Defaulting it would tell the selector that every legacy state is
+        # well fed, which is exactly the wrong direction to guess in.
+        hunger_state=(None if meta.get("hunger_state") is None
+                      else num("hunger_state")),
         name=str(meta.get("name") or ""),
         note=str(meta.get("note") or ""),
     )
@@ -1040,9 +1053,35 @@ def lesson_excerpt(checkpoint_dir, max_chars: int = 90) -> str:
 
 #: Header widths, in one place so the column line and the rows cannot drift.
 _TRIED_W = 22
-_LEDGER_HEADER = ("   id    from  branch  Dlvl  XL      HP   hp%    turn  score  "
+_LEDGER_HEADER = ("   id    from  branch  Dlvl  XL      HP   hp%     food"
+                  "     turn  score  "
                   "dup  kind         " + "tried".ljust(_TRIED_W)
                   + " name / why saved")
+
+#: Hunger width in the ledger. "!Fainting" -- the impairment marker plus the
+#: longest label that matters -- is 9 characters, and truncating THAT word to
+#: "!Faintin" would blur the one distinction this column exists to make.
+_FOOD_W = 9
+
+
+def _food_cell(r: Row) -> str:
+    """The `food` column, with impairment made visible rather than implied.
+
+    THE DEFECT THIS FIXES. Nutrition was never written to meta.json, so it was
+    never in this table, so the selector could not see it. In treesmoke7 three
+    of eight rounds resumed a checkpoint that was already Fainting -- c39
+    twice, c41 once -- and every one of those rows read Dlvl 7, XL 6, 100% HP:
+    the best-looking states in the archive. Attempt 7 fainted from lack of food
+    on its first call and was dead on its second, 67/67 HP to 0.
+    """
+    from nethack_harness.checkpoints import HUNGER_IMPAIRED, hunger_label
+
+    if r.hunger_state is None:
+        return "?".ljust(_FOOD_W)
+    label = hunger_label(r.hunger_state)
+    if int(r.hunger_state) in HUNGER_IMPAIRED:
+        label = "!" + label
+    return label[:_FOOD_W].ljust(_FOOD_W)
 
 
 def _parent_cell(r: Row) -> str:
@@ -1079,6 +1118,7 @@ def _state_line(g: StateGroup, *, current_id: Optional[str],
     line = (f"{mark} c{r.id:<4} {_parent_cell(r):>5} "
             f"{branch_short(r.dungeon_number):>7} "
             f"{r.dlvl:>4}  {r.xl:>2}  {r.hp:>3}/{r.max_hp:<3} {pct}  "
+            f"{_food_cell(r)} "
             f"{r.gameturn:>6} {r.score:>6}  "
             f"{('x' + str(g.count)) if g.count > 1 else '  ':>3}  "
             f"{checkpoint_kind(r):<12} {tried_col:<{_TRIED_W}} {text}")
@@ -1100,7 +1140,8 @@ def _compact_line(g: StateGroup) -> str:
     ids = " ".join("c" + i for i in g.ids)
     return (f"    {ids:<14} <-{_parent_cell(r)} "
             f"{branch_short(r.dungeon_number)} D{r.dlvl} XL{r.xl} "
-            f"{r.hp}/{r.max_hp} {pct} t{r.gameturn} s{r.score} "
+            f"{r.hp}/{r.max_hp} {pct} {_food_cell(r).strip()} "
+            f"t{r.gameturn} s{r.score} "
             f"{checkpoint_kind(r)}")
 
 
@@ -1186,6 +1227,15 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
         f"alone cannot tell a Mines level from a Dungeons-of-Doom one.",
         f"  hp%    = HP as a fraction of max. Two states with the same Dlvl, "
         f"XL and score can be a full-strength state and a nearly-dead one.",
+        f"  food   = nutrition: Satiated / Normal / Hungry / Weak / Fainting / "
+        f"Fainted / Starved, and `?` for a state saved before this was "
+        f"recorded. A LEADING `!` MEANS THE HERO IS ALREADY IMPAIRED -- at "
+        f"Weak or worse it blacks out mid-fight and loses turns it cannot act "
+        f"in. This is independent of HP: a state can read 100% HP and still "
+        f"be lost before its first decision, and states exactly like that have "
+        f"already cost this experiment three attempts. Resuming one is not a "
+        f"neutral choice; if you pick it, the first thing that attempt must do "
+        f"is eat.",
         f"  dup    = how many checkpoints sit at this identical measured "
         f"state; every one of their ids is listed and each is choosable.",
         f"  kind   = why it was written: level-entry, level-up, cadence "
@@ -1241,6 +1291,15 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
                 "level_number": m.level_number,
                 "hp": m.hp, "max_hp": m.max_hp,
                 "hp_fraction": (round(frac, 4) if frac is not None else None),
+                # Recorded so selection.jsonl can answer, after the fact,
+                # whether a choice was made with nutrition visible or not --
+                # the runs before this column existed cannot be re-read as if
+                # it had been there.
+                "hunger_state": m.hunger_state,
+                "hunger": (None if m.hunger_state is None
+                           else _hunger_label(m.hunger_state)),
+                "hunger_impaired": (None if m.hunger_state is None
+                                    else int(m.hunger_state) in _HUNGER_IMPAIRED),
                 "gameturn": m.gameturn,
                 "kind": checkpoint_kind(m),
                 "attempts_from": m.attempts_from,

@@ -311,7 +311,43 @@ def _status_snapshot(engine_env) -> dict:
         # 2 Gnomish Mines, 3 Quest, 4 Sokoban -- and blstats carries the number.
         "dungeon_number": get("dungeon_number"),
         "level_number": get("level_number"),
+        # NUTRITION. Recorded because its absence silently invalidated a run.
+        # In treesmoke7, three of eight rounds resumed a checkpoint that was
+        # already Fainting: c39 twice and c41 once. A fainting hero cannot act
+        # while monsters hit it, so those attempts were lost before their first
+        # decision -- attempt 7 fainted on call 1 and was dead on call 2, at
+        # 67/67 HP. Every one of those states looked PERFECT in the ledger,
+        # because the ledger showed Dlvl, XL, HP, score, branch and BALROG and
+        # nothing about food.
+        #
+        # The orchestrator, unable to see it, inferred a cause it could see and
+        # was confidently wrong for four consecutive rounds ("a slow
+        # level-draining monster haunts this floor ... it is unbeatable"). The
+        # traces show a fire ant, an iguana, a rothe and a white unicorn
+        # finishing a hero who kept blacking out.
+        #
+        # 0 Satiated, 1 Normal, 2 Hungry, 3 Weak, 4 Fainting, 5 Fainted,
+        # 6 Starved. Weak and worse means the hero is losing turns.
+        "hunger_state": get("hunger_state"),
     }
+
+
+#: blstats hunger_state -> the word NetHack shows the player. Kept next to the
+#: snapshot so the ledger and meta.json cannot drift apart on the mapping.
+HUNGER_NAMES = {0: "Satiated", 1: "Normal", 2: "Hungry", 3: "Weak",
+                4: "Fainting", 5: "Fainted", 6: "Starved"}
+
+#: Hunger states at which the hero is already impaired: it faints, loses turns,
+#: and cannot reliably fight. Resuming one of these is not a neutral choice.
+HUNGER_IMPAIRED = (3, 4, 5, 6)
+
+
+def hunger_label(state) -> str:
+    """Render a hunger_state for a human or an orchestrator. Never raises."""
+    try:
+        return HUNGER_NAMES.get(int(state), "?")
+    except (TypeError, ValueError):
+        return "?"
 
 
 #: The meta fields a restore re-derives from the engine and checks. Every one
@@ -818,6 +854,9 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
 
 __all__ = [
     "AUDIT_FIELDS",
+    "HUNGER_IMPAIRED",
+    "HUNGER_NAMES",
+    "hunger_label",
     "CheckpointSavepointError",
     "PENDING_PROMPT_MARKERS",
     "assert_savepoint",

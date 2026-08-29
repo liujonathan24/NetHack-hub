@@ -2866,3 +2866,83 @@ def test_the_orchestrator_is_told_not_to_prescribe_keystrokes():
     assert "Players do NOT type NetHack keys" in flat
     # and the freedom of form survives alongside the new constraint
     assert "There is NO required form." in rflat
+
+
+# --------------------------------------------------------------------------- #
+# hunger in the ledger -- the blind spot that cost treesmoke7 three attempts
+# --------------------------------------------------------------------------- #
+
+def _row(**kw):
+    from pathlib import Path
+    import e16_orchestrator as E
+    base = dict(id="1", path=Path("/tmp/c1"), dlvl=7, xl=6, hp=67, max_hp=67,
+                score=1400, gameturn=5000, dungeon_number=0)
+    base.update(kw)
+    return E.Row(**base)
+
+
+def test_a_starving_checkpoint_at_full_hp_is_visible_in_the_ledger():
+    """The exact state that was invisible: Dlvl 7, XL 6, 100% HP, Fainting.
+
+    treesmoke7 resumed states like this three times (c39 twice, c41 once).
+    Every one read as the best row in the archive. Attempt 7 fainted from lack
+    of food on call 1 and was dead on call 2 without ever acting.
+    """
+    import e16_orchestrator as E
+
+    text = E.render_ledger([_row(id="39", hunger_state=4)])
+    assert "Fainting" in text, text
+    # The impairment marker must survive the column width; truncating it to
+    # "!Faintin" is what this assertion exists to prevent.
+    assert "!Fainting" in text, text
+    assert "food" in text
+
+
+def test_hunger_unknown_is_not_rendered_as_well_fed():
+    """A checkpoint written before hunger was recorded is `?`, never Satiated.
+
+    blstats hunger_state 0 IS "Satiated". Defaulting a missing value to 0 would
+    tell the selector every legacy state is well fed -- the most reassuring
+    possible guess, in the one place a wrong guess already cost attempts.
+    """
+    import e16_orchestrator as E
+
+    row = E.row_from_meta(__import__("pathlib").Path("/tmp/c9"),
+                          {"id": "9", "dlvl": 3, "xl": 2, "hp": 20,
+                           "max_hp": 30, "score": 200})
+    assert row.hunger_state is None
+    # Scope to the DATA ROW. The legend above the table names every hunger
+    # value, "Satiated" included, so searching the whole ledger for the word
+    # tests the legend rather than the row.
+    line = [l for l in E.render_ledger([row]).splitlines()
+            if l.lstrip().startswith(("c9", "* c9", "-> c9")) or " c9 " in l]
+    assert line, "no data row rendered for c9"
+    assert "Satiated" not in line[0], line[0]
+    assert "?" in line[0], line[0]
+
+
+def test_hunger_reaches_the_recorded_candidate_set():
+    """selection.jsonl must record whether a choice saw nutrition or not."""
+    import e16_orchestrator as E
+
+    _, cands = E.build_ledger([_row(id="39", hunger_state=4),
+                               _row(id="33", dlvl=5, hunger_state=1),
+                               _row(id="9", dlvl=3, hunger_state=None)])
+    by = {c["id"]: c for c in cands}
+    assert by["39"]["hunger"] == "Fainting" and by["39"]["hunger_impaired"] is True
+    assert by["33"]["hunger"] == "Normal" and by["33"]["hunger_impaired"] is False
+    assert by["9"]["hunger"] is None and by["9"]["hunger_impaired"] is None
+
+
+def test_hunger_is_not_added_to_the_restore_audit():
+    """Deliberately NOT auditable, and the reason has to stay written down.
+
+    `restore_fidelity` treats a missing meta value as a MISMATCH
+    (`want is not None and ...`). Every checkpoint written before this change
+    lacks hunger_state, so adding it to AUDIT_FIELDS would fail the audit on
+    every one of them -- including the ~130 in archives that were live when the
+    field was introduced -- and a failed audit is an error, not a log line.
+    """
+    from nethack_harness.checkpoints import AUDIT_FIELDS
+
+    assert "hunger_state" not in AUDIT_FIELDS
