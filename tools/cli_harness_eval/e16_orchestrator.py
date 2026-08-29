@@ -3922,6 +3922,16 @@ it; an instruction the player cannot execute is worse than no instruction,
 because it spends the attempt discovering that. Name the OUTCOME you want and
 let the player choose how.
 
+SLOW IS NOT FAILING. An attempt that spends its whole life on one floor and
+comes back two experience levels stronger has done something, and the ledger
+will show it as zero depth gained. Do not read "no new depth" as a wasted
+attempt and do not tell the next player to descend faster because the last one
+was slow. Gaining levels is INHERENTLY slow -- it is killing things one at a
+time -- so slowness is the cost of that strategy, not evidence against it. If
+you decide the character is too weak for where it is, say so and let the
+attempt take the time; judge it on whether the character came back stronger,
+not on how many floors it moved.
+
 This applies to ACTIONS that require those keys, not only to the keys
 themselves. "Write Elbereth" is the same instruction as "press E then -": it
 was issued in an earlier run and the player could not do it, because the key it
