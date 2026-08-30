@@ -103,6 +103,8 @@ svg.chart .grid{stroke:var(--rule-2);stroke-width:1}
 svg.chart .tick{font-family:"IBM Plex Mono",monospace;font-size:10px;fill:var(--ink-3)}
 svg.chart .axlab{font-family:Archivo,sans-serif;font-size:10px;font-weight:600;
   letter-spacing:.08em;text-transform:uppercase;fill:var(--ink-3)}
+svg.chart path.ln.base{stroke-width:1.3;opacity:.72}
+svg.xy path.path.base{stroke-width:1.3;opacity:.72;stroke-dasharray:none}
 svg.chart path.ln{fill:none;stroke-width:2.2;stroke-linejoin:round;stroke-linecap:round}
 svg.chart path.ln.min{stroke-dasharray:4 3;stroke-width:1.8}
 svg.chart .amark{stroke:var(--rule);stroke-width:1;stroke-dasharray:2 3}
@@ -189,7 +191,13 @@ var D=JSON.parse(document.getElementById('e16data').textContent);
 // the charts; their tree says why it is empty.
 var CURVE_RUNS=JSON.parse(document.getElementById('e16curves').textContent);
 var runs=Object.keys(D).slice();
-Object.keys(CURVE_RUNS).forEach(function(r){ if(runs.indexOf(r)<0) runs.push(r); });
+Object.keys(CURVE_RUNS).forEach(function(r){
+  if(CURVE_RUNS[r].is_baseline) return;            // reference lines, not arms
+  if(runs.indexOf(r)<0) runs.push(r); });
+// Plotted on both charts, never given a tab: a baseline rollout is one
+// uninterrupted life with no archive and no orchestrator, so it has no attempt
+// tree and no selection record to inspect.
+var BASELINES=Object.keys(CURVE_RUNS).filter(function(r){return CURVE_RUNS[r].is_baseline;});
 var cur=runs[0], sel=null;
 var nav=document.getElementById('runs');
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -392,7 +400,7 @@ function drawChart(){
   var W=Math.max(660,Math.min(1180,(window.innerWidth||1000)-90)), H=300;
   var L=54,R=18,T=14,B=40;
   var maxT=0,maxY=0;
-  runs.forEach(function(r){var c=C[r]; if(!c)return;
+  runs.concat(BASELINES).forEach(function(r){var c=C[r]; if(!c)return;
     maxT=Math.max(maxT,c.total_turns);
     maxY=Math.max(maxY, METRIC==='min'?c.final_best_min:c.final_best_max);});
   maxY=Math.max(5,Math.ceil(maxY/5)*5); maxT=Math.ceil(maxT/200)*200;
@@ -430,6 +438,17 @@ function drawChart(){
       });
     }
   });
+  BASELINES.forEach(function(r){
+    var c=C[r]; if(!c||!c.points.length)return;
+    function bp(key){var d='';
+      c.points.forEach(function(p,i){var x=X(p.t),y=Y(p[key]);
+        d+= i===0?('M'+x+','+y):(' L'+x+','+Y(c.points[i-1][key])+' L'+x+','+y);});
+      return d;}
+    if(METRIC!=='min') s+='<path class="ln base" d="'+bp('best_max')+'" stroke="var(--ink-3)"/>';
+    if(METRIC!=='max') s+='<path class="ln base min" d="'+bp('best_min')+'" stroke="var(--ink-3)"/>';
+    var l=c.points[c.points.length-1];
+    s+='<text class="alab" x="'+(X(l.t)+5)+'" y="'+(Y(METRIC==='min'?l.best_min:l.best_max)+3)+'">'+r+'</text>';
+  });
   s+='</svg>';
   document.getElementById('chart').innerHTML=s;
   document.getElementById('chartlegend').innerHTML=
@@ -440,14 +459,16 @@ function drawChart(){
         +' <span style="color:var(--ink-3)">'+(c.final_best_max)+'% / '+(c.final_best_min)+'% min</span></span>';
     }).join('')
     +'<span><i class="sw" style="border-color:var(--ink-3)"></i>solid = BALROG max</span>'
-    +'<span><i class="sw dash" style="border-color:var(--ink-3)"></i>dashed = BALROG min</span>';
+    +'<span><i class="sw dash" style="border-color:var(--ink-3)"></i>dashed = BALROG min</span>'
+    +(BASELINES.length?'<span><i class="sw" style="border-color:var(--ink-3);opacity:.7"></i>'
+      +'thin grey = E14 base, seed 1 (one plain life each, no archive)</span>':'');
 }
 
 function drawXY(){
   var W=Math.max(620,Math.min(1180,(window.innerWidth||1000)-90)), H=330;
   var L=48,R=118,T=14,B=42;
   var maxD=1,maxX=1;
-  runs.forEach(function(r){var c=C[r]; if(!c)return;
+  runs.concat(BASELINES).forEach(function(r){var c=C[r]; if(!c)return;
     c.points.forEach(function(p){maxD=Math.max(maxD,p.dlvl);maxX=Math.max(maxX,p.xl);});});
   maxD=Math.max(12,Math.ceil(maxD)+1); maxX=Math.max(12,Math.ceil(maxX)+1);
   function X(d){return L+(W-L-R)*((d-1)/(maxD-1));}
@@ -483,6 +504,17 @@ function drawXY(){
     s+='<circle class="end'+dim+'" cx="'+ex+'" cy="'+ey+'" r="5" fill="'+col+'" stroke="var(--surface)"/>';
     s+='<text class="tick'+dim+'" x="'+(ex+9)+'" y="'+(ey+3)+'" fill="'+col+'">D'+last.dlvl+' XL'+last.xl+'</text>';
   });
+  BASELINES.forEach(function(r){
+    var c=C[r]; if(!c||!c.points.length)return;
+    var d='';
+    c.points.forEach(function(p,i){
+      d+=(i===0?'M':' L')+X(Math.min(p.dlvl,maxD))+','+Y(Math.min(p.xl,maxX));});
+    s+='<path class="path base" d="'+d+'" stroke="var(--ink-3)"/>';
+    var l=c.points[c.points.length-1];
+    var ex=X(Math.min(l.dlvl,maxD)), ey=Y(Math.min(l.xl,maxX));
+    s+='<circle cx="'+ex+'" cy="'+ey+'" r="3.5" fill="var(--ink-3)"/>';
+    s+='<text class="alab" x="'+(ex+7)+'" y="'+(ey+3)+'">'+r.replace(' · seed 1','')+'</text>';
+  });
   s+='</svg>';
   document.getElementById('xy').innerHTML=s;
   document.getElementById('xylegend').innerHTML=
@@ -494,7 +526,8 @@ function drawXY(){
         +' <span style="color:var(--ink-3)">D'+p.dlvl+' XL'+p.xl
         +(def!=null&&def>0?' &middot; '+def+' under pace':'')+'</span></span>';
     }).join('')
-    +'<span><i class="sw dash" style="border-color:var(--ink-3)"></i>winners\u2019 pace (433 ascensions)</span>';
+    +'<span><i class="sw dash" style="border-color:var(--ink-3)"></i>winners\u2019 pace (433 ascensions)</span>'
+    +(BASELINES.length?'<span><i class="sw" style="border-color:var(--ink-3);opacity:.7"></i>E14 base, seed 1</span>':'');
 }
 
 function draw(){

@@ -166,6 +166,26 @@ skill_doc_coords = false
 [c1_doors.contract.tune]
 locked_door = 0.0
 
+[v0_fog]       # V0: FOG OF WAR RESTORED -- the observability floor
+# The opposite end of the perception axis from [v1_b1] (full map every turn) and
+# [v2_json] (structured map). Those two ADD spatial information; this one takes
+# away the reveal the whole benchmark line assumes, so the agent sees only what
+# it has walked past.
+#
+# `tune.reveal_map = 1.0` is in the GLOBAL contract precisely because dropping it
+# is what made the E9/E10-era "control" cells run fog'd by accident. Setting it
+# to 0.0 here restores that state deliberately, as a floor to report against,
+# rather than as the silent default it used to be.
+#
+# One knob, nothing else: skill_set, variant, model, character, task_spec, seeds
+# and every other tune value are inherited from [contract], so the E14 uncapped
+# base is this arm's control exactly as it is for the other probes.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v0_fog.contract.tune]
+reveal_map = 0.0
+
 [c2_d025]      # C2: room-density dose-response (doses match the V1 E8d sweep)
 netplay_telemetry = false
 melee_hints = false

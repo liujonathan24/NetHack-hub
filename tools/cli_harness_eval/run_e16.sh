@@ -194,6 +194,10 @@ ARGS=(
 # orchestrator on a schedule instead of only when the hero dies. 0/unset keeps
 # the historical uncapped behaviour.
 [ -n "${E16_PLAYER_MAX_CALLS:-}" ] && ARGS+=(--player-max-calls "$E16_PLAYER_MAX_CALLS")
+# Milestones are archive-wide and sticky: once banked they stop every later
+# resume before it launches. These let a run be extended past one.
+[ -n "${E16_MILESTONE_DLVL:-}" ] && ARGS+=(--milestone-dlvl "$E16_MILESTONE_DLVL")
+[ -n "${E16_MILESTONE_DUNGEON:-}" ] && ARGS+=(--milestone-dungeon "$E16_MILESTONE_DUNGEON")
 
 case "$CMD" in
   preflight) exec "$PY_BIN" "$PREFLIGHT" ;;

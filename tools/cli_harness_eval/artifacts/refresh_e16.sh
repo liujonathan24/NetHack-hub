@@ -16,7 +16,14 @@ cd /root/nld/e16_runs || exit 1
 # skipped by the explorer generator but still picked up by the curve script,
 # which reads the turn stream -- that is deliberate, so an in-flight first
 # attempt still plots.
-RUNS="treesmoke8 treesmoke11 treesmoke7 nullsmoke1 treesmoke6 treesmoke10.aborted"
+# THE TWO LIVE ARMS ONLY. The earlier runs are kept on disk and can be added
+# back by name, but they are answering superseded questions and their presence
+# made the plots read as six comparable arms when they are not:
+#   treesmoke7  ran blind on hunger AND on the player's account
+#   treesmoke6  publishes rollback, so its attempts are not single-life
+#   nullsmoke1  the matched null for treesmoke7, not for these
+#   treesmoke10 aborted; 2 of 4 attempts lost to infrastructure
+RUNS="treesmoke8 treesmoke11 treesmoke11_r2 treesmoke11_r3"
 
 "$PY" "$SP/gen_e16_data.py" $RUNS > "$SP/e16_data.json" 2>"$SP/.gen_data.err" || {
   echo "[refresh] FAILED generating e16_data.json"; tail -3 "$SP/.gen_data.err"; exit 1; }
@@ -27,6 +34,23 @@ RUNS="treesmoke8 treesmoke11 treesmoke7 nullsmoke1 treesmoke6 treesmoke10.aborte
 ARGS=""; for r in $RUNS; do ARGS="$ARGS /root/nld/e16_runs/$r"; done
 "$PY" "$REPO/tools/cli_harness_eval/e16_progress_curve.py" $ARGS -o "$SP/curves.json" >/dev/null 2>&1 || {
   echo "[refresh] FAILED generating curves.json"; exit 1; }
+
+# BASELINE REFERENCE LINES: E14 uncapped base, seed 1, all three reps. Single
+# uninterrupted lives -- no archive, no resume, no directive -- plotted so the
+# E16 arms can be read against what one plain rollout does on the same seed.
+BASE_DIR=$REPO/outputs/e14_uncapped
+"$PY" "$REPO/tools/cli_harness_eval/artifacts/gen_baseline_curves.py" 1 \
+  $BASE_DIR/base_r1__prime_agent $BASE_DIR/base_r2__prime_agent $BASE_DIR/base_r3__prime_agent \
+  > "$SP/baseline_curves.json" 2>/dev/null || echo "{}" > "$SP/baseline_curves.json"
+"$PY" - "$SP" <<'MERGE'
+import json,sys
+SP=sys.argv[1]
+c=json.load(open(SP+'/curves.json'))
+try: b=json.load(open(SP+'/baseline_curves.json'))
+except Exception: b={}
+c.update(b)
+json.dump(c,open(SP+'/curves.json','w'),separators=(',',':'))
+MERGE
 
 (cd "$SP" && python3 build_explorer.py >/dev/null && python3 build_traces.py >/dev/null) || {
   echo "[refresh] FAILED rebuilding pages"; exit 1; }

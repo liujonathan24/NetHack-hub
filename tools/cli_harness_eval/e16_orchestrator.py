@@ -6389,6 +6389,16 @@ def main(argv=None) -> int:
                          "estimate; 2.0 covers the median within-cell rate "
                          "spread (2.4x) and not the p90 (4.1x).")
     ap.add_argument("--max-attempts", type=int, default=200)
+    # MILESTONES ARE ARCHIVE-WIDE AND STICKY. `milestone_row` scans every row
+    # in the archive, so once a run banks a milestone state the condition is
+    # true forever -- a resume stops before launching anything. treesmoke11
+    # reached Sokoban on attempt 5 and could not be extended without these.
+    ap.add_argument("--milestone-dlvl", type=int, default=None,
+                    help="Stop once the archive holds a state at this depth. "
+                         "0 disables the depth milestone.")
+    ap.add_argument("--milestone-dungeon", type=int, default=None,
+                    help="Stop once the archive holds a state in this dungeon "
+                         "branch (4 = Sokoban). -1 disables it.")
     ap.add_argument("--stall-attempts", type=int, default=8)
     ap.add_argument("--selector", choices=("llm", "scripted"), default="llm",
                     help="llm = a persistent Prime Agent session decides "
@@ -6490,6 +6500,10 @@ def main(argv=None) -> int:
         inflight_spend_prior_usd_per_hour=args.inflight_rate,
         inflight_spend_safety_factor=args.inflight_safety_factor,
         stall_attempts=args.stall_attempts, no_directive=args.no_directive,
+        **({"milestone_dlvl": args.milestone_dlvl}
+           if args.milestone_dlvl is not None else {}),
+        **({"milestone_dungeon": args.milestone_dungeon}
+           if args.milestone_dungeon is not None else {}),
         paired_control=args.paired_control,
         reseed_on_restore=args.reseed,
         orchestrator_model=args.orch_model,
