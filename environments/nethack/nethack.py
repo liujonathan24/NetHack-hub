@@ -21,6 +21,15 @@ from nethack_core.env import NetHackCoreEnv
 from nethack_harness.memory.journal import Journal
 from nethack_core.observations import shape as shape_observation
 from nethack_harness.tools.skills import registry as skill_registry, list_skills
+# E16 checkpoint-integrity guard. done(TRICKED) is an engine abort over
+# inconsistent level data, not a game outcome, and it reaches this layer
+# looking exactly like a monster kill (see nethack_harness/integrity.py).
+from nethack_harness.integrity import (
+    CheckpointIntegrityError as _CheckpointIntegrityError,
+    assert_dungeon_on_disk as _assert_dungeon_on_disk,
+    assert_not_tricked as _assert_not_tricked,
+    tricked_marker_in as _tricked_marker_in,
+)
 
 # Load the harness overlay from the file that sits next to *this* module, by
 # absolute path. A plain `from environments.nethack import harness_overlay` (or
@@ -40,6 +49,102 @@ _harness_overlay = _ilu.module_from_spec(_ho_spec)
 # creation (sys.modules[cls.__module__] must exist under deferred annotations).
 _sys_boot.modules[_ho_spec.name] = _harness_overlay
 _ho_spec.loader.exec_module(_harness_overlay)
+
+
+#: E16: how the orchestrator's per-attempt directive appears in the player's
+#: FIRST served observation. A MODULE CONSTANT, not an inline f-string, because
+#: the acceptance check for a directive is a served-bytes check -- extract what
+#: the model was actually sent and look for this block verbatim -- and the test
+#: and the renderer must be reading the same template or the check passes while
+#: measuring nothing. This project has shipped that exact failure twice (E15's
+#: wrong SKILL.md; a gate that fired after the descent it was gating).
+DIRECTIVE_BLOCK_FORMAT = "[ORCHESTRATOR DIRECTIVE for this attempt: {directive}]"
+
+#: E16 prefix continuity: how many (assistant, tool, observation) triples the
+#: running transcript keeps, and how many characters of each. A checkpoint's
+#: `prefix.jsonl` is meant to carry "the plan that was live when this state was
+#: saved", not the whole game -- an uncapped transcript on an uncapped player
+#: would be megabytes per checkpoint and would dominate the resume prompt.
+CONVERSATION_PREFIX_TURNS = 24
+CONVERSATION_PREFIX_CHARS = 1200
+
+#: Where the running transcript lives on the env, for the `save` skill to read.
+CONVERSATION_PREFIX_ATTR = "_conversation_prefix"
+
+
+def _parse_reseed(value):
+    """``[core, disp]`` from an env_arg, or ``None``. Strict about the None.
+
+    env_args reach this env through the eval CLI as dotted-scalar STRINGS, so a
+    reseed pair can arrive as ``"[12, 34]"`` or as two strings, and an absent
+    one can arrive as ``""`` or ``"null"``. Anything that is not a usable pair
+    becomes ``None`` -- "do not reseed at all" -- and NEVER ``(0, 0)``: a
+    silently-zero reseed would be a third stochastic semantics that no
+    provenance field describes.
+    """
+    if value is None or value == "" or value == "null":
+        return None
+    if isinstance(value, str):
+        import json as _json
+        try:
+            value = _json.loads(value)
+        except _json.JSONDecodeError:
+            parts = [p for p in re.split(r"[,\s]+", value.strip("[]() ")) if p]
+            value = parts
+    try:
+        core, disp = list(value)[:2]
+        return (int(core), int(disp))
+    except (TypeError, ValueError):
+        return None
+
+
+def _append_conversation_prefix(state, env, assistant_msg, tool_calls, obs_text):
+    """Append one turn to the transcript a checkpoint's ``prefix.jsonl`` gets.
+
+    WHAT THIS IS, EXACTLY -- and the gap matters enough to name it here rather
+    than in a design doc. The design asks for prefix continuity: a resumed
+    player's CONVERSATION is the checkpoint's own ``prefix.jsonl``. The player
+    scaffolds cannot do that today. ``nethack_prime_agent`` launches every
+    rollout with ``--print --no-session`` (installed package, ``__init__.py``
+    around line 653) and its own relaunch docstring says what that costs --
+    "only the agent's own conversation is gone" -- while claude_code passes
+    ``--no-session-persistence``. There is no seam to hand either of them a
+    prior conversation, and the env only ever sees the MCP tool-call side of
+    the exchange.
+
+    So this records the LM-VISIBLE EXCHANGE -- what the model said, what it
+    called, what it was served -- which is a faithful transcript of the game
+    conversation and NOT the CLI's internal one (no system prompt, no scaffold
+    turns, no reasoning the harness did not receive). A resume replays it as
+    quoted text in the first observation, exactly as `resume_from` already
+    does for trace resumes. That is continuity of CONTENT, not of session, and
+    every run says which it had (``provenance.json``:
+    ``prefix_continuity: "text_only"``).
+
+    Writing it anyway is not busywork: it is the data a real implementation
+    would need, and without it ``prefix.jsonl`` stays empty and H4 -- "lessons
+    plus prefix continuity transfer" -- silently tests only the lessons half.
+    """
+    if env is None:
+        return
+    msg = assistant_msg
+    if isinstance(msg, dict):
+        msg = msg.get("content")
+    text = " ".join(str(msg or "").split())[:CONVERSATION_PREFIX_CHARS]
+    calls = [{"name": c.get("name"), "arguments": c.get("arguments")}
+             for c in (tool_calls or []) if isinstance(c, dict)]
+    served = " ".join(str(obs_text or "").split())[:CONVERSATION_PREFIX_CHARS]
+    buf = state.setdefault("_conversation_prefix", [])
+    if text or calls:
+        buf.append({"role": "assistant", "content": text, "tool_calls": calls})
+    if served:
+        buf.append({"role": "user", "content": served})
+    # Bounded, oldest dropped: the tail is the plan that was live at save time,
+    # which is the part a resume is for.
+    limit = 2 * CONVERSATION_PREFIX_TURNS
+    if len(buf) > limit:
+        del buf[:-limit]
+    setattr(env, CONVERSATION_PREFIX_ATTR, buf)
 
 
 # ---------- game spec ----------
@@ -79,8 +184,8 @@ FULL_GAME_SPEC = GameSpec(
     # model sitting next to a glyph key that says "`<` stairs UP (NOT down)" it
     # reads as an instruction to go UP, which is the opposite of the task.
     description=(
-        "Descend as deep into the dungeon as you can and survive; ultimately "
-        "win the game (retrieve the Amulet of Yendor and escape)."
+        "Win the game: retrieve the Amulet of Yendor and escape. Descending "
+        "is how you progress; surviving is what lets you keep progressing."
     ),
     success_criterion="ascended",
 )
@@ -466,6 +571,19 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # level returns the gate line at zero engine cost; the second proceeds
         # unconditionally. docs/EXPERIMENT_E8.md.
         descent_gate: str = "off",
+        # E14 crisis directive: harness-side reactive nudges. "off" (default)
+        # | "on". Two naive heuristics push a bracketed directive line into
+        # the next observation at zero engine cost (the descent gate's norm-
+        # line delivery; published tool schemas untouched): HP-CRISIS
+        # (edge-triggered: HP < max/3 with a hostile adjacent) and PACING
+        # (once per dungeon level: XL below the human arrival norm). Pure
+        # decision/format logic in prompt/crisis_directive.py.
+        crisis_directive: str = "off",
+        # E15 P3 forced revive: per-dungeon-level death budget. On death with
+        # the rollback tool published, the env restores the newest live
+        # snapshot; the N-th death on one level is final. 3 reproduces the
+        # fix2 arm byte-for-byte (default); the deaths-cap dose arm raises it.
+        deaths_per_level: int = 3,
         # E8b mechanic guidance: comma list of system-prompt blocks ("prayer",
         # "descend_pacing"). Prompt-only; published tool schemas untouched.
         mechanic_hints: str = "",
@@ -494,12 +612,95 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # costs a few result tokens per call). The published tool schemas are
         # never touched either way.
         call_id_in_results: bool = True,
+        # ---- E16 Go-Explore -------------------------------------------------
+        # A checkpoint DIRECTORY (`archive/<run>/c<id>`) this rollout resumes
+        # from instead of starting at the dungeon entrance. Unlike `resume_from`
+        # (which REPLAYS a recorded turn file through a fresh engine), this
+        # loads engine state off disk: see nethack_harness/checkpoints.py. The
+        # restore is audited against the checkpoint's own meta.json and raises
+        # rather than continuing on a mismatch.
+        resume_checkpoint: Optional[str] = None,
+        # The archive root the published `save` skill writes new checkpoints
+        # into. Without it `save` is a no-op that says so.
+        checkpoint_archive: Optional[str] = None,
+        # The curated knowledge base the published `wiki` skill reads (the run
+        # directory's own COPY of the pages, so the served bytes are recoverable
+        # from the output tree).
+        wiki_dir: Optional[str] = None,
+        # Orchestrator-rendered ledger + lessons, injected ONCE into the first
+        # observation. Text only; it never contributes to any metric.
+        ledger_text: Optional[str] = None,
+        # The orchestrator's instruction for THIS attempt ("from c12, avoid the
+        # east corridor, try the south door"). Rendered as its own delimited
+        # block at the TOP of the first observation, ahead of the resume banner
+        # and the ledger, because it is the one thing in that observation that
+        # is about what to do next. Text only, like everything the orchestrator
+        # writes: it never contributes to any metric.
+        directive: Optional[str] = None,
+        # Where the restore-fidelity audit records are appended (JSONL).
+        fidelity_log: Optional[str] = None,
+        # `[core, disp]` to reseed the gameplay RNG with AFTER the restore, or
+        # None for the deterministic default. Off unless the orchestrator was
+        # run with --reseed: a restore otherwise resets to the game's original
+        # seed and replays no history, so two attempts from one checkpoint
+        # differ only in what the model chose to do -- which is what makes a
+        # directive's effect attributable to the directive.
+        reseed: Optional[list] = None,
+        # ---- E16 automatic checkpointing ------------------------------------
+        # WHY THIS EXISTS. Go-Explore is the archive: selection, directives and
+        # the frontier are all functions of what got saved. Before this, the
+        # ONLY way a checkpoint was written mid-rollout was the model choosing
+        # to call `save`. The GE-wiki pilot measured what that is worth: 187
+        # calls, D1 -> D3, `save` called ZERO times, archive still one row at
+        # the end. An archive that only grows when the player remembers to grow
+        # it is not an archive, and the run degenerates into repeated restarts
+        # from the seed state at $13 a try.
+        #
+        # So the harness saves at the states the design named -- level entry,
+        # level-up, and every `auto_checkpoint_every_n_calls` LM calls -- and
+        # the model's `save` becomes an addition to that rather than the whole
+        # mechanism. Off unless `checkpoint_archive` is configured, so no arm
+        # outside E16 acquires it.
+        auto_checkpoint: bool = True,
+        #: LM CALLS between periodic auto-checkpoints. NOT game turns, and the
+        #: change is deliberate.
+        #:
+        #: A call is where reasoning starts and ends. A checkpoint written on a
+        #: call boundary therefore lines up with the transcript: `prefix.jsonl`
+        #: ends exactly where the checkpoint's state begins, and no half-formed
+        #: reasoning straddles the boundary a later attempt resumes from. Game
+        #: turns have no such property -- one skill call can advance dozens of
+        #: them, so a turn-triggered checkpoint lands in the middle of a call's
+        #: work and the prefix it ships is a conversation cut mid-thought.
+        #:
+        #: It also fixes a spacing defect that was measured rather than
+        #: predicted. The old rule fired when the game clock CROSSED a multiple
+        #: of 150, checked at call boundaries, so the realised intervals were
+        #: ragged: the mechcheck attempt's cadence checkpoints came 100, 136,
+        #: 143, 154, 151, 192, 103, 151 turns apart -- 14 of them over 249
+        #: calls. At 20 calls the same attempt yields ~12, evenly spaced, each
+        #: on a reasoning boundary.
+        auto_checkpoint_every_n_calls: int = 20,
         **kwargs,
     ):
         self.interface = interface
         self.task_spec = task_spec
         self.call_id_in_results = bool(call_id_in_results)
         self._resume_from = resume_from or None
+        self._resume_checkpoint = resume_checkpoint or None
+        self._checkpoint_archive = checkpoint_archive or None
+        self._wiki_dir = wiki_dir or None
+        self._ledger_text = ledger_text or None
+        self._directive = directive or None
+        self._fidelity_log = fidelity_log or None
+        self._reseed = _parse_reseed(reseed)
+        # env_args arrive as dotted-scalar STRINGS through the eval CLI, and
+        # bool("false") is True -- the same trap `auto_dismiss` fell into.
+        if isinstance(auto_checkpoint, str):
+            auto_checkpoint = auto_checkpoint.strip().lower() not in (
+                "false", "0", "no", "off", "")
+        self._auto_checkpoint = bool(auto_checkpoint)
+        self._auto_checkpoint_every_n_calls = int(auto_checkpoint_every_n_calls or 0)
         self.pin_objective_on_setup = pin_objective_on_setup
         self.self_dispatch = self_dispatch
         # env_args flow through the eval CLI as dotted-scalar STRINGS, so
@@ -517,6 +718,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             describe_args = describe_args.strip().lower() not in ("false","0","no","off","")
         self.describe_args = bool(describe_args)
         self.descent_gate = str(descent_gate or "off").strip().lower()
+        self.crisis_directive = str(crisis_directive or "off").strip().lower()
+        self.deaths_per_level = max(1, int(deaths_per_level or 3))
         self.mechanic_hints = str(mechanic_hints or "").strip().lower()
         # E9b: append the reflection prompt to every turn. Off (default) leaves
         # every arm byte-identical. Any truthy value enables it.
@@ -679,6 +882,113 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_character pins the role for standard tiers (e.g. full_nle);
         # None keeps the engine default. Curriculum envs own their character.
         obs, meta = env.reset(character=self._setup_character)
+
+        # ---- E16: resume from a persistent checkpoint -----------------------
+        # Done HERE, right after reset and before anything reads the engine,
+        # because it REPLACES engine state rather than replaying onto it. The
+        # env object identity is preserved (checkpoint_restore takes an env to
+        # reuse), so `state["env"]` below is still the object every skill sees.
+        #
+        # No try/except: a checkpoint that will not restore, or restores to a
+        # state its meta.json does not describe, must abort this rollout loudly.
+        # Swallowing it would start a "Go-Explore attempt from c7" that is
+        # actually a fresh level-1 game -- which is exactly the class of silent
+        # substitution that invalidated E15.
+        if self._resume_checkpoint:
+            from nethack_harness.checkpoints import checkpoint_restore
+            env, ck_meta = checkpoint_restore(
+                self._resume_checkpoint, env=env,
+                fidelity_log=self._fidelity_log,
+                reseed=self._reseed,
+            )
+            # The restored frame, published by checkpoint_restore. Falling back
+            # to the reset's obs would show the level-1 starting room under the
+            # checkpoint's status line.
+            from nethack_harness.checkpoints import LAST_RESTORE_OBS_ATTR
+            _robs = getattr(env, LAST_RESTORE_OBS_ATTR, None)
+            if _robs is None:
+                raise RuntimeError(
+                    f"checkpoint {self._resume_checkpoint} restored but produced "
+                    f"no observation; refusing to serve the pre-restore frame")
+            obs = _robs
+            state["resumed_checkpoint"] = str(self._resume_checkpoint)
+            state["resumed_checkpoint_meta"] = {
+                k: ck_meta.get(k) for k in
+                ("id", "name", "note", "dlvl", "xl", "hp", "max_hp",
+                 "gameturn", "score", "balrog", "balrog_min", "attempts_from",
+                 "visits", "parent")
+            }
+            state["restore_fidelity"] = ck_meta.get("restore_fidelity")
+            # One-shot resume banner, rendered into the FIRST observation via
+            # the existing `_resume_notice` hook (env_response). The numbers in
+            # it come from the checkpoint's harness-computed meta, never from
+            # the model's own note -- the note is quoted as text and labelled.
+            _ck_lines = [
+                f"RESUMED FROM CHECKPOINT {ck_meta.get('id')} "
+                f"({ck_meta.get('name') or 'unnamed'!r}) -- you are NOT starting "
+                f"fresh. Dlvl {ck_meta.get('dlvl')}, XL {ck_meta.get('xl')}, "
+                f"HP {ck_meta.get('hp')}/{ck_meta.get('max_hp')}, "
+                f"game turn {ck_meta.get('gameturn')}. "
+                f"{int(ck_meta.get('attempts_from') or 0)} previous attempt(s) "
+                f"started from this state.",
+            ]
+            if ck_meta.get("note"):
+                _ck_lines.append(
+                    f"Why it was saved (author's own words): {ck_meta['note']}")
+            if self._ledger_text:
+                _ck_lines.append(self._ledger_text)
+            state["_resume_notice"] = "\n".join(_ck_lines)
+        elif self._ledger_text:
+            state["_resume_notice"] = self._ledger_text
+        # One-shot, and its OWN block rather than a line inside the resume
+        # banner: an experiment that has to measure whether the player followed
+        # the instruction cannot have that instruction blended into narration.
+        if self._directive:
+            state["_directive_notice"] = self._directive
+
+        # ---- E16: run resources the published skills read off the env -------
+        # `save` and `wiki` are tier-published tools; both look their resource
+        # up on the env object with getattr, so an arm that does not configure
+        # one gets an explicit "not configured" message instead of a crash.
+        from nethack_harness.tools.skills import (
+            CHECKPOINT_ARCHIVE_ATTR as _CK_ATTR, WIKI_KB_ATTR as _WIKI_ATTR,
+        )
+        if self._checkpoint_archive:
+            setattr(env, _CK_ATTR, self._checkpoint_archive)
+        if self._wiki_dir:
+            setattr(env, _WIKI_ATTR, self._wiki_dir)
+
+        # ---- E16: automatic checkpointing, seeded from the START state ------
+        # Seeded from where this rollout BEGINS, not from zero: a rollout
+        # resumed at Dlvl 4 / game turn 900 must not fire "new level" and
+        # "20 calls elapsed" on its first call for a state it just restored
+        # and that is already in the archive.
+        state["_auto_ck"] = {
+            # `configured` means "this is an E16 rollout with an archive", and
+            # it gates the TURN TRACE key. Every optional field in that record
+            # is conditional for one reason -- adding an unconditional key
+            # changes the trace bytes of every arm, including the frozen
+            # E14/E15 controls this tree diffs against -- so a rollout with no
+            # archive writes exactly the bytes it wrote before.
+            "configured": bool(self._checkpoint_archive),
+            "enabled": bool(self._auto_checkpoint and self._checkpoint_archive),
+            "interval": self._auto_checkpoint_every_n_calls,
+            "interval_unit": "lm_calls",
+            "seen_dlvl": set(),
+            "last_xl": None,
+            #: LM calls this rollout has made (counted here, on the harness
+            #: side of the tool boundary, so it is calls and not env steps).
+            "calls": 0,
+            "last_periodic_call": 0,
+            # Triggers the savepoint guard deferred. NOT dropped: a `--More--`
+            # is most likely exactly when a trigger fires (level entry prints
+            # one), so a dropped trigger loses the checkpoints that matter most.
+            "pending": [],
+            "saved": [],
+            "deferrals": 0,
+            "errors": [],
+        }
+
         from nethack_harness.tools.skills import bootstrap_character
         character = bootstrap_character(env)
 
@@ -706,6 +1016,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["scout_delta"] = 0
         state["scout_reward_total"] = 0.0
         state["max_dlvl_reached"] = 1
+        state["max_xp_level"] = 1
         state["descent_count"] = 0
         state["raw_obs"] = obs
         state["structured_obs"] = shape_observation(obs, character)
@@ -1126,6 +1437,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             applied=True,
             dispatch_route=route,
         )
+        # E16 PREFIX CONTINUITY (write half). The same three facts the trace
+        # record gets -- what the model said, what it called, what it was
+        # served back -- appended to a bounded in-memory transcript that
+        # `save()` writes into the checkpoint's `prefix.jsonl`. See
+        # `_append_conversation_prefix` for what this can and cannot be.
+        try:
+            _append_conversation_prefix(state, state.get("env"),
+                                        state.get("_last_assistant_msg"),
+                                        trace_calls, obs_text)
+        except Exception:
+            pass  # transcript bookkeeping must never break a turn
         return content
 
     async def _apply_tool_call_inner(self, state: vf.State, skill_name: str, skill_args: dict):
@@ -1176,6 +1498,11 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # further actions are possible" without touching the snapshot stack.
         # Undoing into a live state clears `died` and the run genuinely resumes.
         if state.get("died") and skill_name == "rollback":
+            # Fix1: a post-death call — whatever it is — spends the one-turn
+            # death window (see is_completed and nethack_v1.game_over). Set
+            # BEFORE dispatch; a successful revive pops it below, re-arming
+            # the window for a later death.
+            state["_death_window_spent"] = True
             _env = state["env"]          # `env` is not bound this early in the fn
             _res = skill_registry.call("rollback", _env, state["structured_obs"], **skill_args)
             for _a in (_res.actions or []):
@@ -1188,6 +1515,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             if (state["structured_obs"].status or {}).get("hitpoints", 0) > 0:
                 state["died"] = False
                 state["terminated"] = False
+                # Re-arm the one-turn death window (see is_completed) so a
+                # LATER death gets its own chance to roll back.
+                state.pop("_death_window_spent", None)
+                state.pop("_death_attribution", None)
             state["_stuck_n"] = 0
             tt["feedback"] = _res.feedback or ""
             content = self.spec.turn_template(
@@ -1198,6 +1529,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             return compose_user_content(content, [f"[{_res.feedback}]"])
 
         if state.get("died"):
+            state["_death_window_spent"] = True  # fix1: window consumed
             content = self.spec.turn_template(
                 state["structured_obs"], state["journal"], state,
                 compact=self.compact_obs,
@@ -1241,6 +1573,71 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if skill_name in _DIR_BIND:
             skill_args = {"direction": _DIR_BIND[skill_name]}
             skill_name = "move"
+
+        # E8a/E9a descent gate — checked BEFORE dispatch. The netplay skills
+        # are closed-loop (`run_netplay_skill` steps the engine to completion
+        # inside the registry call), so the original post-dispatch placement
+        # fired the gate AFTER the descent had already executed: E15 P1 r1
+        # served all 30/30 gate lines post-descent, and the instructed
+        # "repeat" '>' landed on the NEW level's up-stairs ("You can't go
+        # down here"), costing a game turn each. Pre-dispatch, the gated call
+        # consumes zero engine steps, the rendered observation is still true,
+        # and "Repeat the call to descend anyway" is literally honest (the
+        # ack-set lets the repeat through). Gate the descent ACTION, not one
+        # tool name: np_core has no np_down — agents descend via
+        # np_press_key('>'). Known limit: descent INTENT is judged from the
+        # call alone, so a '>' pressed off-stairs still fires (and, in norm
+        # mode, acks) the gate; all 30 observed r1 firings were on genuine
+        # staircases, so this costs ~nothing in practice.
+        _is_descent = (
+            skill_name == "np_down"
+            or (skill_name == "np_press_key"
+                and str((skill_args or {}).get("key", "")).strip() == ">")
+        )
+        if _is_descent and self.descent_gate in ("enforce", "norm", "directive"):
+            try:
+                _st_now = (state["structured_obs"].status or {})
+                _g_dlvl = int(_st_now.get("depth") or 1)
+                _g_xl = int(_st_now.get("experience_level") or 1)
+            except Exception:
+                _g_dlvl, _g_xl = 1, 1
+            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
+            _g_norm = norm_xl_for_leaving(_g_dlvl)
+            # E9a hard enforcement: descent is REFUSED while underleveled,
+            # with no override -- the stairs stay locked until XL >=
+            # norm(Dlvl). Ascent is never gated. docs/EXPERIMENT_E9.md.
+            if self.descent_gate == "enforce" and _g_xl < _g_norm:
+                gate = (f"[descent BLOCKED: you are XL {_g_xl} on Dlvl {_g_dlvl}. The "
+                        f"stairs down stay locked until you reach XL {_g_norm}. "
+                        f"Gain experience on this level first, then descend.]")
+                tt["status"] = "blocked"
+                tt["feedback"] = gate
+                state["scout_delta"] = 0
+                obs_text = self._render_obs_text(state)
+                return compose_user_content(obs_text, [gate])
+            # Advisory (norm/directive): fire at most once per depth, and
+            # ONLY when actually lagging. r1 fired unconditionally, so the
+            # model's first-ever gate was always the deficit-0 dismissable
+            # one ("XL 1 on Dlvl 1, norm 1") — it concluded the interrupt
+            # class was noise and spent zero reasoning tokens on every later
+            # firing. At/above norm there is nothing to say; say nothing.
+            if self.descent_gate in ("norm", "directive") and _g_xl < _g_norm:
+                ack = state.setdefault("_descent_gate_ack", set())
+                if _g_dlvl not in ack:
+                    ack.add(_g_dlvl)
+                    if self.descent_gate == "norm":
+                        gate = (f"[descent check: you are XL {_g_xl} on Dlvl {_g_dlvl}. "
+                                f"Typical successful human runs reach XL {_g_norm} "
+                                f"before leaving this depth. Repeat the call to "
+                                f"descend anyway.]")
+                    else:
+                        gate = (f"[descent check: level to XL {_g_norm} before moving "
+                                f"on. Repeat the call to descend anyway.]")
+                    tt["status"] = "interrupted"
+                    tt["feedback"] = gate
+                    state["scout_delta"] = 0
+                    obs_text = self._render_obs_text(state)
+                    return compose_user_content(obs_text, [gate])
 
         # Variant CH: `run_macro(name=...)` expands a Refiner-registered
         # macro (an ordered list of existing skill calls) into a concatenated
@@ -1307,72 +1704,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # open (dtime 96) and on the call that found the stairs. So capture the
         # signature and the pre-action clock now, and judge after the engine has
         # actually stepped (see the post-step block below).
-        # E8a descent gate: the FIRST np_down on a given dungeon level returns
-        # the norm line at zero engine cost; the second proceeds. Soft gate --
-        # agency preserved, the game is never blocked. docs/EXPERIMENT_E8.md.
-        # Gate the descent ACTION, not one tool name: np_core has no np_down —
-        # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
-        # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
-        _is_descent = (
-            skill_name == "np_down"
-            or (skill_name == "np_press_key"
-                and str((skill_args or {}).get("key", "")).strip() == ">")
-        )
-        # E9a hard enforcement: descent is REFUSED while underleveled, with no
-        # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
-        # E8a's advice (read and ignored) into a constraint, to test whether
-        # underleveling is CAUSAL for death or merely correlated: if forcing the
-        # model to level before descending improves survival, the reasoning->
-        # policy gap is the bottleneck; if it dies anyway (attrition at shallow
-        # depth), the gap is deeper. Ascent is never gated. docs/EXPERIMENT_E9.md.
-        if self.descent_gate == "enforce" and _is_descent:
-            try:
-                st_now = (state["structured_obs"].status or {})
-                dlvl = int(st_now.get("depth") or 1)
-                xl = int(st_now.get("experience_level") or 1)
-            except Exception:
-                dlvl, xl = 1, 1
-            from nethack_harness.prompt.human_norms import norm_xl_for_leaving
-            norm = norm_xl_for_leaving(dlvl)
-            if xl < norm:
-                gate = (f"[descent BLOCKED: you are XL {xl} on Dlvl {dlvl}. The "
-                        f"stairs down stay locked until you reach XL {norm}. "
-                        f"Gain experience on this level first, then descend.]")
-                tt = state["_turn_trace"]
-                tt["status"] = "blocked"
-                tt["feedback"] = gate
-                state["scout_delta"] = 0
-                obs_text = self._render_obs_text(state)
-                return compose_user_content(obs_text, [gate])
-            # XL >= norm: leveled enough -- allow the descent to proceed.
-
-        if self.descent_gate in ("norm", "directive") and _is_descent:
-            try:
-                st_now = (state["structured_obs"].status or {})
-                dlvl = int(st_now.get("depth") or 1)
-                xl = int(st_now.get("experience_level") or 1)
-            except Exception:
-                dlvl, xl = 1, 1
-            ack = state.setdefault("_descent_gate_ack", set())
-            if dlvl not in ack:
-                ack.add(dlvl)
-                from nethack_harness.prompt.human_norms import norm_xl_for_leaving
-                norm = norm_xl_for_leaving(dlvl)
-                if self.descent_gate == "norm":
-                    gate = (f"[descent check: you are XL {xl} on Dlvl {dlvl}. "
-                            f"Typical successful human runs reach XL {norm} "
-                            f"before leaving this depth. Repeat the call to "
-                            f"descend anyway.]")
-                else:
-                    gate = (f"[descent check: level to XL {norm} before moving "
-                            f"on. Repeat the call to descend anyway.]")
-                tt = state["_turn_trace"]
-                tt["status"] = "interrupted"
-                tt["feedback"] = gate
-                state["scout_delta"] = 0
-                obs_text = self._render_obs_text(state)
-                return compose_user_content(obs_text, [gate])
-
+        # (The E8a/E9a descent gate used to sit here, post-dispatch; it moved
+        # ABOVE the registry dispatch after E15 P1 r1 showed closed-loop
+        # netplay skills executed the descent before the gate could fire.)
         state["_sig_now"] = (skill_name, repr(sorted(skill_args.items())))
         try:
             state["_gt_before"] = (state["structured_obs"].status or {}).get("time")
@@ -1638,7 +1972,18 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if "rollback" in self._allowed_skill_names and not (terminated or truncated):
             from nethack_harness.tools.skills import push_rollback_snapshot
             try:
-                push_rollback_snapshot(env, state.get("turn_count", 0))
+                try:
+                    _gt_now = (state["structured_obs"].status or {}).get("time")
+                    _hp_now = (state["structured_obs"].status or {}).get("hitpoints", 0)
+                except Exception:
+                    _gt_now, _hp_now = None, 0
+                # hp > 0 guard (fix2): a zero-HP death that NLE's terminated
+                # flag misses (raw hp poke, prompt-chain park) reaches this
+                # line with the LOCAL terminated still False — without the
+                # guard the ring's newest entry would be the corpse itself,
+                # and the forced revive would restore a dead state.
+                if _hp_now > 0:
+                    push_rollback_snapshot(env, state.get("turn_count", 0), game_time=_gt_now)
             except Exception:
                 pass  # never let snapshotting break a rollout
         # ---- stuck-call breaker: JUDGE ---------------------------------
@@ -1690,9 +2035,50 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Tracks deepest (DL, XL) achieved as an empirical-ish P(ascend).
         from nethack_harness.prompt.balrog import progression_score
         s = state["structured_obs"].status
+        # Track the DEEPEST experience level, the same way max_dlvl_reached
+        # tracks the deepest dungeon level. BALROG scores the (Dlvl, XL) pair,
+        # and reading XL off the final observation would report whatever the
+        # character happened to be when it died rather than its high-water mark.
+        state["max_xp_level"] = max(
+            int(state.get("max_xp_level") or 1), int(s.get("experience_level", 1) or 1)
+        )
         state["balrog_progression"] = progression_score(
             state["max_dlvl_reached"], s.get("experience_level", 1)
         )
+        # E16: mirror the RUN's high-water marks onto the env so the published
+        # `save` skill can reach them. The skill is handed only `(env, obs)`,
+        # and BALROG scores the deepest level a rollout TOUCHED -- without this
+        # a checkpoint written after climbing back up would carry a BALROG pair
+        # for a shallower run than the one that happened. Cheap, and the ONLY
+        # channel from harness state to a skill.
+        try:
+            from nethack_harness.checkpoints import (
+                HIGH_WATER_DLVL_ATTR as _HW_D, HIGH_WATER_XL_ATTR as _HW_X,
+            )
+            setattr(env, _HW_D, int(state["max_dlvl_reached"]))
+            setattr(env, _HW_X, int(state["max_xp_level"]))
+        except Exception:
+            pass  # never let bookkeeping break a turn
+        # E16 INTEGRITY GATE — must run BEFORE any death detector.
+        #
+        # NetHack's done(TRICKED) is not a game outcome, it is an abort: the
+        # engine found its in-memory dungeon inconsistent with the level files
+        # on disk (tricked_fileremoved, save.c:487, reached from goto_level,
+        # do.c:1462; or trickery, restore.c:1171). It arrives here as
+        # `terminated` with zeroed blstats — byte-for-byte the shape of a
+        # monster kill — which is how three E15 rollouts wrote a full-HP
+        # "death" into the dataset. Surfacing it as an explicit engine error is
+        # the whole point: a corrupted checkpoint must never be scoreable as a
+        # death. The banner is also checked, because it is printed several
+        # steps before `terminated` flips.
+        if terminated or _tricked_marker_in(last_obs):
+            try:
+                _assert_not_tricked(state["env"], last_obs,
+                                    where=f"after {skill_name}")
+            except _CheckpointIntegrityError as exc:
+                state["engine_error"] = str(exc)
+                state["died"] = False
+                raise
         # Death/ascension detection from the game state, not raw NLE termination flag.
         _detect_terminal_outcome(last_obs, state)
         # Robust death fallback: the text-marker scan above misses most deaths
@@ -1706,6 +2092,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         if terminated and not state["ascended"] and not state["died"]:
             state["died"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+            # Fix1: name the killing call in the game-over render so the
+            # model's one-turn death window (see is_completed) opens with
+            # explicit attribution: "after calling <skill>(<args>)".
+            state.setdefault(
+                "_death_attribution",
+                f"{skill_name}({', '.join(f'{k}={v!r}' for k, v in (skill_args or {}).items())})",
+            )
         # Zero-HP fallback: neither detector above catches a death whose
         # message screen never reaches the marker scan and whose NLE
         # `terminated` flag never fires — e.g. NetHack's death sequence parks
@@ -1721,6 +2114,106 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["died"] = True
             state["terminated"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+            state.setdefault(
+                "_death_attribution",
+                f"{skill_name}({', '.join(f'{k}={v!r}' for k, v in (skill_args or {}).items())})",
+            )
+        # Fix2 (E15 P3, user-specified): FORCED ROLLBACK ON DEATH. When the
+        # rollback tool is published and the character dies, the env restores
+        # the most recent live snapshot itself — no model choice, no reliance
+        # on any layer delivering a post-death turn (P3 r1 and the fix1
+        # one-turn window both foundered on exactly that delivery). The next
+        # observation carries an explicit "[You died: ... rewound ...]" line
+        # with cause, attribution, restored clock, and a death counter. The
+        # THIRD death on the same dungeon level is final: no revive, the
+        # rollout ends as game_over. Deaths on the revived state count again
+        # (the counter bounds any revive->die loop at 3 per level).
+        if (
+            state.get("died")
+            and not state.get("ascended")
+            and "rollback" in (self._allowed_skill_names or set())
+        ):
+            death_dlvl = int((state["structured_obs"].status or {}).get("depth") or
+                             state.get("death_dlvl") or 1)
+            counts = state.setdefault("_death_counts", {})
+            counts[death_dlvl] = counts.get(death_dlvl, 0) + 1
+            n_here = counts[death_dlvl]
+            try:
+                from nethack_harness.prompt.rendering import _death_cause
+                cause = _death_cause(state["structured_obs"], state) or ""
+            except Exception:
+                cause = ""
+            attr = state.get("_death_attribution") or f"{skill_name}(...)"
+            from nethack_harness.tools.skills import _rollback_ring
+            ring = _rollback_ring(env)
+            # Configurable budget (deaths_per_level; default 3 = fix2 arm,
+            # byte-identical served lines). _ORDINALS keeps the cap-3 wording
+            # ("the third is final") stable while rendering any other cap.
+            cap = self.deaths_per_level
+            if n_here >= cap or not ring:
+                # Final death (cap-th on this level) or nothing to restore
+                # into: the rollout genuinely ends. Mark the (dormant) fix1
+                # window spent so every stop layer fires immediately.
+                state["_death_window_spent"] = True
+                state["_forced_revive_note"] = (
+                    f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
+                    + (f"This is death {n_here}/{cap} on this dungeon level; the game is over for good.]"
+                       if ring else "No snapshot was available to rewind to; the game is over.]")
+                )
+            else:
+                _turn_no, _gt, _handle = ring[-1]
+                revived = False
+                try:
+                    env._engine.restore(_handle)
+                    # E16: the death that got us here ran done() ->
+                    # clearlocks() (end.c:1371), which unlinks EVERY dungeon
+                    # level file. The restore has to have put them all back; if
+                    # it did not, the hero is walking around a dungeon whose
+                    # next stair use is a done(TRICKED) full-HP "death". Check
+                    # before handing the revived state back, and let the error
+                    # out rather than degrading it to "the rewind failed".
+                    _assert_dungeon_on_disk(env, where="forced revive restore")
+                    last_obs, _r, _t, _tr, _i = env.step(27)  # ESC materializes
+                    state["raw_obs"] = last_obs
+                    state["structured_obs"] = shape_observation(last_obs, state["character"])
+                    _assert_not_tricked(env, last_obs, where="forced revive restore")
+                    revived = (state["structured_obs"].status or {}).get("hitpoints", 0) > 0
+                except _CheckpointIntegrityError as exc:
+                    state["engine_error"] = str(exc)
+                    raise
+                except Exception:
+                    revived = False
+                if revived:
+                    try:
+                        from nethack_harness.tools.netplay_true import reset_agent_cache
+                        reset_agent_cache()
+                    except Exception:
+                        pass
+                    state["died"] = False
+                    state["terminated"] = False
+                    terminated = truncated = False
+                    state["_stuck_n"] = 0
+                    state.pop("death_dlvl", None)  # the FINAL death owns this
+                    state.pop("_death_attribution", None)
+                    state.pop("_death_window_spent", None)
+                    _gt_now = (state["structured_obs"].status or {}).get("time")
+                    _ord = {1: "first", 2: "second", 3: "third", 4: "fourth",
+                            5: "fifth", 6: "sixth", 7: "seventh", 8: "eighth",
+                            9: "ninth", 10: "tenth"}.get(cap, f"{cap}th")
+                    state["_forced_revive_note"] = (
+                        f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
+                        f"The game has been rewound to game turn "
+                        f"{_gt_now if _gt_now is not None else _gt}. "
+                        f"(death {n_here}/{cap} on this dungeon level -- the {_ord} is final) "
+                        f"Choose differently this time.]"
+                    )
+                else:
+                    state["_death_window_spent"] = True
+                    state["_forced_revive_note"] = (
+                        f"[You died{': ' + cause if cause else ''} -- after calling {attr}. "
+                        f"The rewind failed; the game is over.]"
+                    )
+
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.
         spec = state.get("spec")
@@ -1750,6 +2243,16 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             _update_frontier_blacklist(state)
         except Exception:
             pass
+
+        # E16: the archive grows on the HARNESS's schedule, not on whether the
+        # model remembered to call `save`. Placed here -- after the terminal
+        # detectors, the forced revive and the max_dlvl update -- so it sees
+        # the settled state of the turn and never checkpoints a corpse. Not
+        # wrapped in a bare `except`: a CheckpointIntegrityError from this path
+        # means the game is broken, and that must end the rollout exactly as it
+        # does everywhere else. `_maybe_auto_checkpoint` handles its own
+        # ordinary failures.
+        _maybe_auto_checkpoint(state)
 
         state["turn_count"] = state.get("turn_count", 0) + 1
         if self.belief_state_interval > 0 and state["turn_count"] > 0 and state["turn_count"] % self.belief_state_interval == 0:
@@ -1979,6 +2482,15 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         _rnote = state.pop("_resume_notice", None)
         if _rnote:
             prefix_parts.insert(0, f"[{_rnote}]")
+        # E16: the orchestrator's directive for this attempt, inserted AFTER the
+        # resume banner so it lands at index 0 -- first thing in the first
+        # observation. The wording is fixed and greppable on purpose: the
+        # served-bytes check for a directive is "does this exact block appear
+        # in what the model was sent", and a template that drifts breaks the
+        # check silently.
+        _dirnote = state.pop("_directive_notice", None)
+        if _dirnote:
+            prefix_parts.insert(0, DIRECTIVE_BLOCK_FORMAT.format(directive=_dirnote))
         # Post-skill prompt/menu cleanup, deliberately NOT under the autohalt
         # label -- a closed prompt is not an interrupted plan.
         _dn = state.pop("_dismiss_notice", None)
@@ -1994,6 +2506,74 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_dropped_extra_tool_calls"] = 0
         if result.feedback:
             prefix_parts.append(f"[{result.feedback}]")
+        # Fix2 forced-revive line: FIRST in the prefix list so the death and
+        # its rewind are the very first thing the model reads on this turn.
+        _frn = state.pop("_forced_revive_note", None)
+        if _frn:
+            prefix_parts.insert(0, _frn)
+            tt["forced_revive"] = True
+        # E14 crisis directive: two naive harness-side heuristics, delivered
+        # exactly like the E8a descent gate's norm line -- a bracketed line in
+        # the rendered observation, zero engine cost, published tool schemas
+        # untouched. Default "off" skips this entirely: no state keys are
+        # written and every existing arm renders byte-identically. The pure
+        # decision/format logic lives in prompt/crisis_directive.py so it is
+        # unit-testable without an engine (tests/test_crisis_directive.py).
+        if self.crisis_directive == "on" and not state.get("terminated"):
+            from nethack_harness.prompt.crisis_directive import (
+                hp_crisis_active, hp_crisis_line, pacing_lagging, pacing_line,
+            )
+            try:
+                _st = (state["structured_obs"].status or {})
+                _hp = int(_st.get("hitpoints") or 0)
+                _hpmax = int(_st.get("max_hitpoints") or 0)
+                _dlvl = int(_st.get("depth") or 1)
+                _xl = int(_st.get("experience_level") or 1)
+            except Exception:
+                _hp, _hpmax, _dlvl, _xl = 0, 0, 1, 1
+            _fired = []
+            # (a) HP-CRISIS, EDGE-TRIGGERED: fires on ENTERING the crisis and
+            # re-arms only after the condition has cleared -- a per-turn
+            # repeat would be noise on exactly the turns the agent needs
+            # signal. Adjacent-hostile reuses features.visible_monsters (the
+            # detector netplay_true's HP-drop interrupt renders its ADJACENT
+            # block from): `steps` is Chebyshev distance, so steps==1 and not
+            # a pet is "hostile in melee range". Naive on purpose: peacefuls
+            # are not distinguished, matching the ADJACENT render.
+            _adj_hostile = False
+            try:
+                from nethack_harness.prompt.features import visible_monsters
+                _adj_hostile = any(
+                    m.steps == 1 and not m.is_pet
+                    for m in visible_monsters(state["raw_obs"]))
+            except Exception:
+                _adj_hostile = False  # the directive must never break a turn
+            _in_crisis = hp_crisis_active(_hp, _hpmax, _adj_hostile)
+            if _in_crisis and not state.get("_hp_crisis_prev"):
+                prefix_parts.append(hp_crisis_line(_hp, _hpmax))
+                _fired.append("hp")
+            state["_hp_crisis_prev"] = _in_crisis
+            # (b) PACING, at most once per dungeon level (ack-set, the
+            # _descent_gate_ack pattern): on first sight of a depth, warn iff
+            # XL lags the human-winner arrival norm for THIS depth (fix1;
+            # r1 compared against the leaving norm — one depth ahead — and
+            # fired on 100% of arrivals at depth >= 3). The depth is acked
+            # even when leveled enough -- "on arriving" means a later XL
+            # drain on the same floor must not re-fire it.
+            _ack = state.setdefault("_pacing_directive_ack", set())
+            if _dlvl not in _ack:
+                _ack.add(_dlvl)
+                if pacing_lagging(_xl, _dlvl):
+                    from nethack_harness.prompt.human_norms import norm_xl_for_arriving
+                    prefix_parts.append(
+                        pacing_line(_xl, _dlvl, norm_xl_for_arriving(_dlvl)))
+                    _fired.append("pacing")
+            # Telemetry: stamp the turn trace ("hp" | "pacing" | "hp+pacing");
+            # _write_trace_entry copies it onto the NDJSON record. The
+            # directive text itself already reaches rendered_user_message via
+            # prefix_parts, so both the marker and the line are greppable.
+            if _fired:
+                tt["crisis_directive"] = "+".join(_fired)
         content = compose_user_content(obs_text, prefix_parts)
         # Trace breadcrumbs for the caller (`_apply_tool_call`), which owns the
         # single per-turn NDJSON write. `action_indices` is kept for the legacy
@@ -2008,6 +2588,24 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
     async def is_completed(self, state: vf.State) -> bool:
         # Game-over (death/ascension/NLE truncation) ends the rollout.
         if bool(state.get("terminated")):
+            # P3 death window (fix1): when rollback is published and the
+            # character just DIED, defer completion by exactly one LM turn so
+            # the death observation actually reaches the model. Without this,
+            # the rollout ended before the model ever saw "You die..." — the
+            # post-death revive path below (died + rollback dispatch) and the
+            # rendered "ONE action still works: rollback(n)" banner were dead
+            # code in all 4 E15 P3 r1 deaths. One turn only, per death event:
+            # if the model's post-death call is a rollback that restores
+            # HP > 0, `died`/`terminated` clear (and the window re-arms for a
+            # later death); any other call leaves `terminated` set and this
+            # branch ends the rollout on the next check.
+            if (
+                state.get("died")
+                and "rollback" in (self._allowed_skill_names or set())
+                and not state.get("_death_window_spent")
+            ):
+                state["_death_window_spent"] = True
+                return False
             self._flush_final_trace_entry(state, "terminated")
             return True
         # Also honor the verifiers per-rollout LM-turn cap (`max_turns`). Without
@@ -2282,6 +2880,158 @@ def _record_scout_and_visited(state: dict, obs) -> None:
 FRONTIER_STUCK_TURNS = 3      # adjacency turns w/o new tiles before blacklist
 FRONTIER_APPROACH_RADIUS = 1  # Chebyshev distance counting as "approached"
 NEEDS_HIDDEN_TURNS = 5        # zero-scout streak that triggers needs-hidden
+
+
+def _auto_checkpoint_triggers(auto: dict, dlvl: int, xl: int,
+                              gameturn: int) -> list:
+    """Which of the design's three automatic-save conditions fired this call.
+
+    Pure and side-effect-free apart from advancing `auto`'s watermarks, so the
+    trigger policy is testable without an engine.
+
+    THE CADENCE IS COUNTED IN LM CALLS, not game turns -- see
+    `auto_checkpoint_every_n_calls` for why. `gameturn` is still taken, and
+    still goes in the note, because "which turn was this" is what makes a
+    cadence checkpoint identifiable afterwards; it just no longer decides
+    WHETHER one is written. Level entry and level-up are unchanged and fire
+    independently of the cadence: a call that both enters a level and completes
+    an interval writes both.
+    """
+    fired = []
+    if dlvl and dlvl not in auto["seen_dlvl"]:
+        auto["seen_dlvl"].add(dlvl)
+        fired.append((f"level_entry_d{dlvl}", f"entered Dlvl {dlvl}"))
+    if xl and auto["last_xl"] is not None and xl > auto["last_xl"]:
+        fired.append((f"level_up_xl{xl}", f"reached XL {xl}"))
+    if xl:
+        auto["last_xl"] = max(int(auto["last_xl"] or 0), int(xl))
+    interval = int(auto.get("interval") or 0)
+    calls = int(auto.get("calls") or 0)
+    if interval > 0:
+        last = int(auto.get("last_periodic_call") or 0)
+        if calls - last >= interval:
+            # Advance by whole intervals rather than to `calls`, so the phase
+            # of the cadence is fixed by the interval and not by which call
+            # happened to notice it.
+            auto["last_periodic_call"] = last + interval * (
+                (calls - last) // interval)
+            # NAMED FOR THE CALL, because the call is what triggered it. The
+            # game turn stays in the note -- it is what makes one cadence
+            # checkpoint identifiable from another afterwards -- but the label
+            # no longer claims a turn count decided anything.
+            fired.append((f"call_{calls}",
+                          f"{interval} LM calls elapsed (call {calls}"
+                          + (f", turn {gameturn})" if gameturn is not None
+                             else ")")))
+    return fired
+
+
+def _maybe_auto_checkpoint(state: dict) -> None:
+    """Write the automatic checkpoints Go-Explore's archive is built from.
+
+    RUNS AFTER EVERY TOOL CALL, on the harness's side of the tool boundary, so
+    the archive grows whether or not the model ever calls `save`. The GE-wiki
+    pilot is the measurement that forced this: 187 calls, D1 -> D3, `save`
+    called zero times, `new_checkpoints: []`, and the orchestrator's second
+    round choosing from the same one-row archive it started with.
+
+    THE `--More--` PROBLEM, WHICH IS NOT AN EDGE CASE HERE. `checkpoint_save`
+    refuses to write while the game is parked on a prompt, because meta.json is
+    built from `raw.blstats` (refreshed only by an engine step) while the
+    bundle serializes the live heap, and over a deferred level transition the
+    two disagree -- measured: meta said Dlvl 4 for a state that restored to
+    Dlvl 2. That refusal is correct and is not relaxed here. But the single
+    most important trigger, level entry, is also the moment a `--More--` is
+    most likely to be up: descending prints one. Dropping the save on that
+    refusal would systematically lose exactly the checkpoints the frontier is
+    made of.
+
+    So a refused trigger is DEFERRED, not dropped: it goes on `pending` and is
+    retried on the next call, and the next, until the game is quiescent. The
+    reason is carried with it, so the checkpoint that eventually lands still
+    says it was written for entering Dlvl 3 even if it was written two calls
+    later. `deferrals` counts how often this happened, because "the archive
+    grew" and "the archive grew where we meant it to" are different claims.
+
+    Never raises for a save that could not be written -- except a checkpoint
+    INTEGRITY error, which means the game is broken and must not be
+    checkpointed or continued as if it were not. Ordinary failures land in
+    `errors`, which the turn trace publishes (`helpers._auto_checkpoint_record`),
+    because bookkeeping that breaks a rollout is worse than bookkeeping that
+    reports itself.
+    """
+    auto = state.get("_auto_ck")
+    if not auto or not auto.get("enabled"):
+        return
+    # Never checkpoint a finished game: a dead or ascended state is not a
+    # place any later attempt can resume from.
+    if state.get("died") or state.get("ascended") or state.get("terminated"):
+        return
+    env = state.get("env")
+    status = (state.get("structured_obs").status or {}) if \
+        state.get("structured_obs") is not None else {}
+    dlvl = int(status.get("depth") or 0)
+    xl = int(status.get("experience_level") or 0)
+    gameturn = status.get("time")
+    gameturn = int(gameturn) if gameturn is not None else None
+
+    # FIRST CALL SEEDS THE WATERMARKS AND SAVES NOTHING. A rollout resumed at
+    # Dlvl 4 on turn 900 has that state in the archive already; firing
+    # "entered Dlvl 4" on call one would duplicate it.
+    if not auto["seen_dlvl"] and auto["last_xl"] is None:
+        if dlvl:
+            auto["seen_dlvl"].add(dlvl)
+        auto["last_xl"] = xl or None
+        auto["calls"] = 1
+        auto["last_periodic_call"] = 1
+        return
+
+    # THE CALL COUNTER, advanced here and nowhere else. This function runs once
+    # per tool call on the harness's side of the boundary, which is what makes
+    # "calls" the right unit to count here rather than env steps.
+    auto["calls"] = int(auto.get("calls") or 0) + 1
+    auto["pending"].extend(_auto_checkpoint_triggers(auto, dlvl, xl, gameturn))
+    if not auto["pending"]:
+        return
+
+    from nethack_harness.checkpoints import (
+        CheckpointIntegrityError as _CkIntegrity,
+        CheckpointSavepointError as _CkSavepoint,
+        checkpoint_save,
+    )
+    from nethack_harness.tools.skills import (
+        CHECKPOINT_ARCHIVE_ATTR as _CK_ATTR, _next_checkpoint_dir,
+    )
+    root = getattr(env, _CK_ATTR, None)
+    if root is None:
+        auto["enabled"] = False
+        return
+
+    still_pending: list = []
+    for label, why in auto["pending"]:
+        try:
+            meta = checkpoint_save(
+                env, _next_checkpoint_dir(root),
+                name=f"auto {label}",
+                note=f"automatic checkpoint: {why}",
+                created_by="auto")
+        except _CkSavepoint:
+            # The prompt case, and the whole reason this loop exists. Keep it
+            # and try again next call, when auto-dismiss will normally have
+            # cleared the --More--.
+            auto["deferrals"] += 1
+            still_pending.append((label, why))
+            continue
+        except _CkIntegrity:
+            raise  # a broken game must never be silently checkpointed
+        except Exception as exc:  # pragma: no cover - defensive
+            auto["errors"].append(f"{label}: {type(exc).__name__}: {exc}")
+            continue
+        auto["saved"].append({
+            "id": meta["id"], "trigger": label, "why": why,
+            "dlvl": meta["dlvl"], "xl": meta["xl"], "gameturn": meta["gameturn"],
+        })
+    auto["pending"] = still_pending
 
 
 def _update_frontier_blacklist(state: dict) -> None:
@@ -2564,6 +3314,13 @@ def load_environment(
     _reward_weights = _harness_overlay.resolve_reward_weights(_reward_funcs, _overlay_cfg)
     rubric = vf.Rubric(funcs=_reward_funcs, weights=_reward_weights)
 
+    # Post-baseline tool fixes are flag-gated so `[base]` in
+    # configs/tool_tiers.toml is reproducible from config instead of a branch
+    # checkout. All default OFF: a cell that names none of them behaves as the
+    # tree did when the E10 baseline was measured. See nethack_harness.tool_flags.
+    from nethack_harness import tool_flags as _tool_flags
+    _tool_flags.configure(**kwargs)
+
     _describe_args = kwargs.get("describe_args", False)
     if isinstance(_describe_args, str):
         _describe_args = _describe_args.strip().lower() not in ("false","0","no","off","")
@@ -2612,6 +3369,14 @@ def load_environment(
             )
     # E8b mechanic guidance: append system-prompt blocks only (published tool
     # schemas untouched). Default "" leaves every existing arm byte-identical.
+    # E13: ask the player to persist durable lessons into the continual-harness
+    # store. Provisioning a writable store is not instruction -- 1 of E9's 15
+    # control rollouts did it unprompted. Default off => byte-identical.
+    _self_edit = str(kwargs.get("continual_self_edit") or "").strip().lower()
+    if _self_edit not in ("", "false", "0", "no", "off"):
+        from nethack_harness.prompt.self_edit import SELF_EDIT_BLOCK
+        spec = _dc.replace(spec, system_prompt=spec.system_prompt + SELF_EDIT_BLOCK)
+
     _hints = str(kwargs.get("mechanic_hints") or "").strip().lower()
     if _hints:
         from nethack_harness.prompt.human_norms import MECHANIC_HINT_BLOCKS

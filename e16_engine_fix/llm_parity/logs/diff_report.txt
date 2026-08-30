@@ -1,0 +1,15 @@
+A = logs/fixed  engine=/root/nld/e16-engine
+    so=/root/nld/e16-engine/third_party/NetHack/src/build/libnethack.so
+    md5=90a440f8e843b4e674e15cb15da4b90c size=12152656
+    status=ok frames=5527 gt_ok=621/667
+B = logs/shared  engine=/root/NetHack-engine
+    so=/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so
+    md5=8757c3d3e2bb25bd1c7786ee111e69fa size=12112000
+    status=ok frames=5527 gt_ok=621/667
+
+frames compared : 5527
+action-byte steps compared : 5501
+frames differing: 0
+
+RESULT: IDENTICAL -- every compared field matches on every frame.
+        (re-verified field by field)

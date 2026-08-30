@@ -1,0 +1,20 @@
+{
+  "id": "c15",
+  "parent": "c12",
+  "name": "d7-fountain-room",
+  "note": "Big fountain room on D7, cleared. Long sword and +1 ring mail worn. Good place to rest up before pushing on.",
+  "dlvl": 7,
+  "xl": 4,
+  "hp": 38,
+  "max_hp": 41,
+  "gameturn": 2760,
+  "score": 1180,
+  "balrog": 0.148,
+  "balrog_min": 0.148,
+  "attempts_from": 1,
+  "visits": 1,
+  "created_by": "save",
+  "created_at": 1787901463.7563627,
+  "dungeon_number": 0,
+  "level_number": 7
+}
