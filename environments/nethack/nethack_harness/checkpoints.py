@@ -112,6 +112,61 @@ BUNDLE_VERSION = 2
 STATE_BUNDLE = "state.bundle"
 META_JSON = "meta.json"
 PREFIX_JSONL = "prefix.jsonl"
+
+#: The engine's RNG state, saved beside the bundle. See issue #48.
+#:
+#: WHY IT IS A SEPARATE FILE AND NOT A BUNDLE SECTION. `state.bundle` sections
+#: are engine blobs produced by save_level/save_player/save_levelfiles, and
+#: every existing checkpoint has exactly those three. Adding a fourth would
+#: force a BUNDLE_VERSION bump and make ~130 live checkpoints unreadable by a
+#: reader that expects it. A sidecar file is absent-or-present: old checkpoints
+#: simply do not have one, and restore falls back to today's behaviour.
+RNG_STATE_BIN = "rng_state.bin"
+
+#: struct isaac64_ctx { unsigned n; uint64_t r[256]; uint64_t m[256];
+#:                      uint64_t a, b, c; }  -- 4128 bytes, no pointers, so it
+#: is memcpy-able and portable across processes. Two streams: CORE and DISP.
+ISAAC64_CTX_BYTES = 4128
+RNG_STREAMS = 2
+RNG_BLOB_BYTES = ISAAC64_CTX_BYTES * RNG_STREAMS
+
+
+def _rng_state_ptr(raw, idx: int):
+    """Address of the live game's ISAAC64 context `idx`.
+
+    MUST go through the engine's OWN library handle. `nle_rng_state` returns
+    `&current_nle_ctx->rng_state[idx]` (third_party/NetHack/src/src/nle.c:144),
+    so it reads a global that belongs to the loaded image; a second ctypes
+    CDLL of libnethack.so would hand back a different image's globals.
+    """
+    import ctypes
+    fn = raw._lib.nle_rng_state
+    fn.restype = ctypes.c_void_p
+    fn.argtypes = [ctypes.c_int]
+    return fn(idx)
+
+
+def dump_rng_state(raw) -> bytes:
+    """Both ISAAC64 contexts of the live game, as one flat blob."""
+    import ctypes
+    return b"".join(ctypes.string_at(_rng_state_ptr(raw, i), ISAAC64_CTX_BYTES)
+                    for i in range(RNG_STREAMS))
+
+
+def load_rng_state(raw, blob: bytes) -> None:
+    """Install `blob` over the live game's ISAAC64 contexts.
+
+    Call AFTER the bundle load, never before: the load overwrites the RNG, so
+    an install that ran first would simply be restored over. This is the same
+    ordering the `reseed` argument already documents.
+    """
+    import ctypes
+    if len(blob) != RNG_BLOB_BYTES:
+        raise CheckpointIntegrityError(
+            f"{RNG_STATE_BIN} is {len(blob)} bytes, expected {RNG_BLOB_BYTES}")
+    for i in range(RNG_STREAMS):
+        chunk = blob[i * ISAAC64_CTX_BYTES:(i + 1) * ISAAC64_CTX_BYTES]
+        ctypes.memmove(_rng_state_ptr(raw, i), chunk, ISAAC64_CTX_BYTES)
 LESSONS_MD = "lessons.md"
 
 #: Where the harness mirrors the RUN's BALROG high-water marks so the `save`
@@ -538,6 +593,17 @@ def checkpoint_save(
         "levelfiles": raw.save_levelfiles(),
     }
     bundle = pack_bundle(sections, header_extra={"seed": seeds})
+    # THE RNG STREAM (issue #48). Captured here, from the same live engine and
+    # the same moment the bundle describes -- pack_bundle does not step the
+    # game. Without it a resume re-seeds from `seeds` above and restarts the
+    # random stream at position 0, so every level first generated after the
+    # restore is built from numbers the original game already spent.
+    try:
+        rng_blob = dump_rng_state(raw)
+    except Exception:
+        # An engine build without `nle_rng_state` still produces a valid
+        # checkpoint -- just one that restores with today's semantics.
+        rng_blob = None
 
     status = _status_snapshot(engine_env)
     # High-water marks, in this order of preference: what the caller passed;
@@ -593,6 +659,8 @@ def checkpoint_save(
     ))
     try:
         _write_file(tmp / STATE_BUNDLE, bundle)
+        if rng_blob is not None:
+            _write_file(tmp / RNG_STATE_BIN, rng_blob)
         _write_file(tmp / META_JSON,
                     (json.dumps(meta, indent=2, sort_keys=True) + "\n").encode())
         # The conversation prefix -- the plan that was live when this state was
@@ -774,6 +842,15 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     raw.load_level_raw(sections["level"])      # LEVEL first
     raw.load_player_raw(sections["player"])    # THEN player
     raw.load_levelfiles(sections["levelfiles"])  # THEN the rest of the dungeon
+    # THE RNG STREAM (issue #48). After the loads, never before -- the bundle
+    # load overwrites the RNG, so an install that ran first would be restored
+    # over. Absent on checkpoints written before this existed, and those keep
+    # exactly today's behaviour rather than failing to load.
+    rng_path = directory / RNG_STATE_BIN
+    rng_restored = False
+    if reseed is None and rng_path.is_file():
+        load_rng_state(raw, rng_path.read_bytes())
+        rng_restored = True
     if reseed is not None:
         # AFTER the load, never before: the snapshot carries the RNG, so a
         # reseed that ran first would simply be restored over. Same ordering
@@ -844,11 +921,16 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     # meta.json must stay the checkpoint's identity.
     if record is not None:
         record["reseeded_with"] = list(reseed) if reseed is not None else None
+        # Whether this restore continued the saved random stream or restarted
+        # it. A run mixing both is not internally comparable, so it is
+        # recorded per restore rather than inferred from the run config.
+        record["rng_state_restored"] = rng_restored
         meta["restore_fidelity"] = record
     # Also on the returned meta directly, because restore_fidelity.jsonl is
     # written above and a reader holding only `meta` still has to be able to
     # say which stochastic semantics this resume ran under.
     meta["restored_with_reseed"] = list(reseed) if reseed is not None else None
+    meta["rng_state_restored"] = rng_restored
     return env, meta
 
 
@@ -870,6 +952,9 @@ __all__ = [
     "META_JSON",
     "PREFIX_JSONL",
     "STATE_BUNDLE",
+    "RNG_STATE_BIN",
+    "dump_rng_state",
+    "load_rng_state",
     "atomic_write",
     "checkpoint_list",
     "checkpoint_meta",
