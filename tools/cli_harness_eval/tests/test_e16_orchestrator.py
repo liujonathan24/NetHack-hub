@@ -3022,3 +3022,28 @@ def test_a_stalled_attempt_keeps_the_experience_it_earned(tmp_path):
     ev = E._attempt_dir_evidence(tmp_path)
     assert ev["max_xl"] == 2, ev
     assert ev["calls"] == 50, ev
+
+
+def test_disabled_milestones_do_not_fire_on_every_row():
+    """`milestone_dlvl = 0` must disable, not match everything.
+
+    It is compared with `>=`, so 0 matched the first row in the archive and
+    returned STOP_MILESTONE before any attempt launched. Three runs resumed to
+    N=100 exited instantly this way.
+    """
+    from pathlib import Path
+    import e16_orchestrator as E
+
+    rows = [E.Row(id="1", path=Path("/tmp/c1"), dlvl=5, xl=3, dungeon_number=0),
+            E.Row(id="2", path=Path("/tmp/c2"), dlvl=12, xl=6, dungeon_number=4)]
+
+    cfg = E.OrchestratorConfig(run_dir=Path("."), milestone_dlvl=0,
+                               milestone_dungeon=-1)
+    orch = E.Orchestrator.__new__(E.Orchestrator)
+    orch.cfg = cfg
+    assert orch.milestone_row(rows) is None
+
+    # and still fires when actually configured
+    orch.cfg = E.OrchestratorConfig(run_dir=Path("."), milestone_dlvl=20,
+                                    milestone_dungeon=4)
+    assert orch.milestone_row(rows) is not None

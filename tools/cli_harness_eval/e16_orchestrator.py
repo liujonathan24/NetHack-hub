@@ -4281,10 +4281,23 @@ player result.
     # -- stopping ---------------------------------------------------------- #
 
     def milestone_row(self, rows: list) -> Optional[Row]:
+        """The archived state that satisfies a milestone, or None.
+
+        THE SENTINELS ARE CHECKED FIRST, and they have to be. `milestone_dlvl`
+        is compared with `>=`, so a "disabled" value of 0 matches EVERY row and
+        fires the milestone on the first one -- the flag documented as turning
+        the stop off turned it permanently on, and three runs resumed to N=100
+        exited immediately with stop_reason=milestone and no attempt launched.
+        """
+        dlvl_on = self.cfg.milestone_dlvl and self.cfg.milestone_dlvl > 0
+        dungeon_on = self.cfg.milestone_dungeon is not None and \
+            self.cfg.milestone_dungeon >= 0
+        if not dlvl_on and not dungeon_on:
+            return None
         for r in rows:
-            if r.dlvl >= self.cfg.milestone_dlvl:
+            if dlvl_on and r.dlvl >= self.cfg.milestone_dlvl:
                 return r
-            if r.dungeon_number == self.cfg.milestone_dungeon:
+            if dungeon_on and r.dungeon_number == self.cfg.milestone_dungeon:
                 return r
         return None
 
@@ -4308,7 +4321,8 @@ player result.
             # an unknown depth cannot satisfy a milestone, and must not raise.
             best = max((a["max_dlvl"] for a in self.attempts
                         if a.get("max_dlvl") is not None), default=0)
-            if best >= self.cfg.milestone_dlvl:
+            if self.cfg.milestone_dlvl and self.cfg.milestone_dlvl > 0 \
+                    and best >= self.cfg.milestone_dlvl:
                 return STOP_MILESTONE
             return None
         if self.milestone_row(rows) is not None:
