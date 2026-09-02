@@ -16,6 +16,24 @@ NetHack-engine  (nethack_core)  <-- external dependency (the fork engine + ctype
 NetHack-Hub     (this repo: environments/nethack, approaches/, tools/, docs/)
 ```
 
+## Experiment baseline commit
+
+**Every result published before 2026-09-02 was measured on `0b50138`.** Pin that
+commit to reproduce them:
+
+```bash
+git checkout 0b50138          # on exp/cli-harness-eval-code
+```
+
+This matters because `fix/skill-prompt-completion` changes two published skills.
+On `0b50138` and earlier, `pray` and `engrave_elbereth` leave a NetHack prompt
+open: the extended-command submit is eaten by the stray-CR guard, and the engrave
+types its text before the getlin exists. In both cases the game clock stops and
+every later keystroke is typed into the prompt as text, with no skill able to
+recover. Any rollout that called either skill ended there. Runs measured against
+the fix are therefore **not comparable** to runs measured before it — treat the
+boundary as a re-baseline, not a bug fix that leaves numbers intact.
+
 ## What's here
 
 - `environments/nethack/` — the verifiers environment (`nethack.py`), the LLM

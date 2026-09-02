@@ -544,10 +544,19 @@ def engrave_elbereth(env: NetHackCoreEnv, obs: StructuredObservation) -> SkillRe
     # --More-- is actually up. The keystroke funnel also swallows a stray CR now
     # (`_cr_would_be_unknown_command`), so this is belt and braces -- but the
     # source of the stray CR is gone either way.
-    actions = [int(ord('E')), int(ord('-'))]
+    #
+    # `E-` does not open the text prompt directly: it first prints "You write in
+    # the dust with your fingertip." behind a --More--, and only the keystroke
+    # that dismisses that --More-- opens the getlin. Typing the text before the
+    # dismiss sent "Elbereth" into the --More-- (which swallows it) and left the
+    # getlin open afterwards, so the next skill's keystrokes were typed into
+    # "What do you want to write in the dust here?" and the game clock stopped.
+    # Measured on a live engine: `E-` then CR then the text then CR leaves
+    # "Something is written here in the dust." and a playable game.
+    actions = [int(ord('E')), int(ord('-')), int(nethack.MiscAction.MORE)]  # open the prompt
     for ch in "Elbereth":
         actions.append(int(ord(ch)))
-    actions.append(int(nethack.MiscAction.MORE))  # finish text
+    actions.append(int(nethack.MiscAction.MORE))  # submit the text
     return SkillResult(actions, "Engraved Elbereth.")
 
 

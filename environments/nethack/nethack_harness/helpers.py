@@ -1000,14 +1000,37 @@ def _cr_would_be_unknown_command(obs) -> bool:
     we cannot read -- is treated as "a prompt might be open", and the CR is sent
     unchanged. Never raises: a detector failure must not break a rollout, and
     failing open only restores the previous behaviour.
+
+    ONE EXCEPTION, and it is not visible in `misc`. NetHack's extended-command
+    entry (`#pray`, `#loot`, ...) leaves all three flags clear while it is open,
+    measured on a live engine:
+
+        after `#pray`, before submit -> (0, 0, 0), top line `# pray`
+
+    So the flags alone say "stray" for the CR that SUBMITS the command. Eating
+    it leaves the entry open, and every keystroke after it is typed into the
+    prompt as text instead of being played -- `pray` produced the top line
+    `# prayy` and froze the game clock permanently, with no skill able to
+    recover. The top line is the discriminator the flags do not carry.
     """
     try:
         misc = obs.get("misc") if isinstance(obs, dict) else getattr(obs, "misc", None)
         if misc is None:
             return False
-        return all(int(v) == 0 for v in misc)
+        if not all(int(v) == 0 for v in misc):
+            return False
+        return not _extended_command_open(obs)
     except Exception:
         return False
+
+
+def _extended_command_open(obs) -> bool:
+    """True while NetHack's `#` extended-command entry is accepting text."""
+    tty = obs.get("tty_chars") if isinstance(obs, dict) else getattr(obs, "tty_chars", None)
+    if tty is None:
+        return False
+    top = bytes(bytearray(tty[0])).decode("ascii", "replace")
+    return top.lstrip().startswith("#")
 
 
 
