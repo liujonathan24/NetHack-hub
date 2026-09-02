@@ -1364,7 +1364,22 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # the next keystroke, which would otherwise eat the model's
             # intended action. MORE/CR (13) acknowledges them.
             has_more = any("--More--" in m for m in (so.messages or [])) or _obs_tty_has_more(last_obs)
-            if so.menu is None and so.inventory_prompt is None and yn is None and not has_more:
+            # The structured view does not model every window the engine can
+            # open — a tile holding two or more items raises "Things that are
+            # here:", which sets none of the fields above. The blocking-UI
+            # banner the agent sees keys on the engine's own `misc` flags
+            # instead (prompt/interactive_state.py), so a window it reports
+            # would go undismissed here: the harness told the agent the clock
+            # was frozen and then could not unfreeze it, and no published skill
+            # can send an ESC. Sharing the authoritative signal is what keeps
+            # the two halves from disagreeing.
+            if (
+                so.menu is None
+                and so.inventory_prompt is None
+                and yn is None
+                and not has_more
+                and not _engine_awaiting_input(last_obs)
+            ):
                 break
             if so.inventory_prompt is not None or yn is not None:
                 saw_prompt = True
@@ -2002,6 +2017,21 @@ def _game_clock(state) -> Optional[int]:
         return None if val is None else int(val)
     except Exception:
         return None
+
+
+def _engine_awaiting_input(obs) -> bool:
+    """True while the engine reports a window or prompt is consuming keystrokes.
+
+    `misc` is NLE's own (in_yn_function, in_getlin, xwaitingforspace) triple —
+    the same signal the blocking-UI banner keys on. Never raises: a detector
+    failure must not break a rollout, and failing closed only restores the
+    previous behaviour.
+    """
+    try:
+        misc = obs.get("misc") if isinstance(obs, dict) else getattr(obs, "misc", None)
+        return misc is not None and any(int(v) for v in misc)
+    except Exception:
+        return False
 
 
 def _obs_tty_has_more(obs) -> bool:
