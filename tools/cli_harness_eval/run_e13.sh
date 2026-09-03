@@ -51,6 +51,39 @@ RUN="${EXP_ID}-r${REPLICATE}"
 # would overwrite each other's skill package mid-run.
 INSTALL_DIR="${INSTALL_DIR:-/tmp/vf-prime-agent-${RUN}}"
 CH="${CH:-${INSTALL_DIR}/continual-harness}"
+
+# Skills-as-code arm wiring. NETPLAY_CANONICAL is the ONE git repo the agent's
+# code accumulates in -- the same fixed skills path the kernel imports from, so
+# canonical IS the live tree. It is left unset for every other arm, which keeps
+# the code-merge and code-freeze blocks below inert for them.
+#
+# MAX_CONCURRENT=1 is not a tuning knob here, it is correctness: the mutable
+# arm's rollouts share this one tree and this one repo, so they MUST commit one
+# at a time (see PrimeAgentHarness._materialise_netplay). Parallel per-rollout
+# isolation is deferred; until it exists, this serialises.
+case "$TIER" in
+  continual-code)
+    # Canonical is a SEPARATE git repo; each rollout edits a private clone bound
+    # over the fixed skill path inside its sandbox, so rollouts run in PARALLEL.
+    export NETPLAY_CANONICAL="${INSTALL_DIR}/netplay-canonical"
+    export NETPLAY_WORK="${INSTALL_DIR}/netplay-work"
+    # Seed canonical ONCE, serially, before any rollout -- a rollout cannot seed
+    # it safely because concurrent clones would race to create it.
+    if [ ! -d "$NETPLAY_CANONICAL/.git" ]; then
+      SEED="$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/src/netplay"
+      mkdir -p "$NETPLAY_CANONICAL"
+      cp "$SEED"/*.py "$NETPLAY_CANONICAL/"
+      ( cd "$NETPLAY_CANONICAL"
+        git init -q -b netplay-canonical .
+        printf '__pycache__/\n*.pyc\n' > .gitignore
+        git config user.email netplay@localhost
+        git config user.name 'netplay seed'
+        git add -A && git commit -q -m 'round-0 seed' && git tag -f round-0 )
+      echo "[e13  ] seeded netplay canonical at $NETPLAY_CANONICAL"
+    fi
+    echo "[e13  ] netplay canonical=$NETPLAY_CANONICAL (PARALLEL: private per-rollout clones)"
+    ;;
+esac
 OUT_ROOT="${OUT_ROOT:-$REPO/outputs/e13/${RUN}}"
 PROMPT_FILE="$REPO/configs/continual/${PROMPT_NAME}"
 [ -f "$PROMPT_FILE" ] || { echo "run_e13: no reflection prompt at $PROMPT_FILE" >&2; exit 2; }
@@ -137,9 +170,26 @@ play_round() { # <round>
       CONTINUAL_PROMPT_SHA="$PROMPT_SHA" CONTINUAL_SPEC_SHA="$SPEC_SHA" \
       CONTINUAL_HARNESS_MODE="$MODE" \
       ${PLAYERS_EDIT:+CONTINUAL_SELF_EDIT="$PLAYERS_EDIT"} \
-      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" 200 "$N_SEEDS" \
+      "$REPO/tools/cli_harness_eval/launch_cell.sh" prime_agent "$out" "${MAX_CALLS:-200}" "$N_SEEDS" \
     && echo "[done ] $(date -u +%H:%M:%S) OK  $out" \
     || echo "[FAIL ] $(date -u +%H:%M:%S) rc=$? $out"
+  # Code write-back, in PARALLEL with the store write-back below and not
+  # instead of it: the two merge different artifacts. The store keeps the prose
+  # (memories, and the create_skill entries that ROUTE to netplay.<fn>); this
+  # keeps the function bodies. Both run at every round boundary.
+  #
+  # NETPLAY_CANONICAL is unset for every arm that is not a code arm, so this is
+  # inert for [base], [human] and [continual] -- no new command, no new file.
+  if [ -n "${NETPLAY_CANONICAL:-}" ]; then
+    "$PY_BIN" "$REPO/tools/cli_harness_eval/merge_netplay_code.py" \
+      --canonical "$NETPLAY_CANONICAL" \
+      --collect "${NETPLAY_WORK:-${INSTALL_DIR}/netplay-work}" \
+      --frozen-reference "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/src/netplay" \
+      --round "round-${r}" \
+      --report "$OUT_ROOT/round${r}/netplay_merge_report.json" | sed 's/^/[nmrg] /'
+    # Clear the per-rollout clones so the next round starts clean.
+    rm -rf "${NETPLAY_WORK:-${INSTALL_DIR}/netplay-work}"/* 2>/dev/null || true
+  fi
   if [ "$MODE" = "copy-merge" ]; then
     # Single-threaded reconciliation of the private copies. Without this the
     # players' lessons stay in per-rollout directories and never compound.
@@ -171,9 +221,30 @@ for r in $(seq 1 "$ROUNDS"); do
   fi
   play_round "$r"
   reset_daemon   # the orchestrator is a prime-agent process too
+
+  if [ "${NO_REFLECT:-}" = "1" ]; then
+    echo "[round] NO_REFLECT=1 -- skipping both orchestrators (mechanical merges only)"
+    continue
+  fi
+  # STORE orchestrator (memory harness): reflects on traces -> writes the store.
+  # Runs for every continual arm; its store is what continual-code layers ON TOP
+  # of the code channel (both accumulate, they are not exclusive).
   "$REPO/tools/cli_harness_eval/e13_orchestrate.sh" \
     "$OUT_ROOT/round${r}/corpus__prime_agent" "$CH" "$OUT_ROOT/round${r}" "$PROMPT_FILE" \
-    || echo "[FAIL ] orchestrator round $r rc=$?" >&2
+    "$OUT_ROOT" \
+    || echo "[FAIL ] store orchestrator round $r rc=$?" >&2
+
+  # CODE orchestrator: reflects on traces + the code lineage -> EDITS netplay.
+  # Only for the code arm (NETPLAY_CANONICAL set). Runs AFTER the store one and
+  # AFTER any player-edit merge, so it sees the round's final code and traces.
+  if [ -n "${NETPLAY_CANONICAL:-}" ] && [ -d "${NETPLAY_CANONICAL}/.git" ]; then
+    reset_daemon
+    CODE_PROMPT="${CODE_PROMPT_FILE:-$REPO/configs/continual/code_default.md}"
+    "$REPO/tools/cli_harness_eval/code_orchestrate.sh" \
+      "$OUT_ROOT/round${r}/corpus__prime_agent" "$NETPLAY_CANONICAL" "$OUT_ROOT" "$r" \
+      "$CODE_PROMPT" \
+      || echo "[FAIL ] code orchestrator round $r rc=$?" >&2
+  fi
 done
 
 # --- freeze ------------------------------------------------------------------
@@ -183,14 +254,37 @@ done
 FINAL="$OUT_ROOT/final"; mkdir -p "$FINAL"
 cp "$CH/harness_state.json" "$FINAL/harness_state.json" 2>/dev/null || echo '{}' > "$FINAL/harness_state.json"
 cp "$SPEC" "$FINAL/experiment.toml"; cp "$PROMPT_FILE" "$FINAL/reflection_prompt.md"
-cp "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.md" "$FINAL/SKILL.md" 2>/dev/null || true
-"$PY_BIN" - "$FINAL" "$RUN" "$SPEC_SHA" "$PROMPT_SHA" <<'PYF'
+# The code tree is frozen the same way and for the same reason: the held-out
+# evaluation must run against a FIXED sha, not a moving tree. `netplay_commit`
+# is recorded beside it so a cell is replayable from its own artifact, exactly
+# as `tool_tier_commit` already makes the tool surface replayable.
+if [ -n "${NETPLAY_CANONICAL:-}" ] && [ -d "$NETPLAY_CANONICAL/.git" ]; then
+  cp -a "$NETPLAY_CANONICAL" "$FINAL/netplay"
+  git -C "$NETPLAY_CANONICAL" rev-parse --short HEAD > "$FINAL/netplay_commit" 2>/dev/null || true
+  echo "[freeze] netplay tree at $(cat "$FINAL/netplay_commit" 2>/dev/null || echo unknown)"
+fi
+# The document this arm actually served. A code arm serves SKILL.code.md, so
+# copying SKILL.md unconditionally would freeze a doc the agent never saw --
+# and it is the doc that tells the agent its code is editable at all.
+case "$TIER" in
+  continual-code*) _SKILL_SRC="SKILL.code.md" ;;
+  *)               _SKILL_SRC="SKILL.md" ;;
+esac
+cp "$REPO/harnesses/nethack-prime-agent/nethack_prime_agent/skill/$_SKILL_SRC" \
+   "$FINAL/SKILL.md" 2>/dev/null || true
+"$PY_BIN" - "$FINAL" "$RUN" "$SPEC_SHA" "$PROMPT_SHA" "$TIER" <<'PYF'
 import json, pathlib, sys, hashlib
-final, run, spec_sha, prompt_sha = pathlib.Path(sys.argv[1]), *sys.argv[2:]
+final, run, spec_sha, prompt_sha, tier = pathlib.Path(sys.argv[1]), *sys.argv[2:]
 state = json.loads((final / "harness_state.json").read_text())
 counts = {k: len(v) for k, v in state.get("entries", {}).items()}
 (final / "FROZEN.json").write_text(json.dumps({
     "run": run, "spec_sha256_16": spec_sha, "prompt_sha256_16": prompt_sha,
+    # The tier is recorded so eval_frozen.sh does not have to guess it. Before
+    # this, that script hardcoded `continual`, which would have evaluated a code
+    # arm with the agent's code absent and reported the number as the arm's.
+    "tier": tier,
+    "netplay_commit": (final / "netplay_commit").read_text().strip()
+                      if (final / "netplay_commit").exists() else None,
     "entry_counts": counts,
     "harness_state_sha256": hashlib.sha256((final / "harness_state.json").read_bytes()).hexdigest(),
     "note": "Evaluate with tools/cli_harness_eval/eval_frozen.sh; the store is "
