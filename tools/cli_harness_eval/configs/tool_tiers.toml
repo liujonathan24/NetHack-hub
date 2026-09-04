@@ -349,6 +349,46 @@ skill_doc_coords = false
 skill_set = "np_core,request_map,search,save,wiki"
 max_calls = 50
 
+# ---------------------------------------------------------------------------
+# THE ONLY DELTA FROM [e16_gewiki_norb] IS `reveal_map = 0.0`: the Go-Explore
+# arm run at the observability floor instead of with the map revealed.
+#
+# Why it is built on [e16_gewiki_norb] and not on [base]. Go-Explore cannot run
+# on [base]. The archive is written by the `save` skill, and [base] inherits
+# the global contract's `skill_set = "np_core,request_map,search"`, which does
+# not publish it -- a base-tier Go-Explore run would have nothing to checkpoint,
+# no archive to select from, and so no selection loop, which is the entire
+# object of E16. "Base + fog" as a Go-Explore arm therefore resolves to this:
+# the arm we already ran, with the one perception knob turned off.
+#
+# What that buys. treesmoke11, _r2 and _r3 are three replicas of
+# [e16_gewiki_norb] on game seed 1 with the map revealed. They are this arm's
+# matched control, at the same seed and the same replica count, differing in
+# one factor. Nothing else moves: skill_set, model, character, variant,
+# task_spec, max_calls and max_relaunches are all inherited, exactly as they
+# are for [v0_fog] against the E14 base control.
+#
+# Relationship to [v0_fog]. Same knob, different scaffold -- v0_fog is fog on a
+# single uninterrupted life, this is fog with an archive and an orchestrator.
+# Read together they say whether checkpoint selection recovers what partial
+# observability costs, which neither arm answers alone.
+#
+# COST NOTE. Fog is not free per rollout even though it shrinks the per-turn
+# payload. Measured on v0_fog against its E14 control: prompt bytes fall ~2%
+# per call, but games run ~1.5x longer (median 103 -> 157 LM calls) and context
+# cost grows superlinearly with trajectory length, so spend per rollout rose
+# 2.69x. That measurement is confounded -- v0_fog also served max_relaunches=2
+# where the E14 control served 0 -- so treat 2.69x as an upper bound, not a
+# coefficient.
+[e16_gewiki_norb_fog]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki_norb_fog.contract]
+skill_set = "np_core,request_map,search,save,wiki"
+[e16_gewiki_norb_fog.contract.tune]
+reveal_map = 0.0
+
 [continual]
 # STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
 # store the agent writes for itself, so its floor must be the same floor the
