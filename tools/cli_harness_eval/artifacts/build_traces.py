@@ -128,7 +128,9 @@ var NOTES={
   treesmoke7:'<p>Ran blind on two channels at once — no nutrition in the ledger, and the player’s account never delivered (a role lookup one level too shallow returned <code>""</code> every round). Watch the orchestrator build a confident theory about a level-draining monster that does not exist.</p>',
   treesmoke6:'<p>Rollback published, which also arms forced revive. Attempts are not single-life here.</p>',
   'treesmoke10.aborted':'<p>Stopped and kept for the record. It lost 2 of 4 attempts to infrastructure rather than gameplay: one <code>watchdog_stall</code> that discarded 405 played turns and $29.21, and one real archive defect — restore fidelity on c28, score meta=169 vs engine=219, a <b>model-authored</b> save taken at a level boundary before the 50-point depth bonus settled (<a href="https://github.com/liujonathan24/NetHack-hub/issues/46">issue #46</a>).</p><p>It is also the run whose orchestrator read slow attempts as failures and answered by demanding faster descent — the reason the prompt now says slow is not failing.</p>',
-  treesmoke11:'<p>Replaces treesmoke10. Winners’-norm signal from round 1 into an empty archive, plus the new rule that an attempt which comes back stronger has done something even when it gained no depth.</p>'
+  treesmoke11:'<p>Replaces treesmoke10. Winners’-norm signal from round 1 into an empty archive, plus the new rule that an attempt which comes back stronger has done something even when it gained no depth.</p>',
+  treesmoke11_r2:'<p>Second replica of treesmoke11 — same tier, same prompts, same seed, independent orchestrator session. It exists so the arm is reported at n=3 rather than n=1.</p><p>It is the arm that has gone furthest on the experience axis: BALROG min 17.91, more than double any other run in the program.</p>',
+  treesmoke11_r3:'<p>Third replica of treesmoke11, identical setup to r2. Read the three replicas against each other: same configuration, and the spread between them is the run-to-run noise any single-session result has to clear.</p>'
 };
 
 function block(cls,who,whoCls,meta,text,extra){

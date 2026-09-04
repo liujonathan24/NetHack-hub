@@ -23,7 +23,13 @@ cd /root/nld/e16_runs || exit 1
 #   treesmoke6  publishes rollback, so its attempts are not single-life
 #   nullsmoke1  the matched null for treesmoke7, not for these
 #   treesmoke10 aborted; 2 of 4 attempts lost to infrastructure
-RUNS="treesmoke8 treesmoke11 treesmoke11_r2 treesmoke11_r3"
+#   e16_s{0,2,3,4}_r1 are the seed sweep: one replica per seed nobody had
+#   played, capped at 30 attempts. The three treesmoke11 runs are all seed 1.
+#   e16_gem_s1_r1 was DELETED. It was meant to run google/gemini-3.7-flash but
+#   the MODEL env override is overwritten by the tier registry, so it played
+#   glm-5.2 -- a duplicate seed-1 replica, not a Gemini arm. A real Gemini run
+#   needs a declared tier; there is no env path that sets the player model.
+RUNS="treesmoke8 treesmoke11 treesmoke11_r2 treesmoke11_r3 e16_s0_r1 e16_s2_r1 e16_s3_r1 e16_s4_r1"
 
 "$PY" "$SP/gen_e16_data.py" $RUNS > "$SP/e16_data.json" 2>"$SP/.gen_data.err" || {
   echo "[refresh] FAILED generating e16_data.json"; tail -3 "$SP/.gen_data.err"; exit 1; }
@@ -74,3 +80,9 @@ for p in glob.glob('/proc/[0-9]*'):
     if 'e16_orchestrator' in cm and '/bin/bash -c' not in cm: alive+=1
 print("  orchestrators alive: %d"%alive)
 PY
+
+# Mirror the build chain out of /tmp on every tick. The scratchpad is session-
+# scoped; this is the only thing standing between a cleared /tmp and rebuilding
+# the generators from scratch. Never fails the refresh -- a backup problem must
+# not stop the artifacts from being published.
+bash /root/nld/e16_runs/backup_artifacts.sh 2>&1 | sed 's/^/  /' || true

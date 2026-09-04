@@ -3,6 +3,11 @@
 import json, os
 
 SP = os.environ.get("E16_ART_DIR") or os.path.dirname(os.path.abspath(__file__))
+# BOTH builders write into SP, and whatever publishes them must publish from
+# SP too. An earlier session wrote here but published a copy one level up, so
+# every rebuild landed on a file nobody read and the published page sat frozen
+# for a day. Point E16_ART_DIR at the directory you publish from; do not
+# hardcode a path, which is the same defect from the other direction.
 OUT = os.path.join(SP, "e16_explorer.html")
 DATA = json.load(open(f"{SP}/e16_data.json"))
 CURVES = json.load(open(f"{SP}/curves.json"))
@@ -91,7 +96,9 @@ svg.tree g.node:focus-visible circle.dot{stroke:var(--accent);stroke-dasharray:3
 .segbar button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
 .segbar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 #xy{overflow-x:auto;padding:12px 8px 4px}
-svg.xy .norm{fill:none;stroke:var(--ink-3);stroke-width:2;stroke-dasharray:6 4}
+svg.xy .norm{fill:none;stroke:var(--ink-3);stroke-width:2}
+/* interpolated stretch of the norm: same colour, visibly not the same claim */
+svg.xy .norm.interp{stroke-dasharray:2 4;stroke-width:1.75;opacity:.8}
 svg.xy .path{fill:none;stroke-width:2.4;stroke-linejoin:round;stroke-linecap:round}
 svg.xy .end{stroke-width:2}
 svg.xy .normlab{font-family:Archivo,sans-serif;font-size:9.5px;font-weight:600;fill:var(--ink-3)}
@@ -147,7 +154,7 @@ svg.chart .dimline{opacity:.28}
 <section class="pane" id="chartpane" style="margin-bottom:20px">
   <h2>Improvement over the run &mdash; cumulative LM turns vs best BALROG so far</h2>
   <p style="margin:0;padding:10px 16px 0;font-size:.86rem;color:var(--ink-2);max-width:78ch">Best-so-far, never resets. Solid is BALROG <b>max</b> (set by depth); dashed is <b>min</b> (set by XL). Dotted verticals mark where each attempt ended. Curves read the turn stream directly, so they include an attempt still in flight; the tree below shows closed attempts only.</p>
-  <div class="segbar" role="group" aria-label="metric">
+  <div class="segbar" id="metricseg" role="group" aria-label="metric">
     <button data-m="both" aria-pressed="true">both</button>
     <button data-m="max" aria-pressed="false">BALROG max</button>
     <button data-m="min" aria-pressed="false">BALROG min</button>
@@ -158,7 +165,11 @@ svg.chart .dimline{opacity:.28}
 
 <section class="pane" id="xypane" style="margin-bottom:20px">
   <h2>Depth against experience &mdash; where every run actually went</h2>
-  <p style="margin:0;padding:10px 16px 0;font-size:.86rem;color:var(--ink-2);max-width:78ch">Each path is one run's high-water state as it advanced: x is dungeon level, y is experience level. The dashed line is the pace <b>winning human games</b> keep &mdash; the median XL at which 433 ascensions first reached each depth. A run that hugs the bottom is diving without getting stronger.</p>
+  <p style="margin:0;padding:10px 16px 0;font-size:.86rem;color:var(--ink-2);max-width:78ch">Each path is one run's high-water state as it advanced: x is dungeon level, y is experience level. The grey line is the pace <b>winning human games</b> keep &mdash; the median XL at which ascensions first reached each depth. It is <b>solid to depth 20</b>, where the norm is published depth-by-depth from 433 winners, and <b>dotted from 21 to 50</b>, where it is drawn between the three anchors the extended curve states from 824 winners: XL&nbsp;12 at depth&nbsp;20, 17 by 31, 20 at 50. Depth stops at 50 because the percentile table caps there. On the full plane every agent run sits in the bottom-left corner &mdash; that is the finding, not a plotting artifact; switch to <i>agents' range</i> to read the paths.</p>
+  <div class="segbar" id="zoomseg" role="group" aria-label="axis range">
+    <button data-z="full" aria-pressed="true">full plane (D1&ndash;50, XL1&ndash;30)</button>
+    <button data-z="agents" aria-pressed="false">agents&rsquo; range</button>
+  </div>
   <div id="xy"></div>
   <div class="legend" id="xylegend"></div>
 </section>
@@ -382,14 +393,30 @@ function drawDetail(){
 
 var C=CURVE_RUNS;
 var METRIC='both';
-// normXL(d): median XL at which winners first reach depth d. Step function as
-// published: XL 1 to depth 3, parity to 9, flattening to 12 by 15, flat to 20.
+var ZOOM='full';
+// normXL(d): median XL at which winners first reach depth d. MUST stay in step
+// with norm_xl() in tools/cli_harness_eval/e16_level_balance.py -- that is the
+// function the orchestrator is actually served, and a plot that disagrees with
+// the served signal is worse than no plot.
+//   d 1-20  published depth-by-depth (433 winners): XL 1 to depth 3, parity to
+//           9, flattening to 12 by 15, flat 12 to 20.
+//   d 21-50 the extended curve (824 winners), linear between its three stated
+//           anchors -- 12 at 20, 17 at 31, 20 at 50. INTERPOLATED, and drawn
+//           dotted so the plot never passes it off as measured.
+//   d > 50  null. The percentile table caps at 50; 51-53 are endgame planes.
+var NORM_ANCHORS=[[20,12],[31,17],[50,20]];
+var NORM_MAX_D=50, NORM_SOLID_D=20, XL_MAX=30;
 function normXL(d){
   if(d<1) return null;
   if(d<=3) return 1;
   if(d<=9) return d;
   if(d<=15) return Math.min(12, 9+Math.round((d-9)*3/6));
   if(d<=20) return 12;
+  if(d>NORM_MAX_D) return null;
+  for(var i=0;i<NORM_ANCHORS.length-1;i++){
+    var a=NORM_ANCHORS[i], b=NORM_ANCHORS[i+1];
+    if(d<=b[0]) return Math.round(a[1]+(b[1]-a[1])*(d-a[0])/(b[0]-a[0]));
+  }
   return null;
 }
 var RUNCOLORS={};
@@ -468,9 +495,15 @@ function drawXY(){
   var W=Math.max(620,Math.min(1180,(window.innerWidth||1000)-90)), H=330;
   var L=48,R=118,T=14,B=42;
   var maxD=1,maxX=1;
-  runs.concat(BASELINES).forEach(function(r){var c=C[r]; if(!c)return;
-    c.points.forEach(function(p){maxD=Math.max(maxD,p.dlvl);maxX=Math.max(maxX,p.xl);});});
-  maxD=Math.max(12,Math.ceil(maxD)+1); maxX=Math.max(12,Math.ceil(maxX)+1);
+  if(ZOOM==='full'){
+    // The whole plane the winners' data covers, so the agents are read against
+    // the journey they are a fraction of rather than against their own extent.
+    maxD=NORM_MAX_D; maxX=XL_MAX;
+  }else{
+    runs.concat(BASELINES).forEach(function(r){var c=C[r]; if(!c)return;
+      c.points.forEach(function(p){maxD=Math.max(maxD,p.dlvl);maxX=Math.max(maxX,p.xl);});});
+    maxD=Math.max(12,Math.ceil(maxD)+1); maxX=Math.max(12,Math.ceil(maxX)+1);
+  }
   function X(d){return L+(W-L-R)*((d-1)/(maxD-1));}
   function Y(x){return T+(H-T-B)*(1-(x-1)/(maxX-1));}
   var s='<svg class="xy" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
@@ -483,13 +516,27 @@ function drawXY(){
   }
   s+='<text class="axlab" x="'+((L+W-R)/2)+'" y="'+(H-6)+'" text-anchor="middle">dungeon level</text>';
   s+='<text class="axlab" transform="translate(12,'+((T+H-B)/2)+') rotate(-90)" text-anchor="middle">experience level</text>';
-  // winners' norm
-  var nd='';
-  for(var d2=1;d2<=maxD;d2++){var n=normXL(d2); if(n==null)continue;
-    nd+=(nd?' L':'M')+X(d2)+','+Y(Math.min(n,maxX));}
-  s+='<path class="norm" d="'+nd+'"/>';
-  var lastN=normXL(Math.min(maxD,20));
-  s+='<text class="normlab" x="'+(X(Math.min(maxD,20))+6)+'" y="'+(Y(Math.min(lastN,maxX))+3)+'">winners\u2019 pace</text>';
+  // WINNERS' NORM, drawn in two segments that say what they are. Solid to
+  // depth 20 is published per depth; dotted past it is interpolated between
+  // three anchors. One continuous line would claim the same standing for both.
+  var solid='',interp='';
+  for(var d2=1;d2<=Math.min(maxD,NORM_MAX_D);d2++){
+    var n=normXL(d2); if(n==null)continue;
+    var seg=(d2<=NORM_SOLID_D)?'solid':'interp';
+    var pt=X(d2)+','+Y(Math.min(n,maxX));
+    if(seg==='solid'){ solid+=(solid?' L':'M')+pt; }
+    else{
+      // start the dotted run at the last solid point so there is no visual gap
+      if(!interp){ var j=normXL(NORM_SOLID_D);
+        interp='M'+X(NORM_SOLID_D)+','+Y(Math.min(j,maxX))+' L'+pt; }
+      else interp+=' L'+pt;
+    }
+  }
+  if(solid) s+='<path class="norm" d="'+solid+'"/>';
+  if(interp) s+='<path class="norm interp" d="'+interp+'"/>';
+  var labD=Math.min(maxD,NORM_MAX_D), labN=normXL(labD);
+  if(labN!=null) s+='<text class="normlab" x="'+(X(labD)+6)+'" y="'
+    +(Y(Math.min(labN,maxX))+3)+'">winners\u2019 pace</text>';
   runs.forEach(function(r){
     var c=C[r]; if(!c||!c.points.length)return;
     var col=RUNCOLORS[r], dim=(r===cur?'':' dimline');
@@ -534,14 +581,21 @@ function draw(){
   [].forEach.call(nav.children,function(b,i){b.setAttribute('aria-current',runs[i]===cur);});
   drawMeta(); drawChart(); drawXY(); drawTree(); drawDetail();
 }
-[].forEach.call(document.querySelectorAll('.segbar button'),function(b){
-  b.addEventListener('click',function(){
-    METRIC=b.dataset.m;
-    [].forEach.call(document.querySelectorAll('.segbar button'),function(x){
-      x.setAttribute('aria-pressed',String(x===b));});
-    drawChart();
+// Each segbar owns only its own buttons. A document-wide selector here used to
+// be harmless with one toggle on the page; with two it would clear the other's
+// pressed state on every click.
+function wireSeg(id,fn){
+  var bar=document.getElementById(id); if(!bar) return;
+  [].forEach.call(bar.querySelectorAll('button'),function(b){
+    b.addEventListener('click',function(){
+      [].forEach.call(bar.querySelectorAll('button'),function(x){
+        x.setAttribute('aria-pressed',String(x===b));});
+      fn(b);
+    });
   });
-});
+}
+wireSeg('metricseg',function(b){ METRIC=b.dataset.m; drawChart(); });
+wireSeg('zoomseg',  function(b){ ZOOM=b.dataset.z;  drawXY();    });
 draw();
 })();
 </script>
