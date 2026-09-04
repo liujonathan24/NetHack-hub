@@ -48,7 +48,25 @@ from nethack_harness.prompt.balrog import balrog_both  # noqa: E402
 
 #: Depth range the winners' norm is published for. Past it we return None
 #: rather than extrapolating a standard the source does not state.
-NORM_MAX_DLVL = 20
+#:
+#: WAS 20, NOW 50. The v1 appendix cropped its figure at depth 20 and that is
+#: where the step function stopped. "Lopsidedness, Formally" also publishes the
+#: extended curve on the paper's fig4 axes: "The winners' norm is drawn wherever
+#: >= 20 of the 824 v2 winners reached that depth, which turns out to be all of
+#: d = 1..50: it climbs from XL 12 at depth 20 to 17 by depth 31 and 20 at depth
+#: 50." Depth is capped at 50 by the percentile table (the endgame planes coded
+#: 51-53 sit above the cap), so 50 is the real end of the data, not a crop.
+NORM_PUBLISHED_MAX_DLVL = 20   # depth-by-depth, 433 winners -- what is SERVED
+NORM_MAX_DLVL = 50             # end of the extended curve, display only
+
+#: The published anchors of the winners' norm beyond the v1 step function.
+#: Only these three points are stated depth-by-depth past 15; 21..49 is a
+#: straight line between them, which is an INTERPOLATION and is labelled as one
+#: everywhere it is drawn. Splicing the v2 curve onto the v1 step function is
+#: safe because the source checks exactly that: "the winners' XL-at-depth norm
+#: is identical at every depth 1-20 computed from 433 or 824 winners -- the
+#: median staircase did not move one level".
+NORM_ANCHORS = ((20, 12), (31, 17), (50, 20))
 
 
 def pair(dlvl: int, xl: int) -> tuple:
@@ -57,13 +75,30 @@ def pair(dlvl: int, xl: int) -> tuple:
     return 100.0 * a, 100.0 * b
 
 
-def norm_xl(dlvl: int):
+def norm_xl(dlvl: int, extended: bool = False):
     """normXL(d): median XL at first reaching depth d among the winners.
 
-    The appendix gives it as a step function -- "XL 1 through depth 3, then
-    roughly parity (norm ~ d) to depth 9, flattening to 12 by depth 15" -- and
-    that is exactly what is encoded, including the flat 12 out to the published
-    limit of depth 20.
+    Depth 1-20 is the published step function -- "XL 1 through depth 3, then
+    roughly parity (norm ~ d) to depth 9, flattening to 12 by depth 15" -- held
+    flat at 12 to depth 20, exactly as the appendix states it.
+
+    `extended` CHANGES WHAT THE ORCHESTRATOR IS SERVED, so it defaults to False
+    and every existing caller keeps the old answer. This module feeds the live
+    ledger's `dXL` column and the STANDING OF THE RUN line, and three runs are
+    in flight; silently moving the standard mid-run would change agent
+    behaviour and break comparability between attempts inside one run. The
+    depth-1-20 values are identical either way, so the default is not a worse
+    number, it is the same number with an honest edge.
+
+    With `extended=True` depth 21-50 continues onto the extended curve through
+    the three published anchors in NORM_ANCHORS (12 at 20, 17 at 31, 20 at 50),
+    linearly between them. Those intermediate depths are INTERPOLATED: the
+    source states the anchors and the shape, not a value at every depth. Use it
+    for display and offline analysis, where the interpolated stretch can be
+    drawn as visibly different from the measured one.
+
+    Past depth 50 this returns None under either setting. That is the percentile
+    table's cap, not a crop -- the endgame planes coded 51-53 sit above it.
     """
     d = int(dlvl)
     if d < 1:
@@ -74,8 +109,13 @@ def norm_xl(dlvl: int):
         return d
     if d <= 15:
         return min(12, 9 + round((d - 9) * 3 / 6))
-    if d <= NORM_MAX_DLVL:
+    if d <= NORM_PUBLISHED_MAX_DLVL:
         return 12
+    if not extended or d > NORM_MAX_DLVL:
+        return None
+    for (d0, n0), (d1, n1) in zip(NORM_ANCHORS, NORM_ANCHORS[1:]):
+        if d <= d1:
+            return round(n0 + (n1 - n0) * (d - d0) / (d1 - d0))
     return None
 
 
@@ -98,7 +138,8 @@ def hazard_beta(dlvl: int):
 def _advice(dlvl, xl, norm, dd, beta) -> str:
     if norm is None:
         return (f"Dlvl {dlvl} is past the depth range the winners' norm covers "
-                f"(1-{NORM_MAX_DLVL}); no experience target is published here.")
+                f"(1-{NORM_PUBLISHED_MAX_DLVL}); no experience target is "
+                f"published here.")
     if dd is None or dd <= 0:
         return (f"At Dlvl {dlvl} the hero is XL {xl}; winners first reaching this "
                 f"depth are typically XL {norm}. It is at or above the winning "
