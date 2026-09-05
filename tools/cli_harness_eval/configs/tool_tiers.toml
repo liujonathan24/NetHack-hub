@@ -1,0 +1,411 @@
+# Tool-tier registry for reproducible cells (docs/CONTINUAL_HARNESS_BASELINE.md).
+#
+# A cell declares ONE tier; the launcher expands it to the flags below and the
+# resolved values land in the cell's output config.toml. all-off == the tree as
+# the E10 baseline measured it; all-on == current HEAD behaviour.
+#
+# [base] -- frozen. The E10 reference surface (np_core + request_map + search
+#   on the honest harness). Reference numbers: median 3.54 / mean 5.34 /
+#   14 of 15 died / ceiling dl11 (outputs/e10_baseline/).
+# [human] -- the manually engineered post-baseline fixes (PR #29/#31):
+#   E12 measured repeat-cluster budget 67% -> 35%, outcomes unchanged.
+#   Additions to this tier require a commit + a measured cell.
+# [continual] -- reserved for tools/edits the continual harness generates.
+#   MUTATES over time: every continual run must pin this file's git commit and
+#   the generated-code commit in its output config.toml, and is its own arm --
+#   never pooled with base or human.
+
+# ---------------------------------------------------------------------------
+# THE CELL CONTRACT. Emitted for EVERY tier, because a tier selects which
+# post-baseline fixes are on -- not what game is played. Without this,
+# `TOOL_TIER=base` was a pure no-op: it expanded to nothing, so a cell inherited
+# configs/prime_agent.toml (skill_set=netplay_true, variant=B0, 150 calls, 16
+# seeds) and was wrong on four factors while calling itself the E10 baseline.
+#
+# These are the values outputs/e10_baseline/ actually ran. Changing any of them
+# is a new baseline experiment with re-measured reference numbers, not an edit.
+[contract]
+skill_set = "np_core,request_map,search"
+auto_dismiss = "false"
+variant = "BBOX_MIN"
+# 0 = UNCAPPED: every rollout plays until the character dies, ascends, or NLE
+# truncates. Previously 200, which turned out to censor the thing we measure:
+# in E13-v2 round 2, three of five rollouts were still ALIVE when the budget ran
+# out (at dlvl 6, 8 and 9 and still descending), so `max_dlvl_reached` was a
+# lower bound, not a score -- and because round 1 had only one such rollout and
+# round 2 had three, the bias fell unevenly across the very rounds being
+# compared. Deaths halved 4 -> 2 while mean depth looked flat; on the games that
+# actually finished it was 8.00 -> 10.00.
+#
+# Backstops that remain, so this cannot run away: NLE's own
+# max_episode_steps=100_000 in-game steps, and [timeout] rollout=7200s per
+# rollout in the arm config.
+max_calls = 0
+seeds = [0, 1, 2, 3, 4]
+model = "z-ai/glm-5.2"
+character = "Val-hum-neu-fem"
+task_spec = "full_nle"
+# Harness-side factors the baseline also fixed. allow_batching is load-bearing:
+# with it on, the no-batch rule is stripped from the served document AFTER the
+# frozen-doc hash check, so a cell labelled [base] served 4753 bytes where E10
+# served 4829 -- byte-fidelity defeated with no error.
+allow_batching = false
+# E15 fix2 (user-approved, 2026-08-26): 2, not 0. The prime_agent.toml
+# "ARM SYMMETRY" rationale for 0 protected a prime-vs-claude_code scaffold
+# comparison; the E15 probe grid is prime-only, and 0 let empty completions
+# (model returns finish=stop with no text and no tool call) end LIVE runs as
+# `agent_completed` -- P3 r1 seed 4 died this way at D11 (best in arm),
+# v2_bjson lost 3/5 rollouts, v2_json seed 1 was cut at D10. The relaunch
+# loop resumes the same MCP tool server with _RESUME_PROMPT; the count is
+# recorded per rollout as metrics.prime_agent_relaunches. CAVEAT for
+# analysis: the frozen E14 control ran with 0, so depth tails in retry-on
+# arms are not strictly harness-identical to control -- check the relaunch
+# metric before attributing a tail difference to the treatment.
+max_relaunches = 2
+max_parallel_skill_calls = 0
+
+[contract.tune]
+# Dropped by the E9/E10-era launchers, which is what made "control" cells run
+# fog'd. Its absence is invisible in the launch command and visible only in the
+# resolved config.toml -- hence the read-back in preflight.
+reveal_map = 1.0
+
+[contract.code_pin]
+# The tree state the reference numbers describe.
+branch = "exp/e8-planning-guidance"
+honesty_pass = ["fd8aa13", "9b8d5a4"]
+launcher_restore = "0458275"
+
+[contract.reference]
+# RE-DERIVED FROM THE RAW ROLLOUTS, 2026-08-29. Two of these numbers were
+# wrong; both are corrected here and the derivation is stated so the next
+# reader can check rather than inherit.
+#
+# `runs` pointed at a path that does not exist in this tree. The E10 data
+# lives in the hub-eval checkout, not zombie-fix.
+runs = "/root/nld/hub-eval/outputs/e10_baseline/NPCORE_v3H_r{1,2,3}__prime_agent"
+median_balrog = 3.54
+mean_balrog = 5.34
+# WAS "14/15", AND THAT DOES NOT REPRODUCE. All 15 rollouts terminate
+# `game_over` with `died = 1.0`. The three traces.jsonl files hold EIGHTEEN
+# rows, not fifteen: r2 seed 3, r3 seed 0 and r3 seed 2 were each interrupted
+# (2x harness_timeout, 1x call_budget_exhausted) and resumed, emitting a second
+# row for the same seed. Counting rows rather than rollouts gives 18, and one
+# of the interim rows was miscounted as a survivor. Depth and BALROG are
+# unaffected -- they are high-water marks.
+died = "15/15"
+ceiling_dlvl = 11
+# These numbers are CALL-CAPPED and are not on the same axis as any uncapped
+# arm. E10 ran max_turns = max_skill_calls = 200; E14, every E15 probe and E16
+# run uncapped. The uncapped control is outputs/e14_uncapped/base_r{1,2,3},
+# which measures mean 9.96 / median 6.96 / ceiling Dlvl 13 over the same 15
+# rollouts -- nearly double, because the cap was censoring the measurement.
+# Compare an uncapped arm against `uncapped_*` below, never against the E10
+# figures above.
+uncapped_runs = "outputs/e14_uncapped/base_r{1,2,3}__prime_agent"
+uncapped_mean_balrog = 9.96
+uncapped_median_balrog = 6.96
+uncapped_ceiling_dlvl = 13
+uncapped_died = "15/15"
+# registry.json reports [mean, STANDARD ERROR], not [mean, SD]. base's
+# [9.96, 2.19] is 8.464/sqrt(15). Multiply by sqrt(n) for SD.
+error_bars = "standard error, not SD"
+balrog_metric = "balrog_both (vendored BALROG achievement table), 0-100 percent"
+
+[base]
+# env-side (ENV_ARGS -> tool_flags)
+netplay_telemetry = false
+melee_hints = false
+# harness-side (PrimeAgentHarnessConfig)
+skill_doc_coords = false
+
+[human]
+netplay_telemetry = true
+melee_hints = true
+skill_doc_coords = true
+
+# ---------------------------------------------------------------------------
+# E15 FAILURE-MODE PROBE TIERS (2026-08-25). Each is [base] -- all three fix
+# flags off, frozen harness -- plus exactly ONE differing factor, so the E14
+# uncapped base cells (outputs/e14_uncapped/base_r{1,2,3}) are the control arm
+# for every one of them. A [<tier>.contract] sub-table overrides the global
+# contract for that tier only (variant / skill_set / tune knobs); everything
+# not named is inherited, including tune.reveal_map = 1.0.
+
+[p1_gate]      # P1: descent gate, suggest-first (NLD human-norm line at each descend)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+descent_gate = "norm"
+
+[p2_crisis]    # P2: crisis directive (edge-triggered HP line; once-per-level pacing line)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+crisis_directive = "on"
+
+[p3_rollback]  # P3: rollback(n) published; per-turn engine snapshots only in this arm
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[p3_rollback.contract]
+skill_set = "np_core,request_map,search,rollback"
+
+[p3_revive_d5] # P3 dose arm: forced revive with a 5-death budget per level
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+deaths_per_level = 5
+[p3_revive_d5.contract]
+skill_set = "np_core,request_map,search,rollback"
+
+[c1_doors]     # C1: no locked doors (engine generation knob; mklev.c)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c1_doors.contract.tune]
+locked_door = 0.0
+
+[v0_fog]       # V0: FOG OF WAR RESTORED -- the observability floor
+# The opposite end of the perception axis from [v1_b1] (full map every turn) and
+# [v2_json] (structured map). Those two ADD spatial information; this one takes
+# away the reveal the whole benchmark line assumes, so the agent sees only what
+# it has walked past.
+#
+# `tune.reveal_map = 1.0` is in the GLOBAL contract precisely because dropping it
+# is what made the E9/E10-era "control" cells run fog'd by accident. Setting it
+# to 0.0 here restores that state deliberately, as a floor to report against,
+# rather than as the silent default it used to be.
+#
+# One knob, nothing else: skill_set, variant, model, character, task_spec, seeds
+# and every other tune value are inherited from [contract], so the E14 uncapped
+# base is this arm's control exactly as it is for the other probes.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v0_fog.contract.tune]
+reveal_map = 0.0
+
+[c2_d025]      # C2: room-density dose-response (doses match the V1 E8d sweep)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c2_d025.contract.tune]
+room_density = 0.25
+
+[c2_d010]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c2_d010.contract.tune]
+room_density = 0.10
+
+[c2_d0025]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[c2_d0025.contract.tune]
+room_density = 0.025
+
+[v1_b1]        # V1: fresh state every turn (canonical renderer)
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v1_b1.contract]
+variant = "B1"
+
+[v2_bjson]     # V2: map + JSON-structured state per turn
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v2_bjson.contract]
+variant = "B_JSON"
+
+[v2_json]      # V2: structured map model
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v2_json.contract]
+variant = "JSON"
+
+[v2_odjson]    # V2 follow-up: BBOX_MIN delivery, request_map returns map+JSON
+# On-demand x encoding cell (2026-08-26): quiet turns byte-identical to base;
+# only the bought look differs (ASCII map + structured JSON body). Motivated
+# by the V1 autopsy: keep the stop-and-look beat and the hidden-by-default
+# stair targeting, upgrade the purchase to coordinate-addressable state.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[v2_odjson.contract]
+variant = "BBOX_BJSON_OD"
+
+# ---------------------------------------------------------------------------
+# E16 GO-EXPLORE (2026-08-28). The GE-wiki arm of the Go-Explore-on-one-seed
+# design: an orchestrator resumes players from an archive of persistent
+# checkpoints instead of starting each attempt cold.
+#
+# THE ONLY DELTA FROM [base] IS THE SKILL SET. Doc, model, character,
+# task_spec, variant (BBOX_MIN), tune.reveal_map, auto_dismiss, max_calls (0 =
+# uncapped, which the design requires: the deepest run in the program took 353
+# calls and a cap would truncate exactly the deep pushes this experiment exists
+# to produce), allow_batching, max_relaunches, and all three fix flags are
+# inherited unchanged. Diff against [base] with:
+#     tool_tiers.py flags base | diff - <(tool_tiers.py flags e16_gewiki)
+# which must show the skill_set line and the tier-name/hash provenance lines,
+# and nothing else.
+#
+# skill_set = base + rollback + save + wiki.
+#   rollback  -- kept, not added for novelty: it is the proven converter
+#                behaviour from [p3_rollback], and publishing it is also what
+#                arms the per-turn engine snapshot ring (nethack.py:1675 gates
+#                the snapshot on the tool being published, so no other arm pays
+#                for it).
+#   save      -- the model-driven half of the checkpoint archive.
+#   wiki      -- the curated two-page knowledge base (why_do_i_keep_dying,
+#                standard_strategy), copied into the run directory at launch.
+#
+# `save` and `wiki` are in helpers._E16_UNPUBLISHED_BY_DEFAULT, which every
+# PRESET filters out, so they reach a served prompt only through an explicit
+# token in a comma-separated skill_set -- i.e. only through this line. No other
+# tier's served bytes move.
+#
+# SEEDS: the design runs seed 1 only (the program's proven deep seed: D13 in
+# the base control, D15 in forced-revive rep 2). That is NOT pinned here,
+# because the contract's seed list is a [base] factor and changing it would
+# make this tier non-comparable on a second axis; the E16 launcher passes
+# SEEDS=[1] N=1, which launch_cell.sh records in the cell's config.toml as
+# `seeds_overridden = true`.
+[e16_gewiki]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki.contract]
+skill_set = "np_core,request_map,search,rollback,save,wiki"
+
+# ---------------------------------------------------------------------------
+# THE ONLY DELTA FROM [e16_gewiki] IS THAT `rollback` IS NOT PUBLISHED.
+#
+# Why this arm exists. In [e16_gewiki] the player recovers from disaster twice
+# over, and BOTH recoveries are gated on the same token:
+#
+#   1. the model's own `rollback(n)` -- measured in treesmoke6 attempt 1 at
+#      LM 436, HP 3/41, which undid the five calls that nearly killed it; and
+#   2. FORCED REVIVE, which is not a tool at all. nethack.py:2134 and :2604
+#      gate the automatic post-death restore on `"rollback" in
+#      _allowed_skill_names`, so publishing the tool silently grants up to
+#      `deaths_per_level` (3) free deaths per level with no model choice.
+#
+# Together those make an attempt very hard to end: treesmoke6 attempt 1 ran 61
+# minutes and 539 LM calls without terminating. An attempt that does not end is
+# an orchestrator round that never happens, and the selection loop -- the thing
+# E16 is actually testing -- goes unexercised. treesmoke6 has one selection
+# record with `n_candidates_shown: 1`.
+#
+# Dropping the token removes both halves at once. That is deliberate and it is
+# ONE factor, not two: in-attempt recovery ON vs OFF. With it OFF the first
+# death is final, attempts are short, deaths are plentiful, and the ONLY thing
+# that can carry progress across them is the archive plus the orchestrator's
+# choice of where to resume. Any gain measured here is attributable to
+# selection, because nothing else survives a death.
+#
+# `save` and `wiki` stay: the archive and the knowledge base are not the
+# variable. Auto-checkpointing is independent of the rollback ring (it is
+# driven by the LM-call counter and level/XL events), so the archive still
+# fills. nethack.py:1972 stops arming the per-turn snapshot ring, which is the
+# intended saving and not a side effect to correct for.
+[e16_gewiki_norb]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki_norb.contract]
+skill_set = "np_core,request_map,search,save,wiki"
+
+# ---------------------------------------------------------------------------
+# THE ONLY DELTA FROM [e16_gewiki_norb] IS max_calls: an attempt ends after 50
+# LM calls instead of only when the hero dies.
+#
+# Why it needs its own tier rather than a CLI override: launch_cell refuses a
+# MAX_CALLS that contradicts the contract, and it is right to. The contract's
+# max_calls is part of what the reference numbers describe -- a capped arm is a
+# different experiment from an uncapped one, and saying so in the registry is
+# the difference between an arm and an undocumented flag.
+#
+# What the cap buys. treesmoke8 spent 489 of its 1018 calls on attempt 1 alone
+# and gave the orchestrator 8 decisions in the whole run. At 50 the same spend
+# buys ~20 decisions. If archive selection is the thing that works, more
+# selections per dollar should show up as a steeper progress curve; if it is
+# not, this arm will spend the same money for less depth and say so plainly.
+#
+# NOT comparable to the uncapped reference rows. E10 was call-capped at 200 and
+# measured 5.34 mean BALROG where the uncapped E14 control measured 9.96 -- the
+# cap censored the measurement. A 50-call cap censors harder. This arm's null
+# is treesmoke8 (same tier, uncapped) at matched TOTAL calls, not the published
+# baselines.
+[e16_gewiki_norb_c50]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki_norb_c50.contract]
+skill_set = "np_core,request_map,search,save,wiki"
+max_calls = 50
+
+# ---------------------------------------------------------------------------
+# THE ONLY DELTA FROM [e16_gewiki_norb] IS `reveal_map = 0.0`: the Go-Explore
+# arm run at the observability floor instead of with the map revealed.
+#
+# Why it is built on [e16_gewiki_norb] and not on [base]. Go-Explore cannot run
+# on [base]. The archive is written by the `save` skill, and [base] inherits
+# the global contract's `skill_set = "np_core,request_map,search"`, which does
+# not publish it -- a base-tier Go-Explore run would have nothing to checkpoint,
+# no archive to select from, and so no selection loop, which is the entire
+# object of E16. "Base + fog" as a Go-Explore arm therefore resolves to this:
+# the arm we already ran, with the one perception knob turned off.
+#
+# What that buys. treesmoke11, _r2 and _r3 are three replicas of
+# [e16_gewiki_norb] on game seed 1 with the map revealed. They are this arm's
+# matched control, at the same seed and the same replica count, differing in
+# one factor. Nothing else moves: skill_set, model, character, variant,
+# task_spec, max_calls and max_relaunches are all inherited, exactly as they
+# are for [v0_fog] against the E14 base control.
+#
+# Relationship to [v0_fog]. Same knob, different scaffold -- v0_fog is fog on a
+# single uninterrupted life, this is fog with an archive and an orchestrator.
+# Read together they say whether checkpoint selection recovers what partial
+# observability costs, which neither arm answers alone.
+#
+# COST NOTE. Fog is not free per rollout even though it shrinks the per-turn
+# payload. Measured on v0_fog against its E14 control: prompt bytes fall ~2%
+# per call, but games run ~1.5x longer (median 103 -> 157 LM calls) and context
+# cost grows superlinearly with trajectory length, so spend per rollout rose
+# 2.69x. That measurement is confounded -- v0_fog also served max_relaunches=2
+# where the E14 control served 0 -- so treat 2.69x as an upper bound, not a
+# coefficient.
+[e16_gewiki_norb_fog]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e16_gewiki_norb_fog.contract]
+skill_set = "np_core,request_map,search,save,wiki"
+[e16_gewiki_norb_fog.contract.tune]
+reveal_map = 0.0
+
+[continual]
+# STARTS FROM BASE, NOT HUMAN. The continual arm's independent variable is the
+# store the agent writes for itself, so its floor must be the same floor the
+# denominator uses -- otherwise a gain could be the human fixes rather than the
+# agent's own edits. All three fix-flags stay false here, exactly as in [base];
+# what differs is that a shared continual-harness store is mounted.
+#
+# The store is per-EXPERIMENT, not global: several continual experiments run
+# side by side (different reflection prompts), each with its own run id, store
+# and output tree. Path and id are passed by the launcher (CONTINUAL_HARNESS /
+# CONTINUAL_RUN_ID) because they vary per run and cannot be named statically
+# here; both, plus the reflection-prompt hash, are pinned into every cell's
+# config.toml alongside tool_tier.
+#
+# Every experiment begins with an EMPTY store -- run_e13.sh refuses to start
+# round 0 against a non-empty one -- so "starts from the base set of skills" is
+# enforced, not merely intended.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false

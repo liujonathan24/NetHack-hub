@@ -1,0 +1,103 @@
+{
+  "rollout": "/tmp/claude-0/-root/3382b9f1-b1ec-4e18-9c3e-4585c4167d08/scratchpad/e16sim/rollouts/descend_fast",
+  "directive": "Descend as fast as possible. Find the down staircase and take it immediately. Do not explore, do not fight anything you can walk around.",
+  "expected_block": "[ORCHESTRATOR DIRECTIVE for this attempt: Descend as fast as possible. Find the down staircase and take it immediately. Do not explore, do not fight anything you can walk around.]",
+  "served_hits": [
+    {
+      "node": 6,
+      "role": "tool",
+      "offset": 1,
+      "node_len": 2251,
+      "context": "\"[ORCHESTRATOR DIRECTIVE for this attempt: Descend as fast as possible. Find the down staircase and take it immediately. Do not explore, do not fight anything you can walk around.]\\n[Refreshing the full map this turn.]\\n\\n=== MAP ===\\n\\n\\n\\n    ------      -----                         ------------\\n    |.Z.>|      |....#                        |........o..##\\n    |....|      |...|##                       |..........| #\\n    ----.-     #+...+ ##                      -.---------- #  --------------\\n        #      #|...|  ###-----                #           #  |............|\\"
+    }
+  ],
+  "n_served_nodes_with_directive": 1,
+  "assistant_mentions": [
+    {
+      "node": 7,
+      "text": "I can see the down staircase at (8,4). Let me head there and descend immediately.\nI'm a Valkyrie on dungeon level 1. I can see the down staircase at (8,4). Let me head there and descend. There's a jackal to my west and a kitten (my pet) to my east. I should avoid fighting and head to the stairs.\n\nLet me move to the down staircase at (8,4).\n\"{\\\"code\\\": \\\"\\\\nawait nethack.np_move_to(x=8, y=4)\\\\n\\\"}\""
+    },
+    {
+      "node": 20,
+      "text": "Let me try moving to the down staircase now.\nI can see the down staircase at (8,4). Let me try to move there now. I also see there are items - an emerald ring at (45,15) and armor at (47,12). But the directive says to descend fast. Let me try to move to the down staircase.\n\nActually, I should grab some useful items quickly. But the directive says descend as fast as possible. Let me try to path to the down stairs first.\n\"{\\\"code\\\": \\\"\\\\nawait nethack.np_move_to(x=8, y=4)\\\\n\\\"}\""
+    }
+  ],
+  "skill_calls": [
+    {
+      "node": 5,
+      "skill": "request_map",
+      "args": ""
+    },
+    {
+      "node": 7,
+      "skill": "np_move_to",
+      "args": "x=8, y=4"
+    },
+    {
+      "node": 10,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 13,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 16,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 18,
+      "skill": "request_map",
+      "args": ""
+    },
+    {
+      "node": 20,
+      "skill": "np_move_to",
+      "args": "x=8, y=4"
+    },
+    {
+      "node": 23,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 26,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 28,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 30,
+      "skill": "np_explore_level",
+      "args": ""
+    }
+  ],
+  "metrics": {
+    "prime_agent_relaunches": 0.0,
+    "skill_calls": 10.0,
+    "parallel_refusals": 0.0,
+    "budget_exhausted": 1.0,
+    "max_dlvl_reached": 1.0,
+    "max_xp_level": 1.0,
+    "descent_count": 0.0,
+    "scout_reward_total": 0.429,
+    "died": 0.0,
+    "terminated": 1.0,
+    "moves_executed": 0.0,
+    "balrog_pct": 0.0,
+    "balrog_min_pct": 0.0,
+    "xp_carried": 0.0,
+    "reasoning_recovered": 5.0,
+    "reasoning_inline": 0.0,
+    "reasoning_unavailable": 5.0
+  },
+  "stop_condition": "call_budget_exhausted",
+  "n_nodes": 31
+}

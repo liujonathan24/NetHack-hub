@@ -39,6 +39,7 @@ writes the operator's `~/.prime/agent`.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -81,11 +82,26 @@ _RESUME_PROMPT = (
 # package (`skills.md#python-backed-skills` layout).
 _SKILL_FILES = ("SKILL.md", "pyproject.toml", "src/nethack/__init__.py")
 
+# The no-batching instruction, verbatim. The honesty pass (9b8d5a4) rewrote
+# SKILL.md and shortened this line without updating the constant, so
+# `allow_batching=True` has been raising RuntimeError ever since -- the feature
+# was dead on both documents. Present in SKILL.md and SKILL.baseline.md
+# identically, so one constant still covers both.
 _NO_BATCH_RULE = (
-    "- Do not batch blind sequences of calls. NetHack is turn-based and adversarial;\n"
-    "  the observation after each call is what tells you whether the previous one\n"
-    "  worked.\n"
+    "- One call, read the observation, then decide. Never batch blind sequences.\n"
 )
+
+
+def _within(path: str, root: str) -> bool:
+    """Whether `path` is `root` or lives under it, after normalisation.
+
+    Used to refuse a shared continual-harness store the sandbox would not bind.
+    String-prefix comparison would accept `/tmp/vf-prime-agent-other`; this does
+    not.
+    """
+    p = os.path.normpath(os.path.abspath(path))
+    r = os.path.normpath(os.path.abspath(root))
+    return p == r or p.startswith(r + os.sep)
 
 
 def _strip_no_batch_rule(data: bytes) -> bytes:
@@ -105,6 +121,94 @@ def _strip_no_batch_rule(data: bytes) -> bytes:
         )
     return text.replace(_NO_BATCH_RULE, "").encode()
 
+
+# The coordinate-frame note aee5c43 added to SKILL.md, and the baseline wording
+# it replaced. `skill_doc_coords` OFF (the default) must serve the E10-baseline
+# doc BYTE-FOR-BYTE. That is now done by serving the frozen `SKILL.baseline.md`
+# wholesale (see `_skill_doc`); the sentence-substitution below is superseded
+# and kept only so an old caller gets the same result. Same tool_flags family as netplay_telemetry /
+# melee_hints, but consumed HERE: the doc is materialized by the harness
+# process, which never imports the env-side flag registry -- so it is a harness
+# config field, set by the same tier that sets the env flags.
+_COORD_FRAME_NOTE = (
+    "Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,\n"
+    "top to bottom) in the MAP frame: row 0 is the FIRST row of the `=== MAP ===`\n"
+    "block, the same frame `Pos:` and all `VISIBLE FEATURES` coordinates use. Do\n"
+    "NOT count rows from the raw terminal screen (it has extra message/status\n"
+    "lines) — that yields an off-by-one that silently misses every target."
+)
+
+_COORD_FRAME_BASELINE = (
+    "Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,\n"
+    "top to bottom), exactly as shown in the map."
+)
+
+
+def _restore_baseline_coord_note(data: bytes) -> bytes:
+    """Deprecated: kept so a caller that still patches gets the same result.
+
+    Superseded by serving `SKILL.baseline.md` wholesale (see `_skill_doc`). The
+    patch approach pinned ONE paragraph, so any future edit elsewhere in
+    SKILL.md would have broken byte-identity with E10 while every test still
+    passed. Serving the frozen file cannot drift by construction.
+    """
+    text = data.decode()
+    if _COORD_FRAME_NOTE not in text:
+        raise RuntimeError(
+            "skill_doc_coords=False but the coordinate-frame note was not found "
+            "verbatim in SKILL.md -- the file changed and `_COORD_FRAME_NOTE` is "
+            "stale. Update it rather than serving an unknown doc as 'baseline'."
+        )
+    return text.replace(_COORD_FRAME_NOTE, _COORD_FRAME_BASELINE).encode()
+
+
+# The E10-baseline SKILL.md, frozen. This is `aee5c43^` verbatim -- the exact
+# bytes the prime_agent arm served for every rollout in outputs/e10_baseline/.
+# Pinned by hash so an accidental edit to the fixture fails the run rather than
+# silently redefining what "baseline" means.
+# BASELINE v2 (2026-08-24). v1 was `aee5c43^` verbatim, sha256 8585082860c7...,
+# the document every rollout in outputs/e10_baseline/ was served. v2 removes the
+# call-budget language (see docs/PROMPT_BUDGET_REMOVAL.md), which means it is a
+# NEW baseline, not a correction: E10's numbers describe v1 and remain valid for
+# it. Regenerate after editing the doc:
+#   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md
+_BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
+
+
+def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> bytes:
+    """The SKILL.md bytes this tier serves.
+
+    `skill_doc_coords=False` (the default, i.e. [base]) serves the frozen
+    baseline file WHOLESALE rather than patching the live one. That is the only
+    way byte-identity with E10 survives future edits to SKILL.md: a patch pins
+    one paragraph, a fixture pins the document.
+    """
+    if not skill_doc_coords:
+        data = (package / "SKILL.baseline.md").read_bytes()
+        got = hashlib.sha256(data).hexdigest()
+        if got != _BASELINE_SKILL_SHA256:
+            raise RuntimeError(
+                "SKILL.baseline.md has been edited: expected sha256 "
+                f"{_BASELINE_SKILL_SHA256}, got {got}. This file is the E10 "
+                "baseline document; changing it silently redefines every [base] "
+                "cell. Restore it from `git show aee5c43^`."
+            )
+    else:
+        data = (package / "SKILL.md").read_bytes()
+    if allow_batching:
+        if not skill_doc_coords:
+            # The hash check above verifies the FIXTURE; stripping afterwards
+            # changes the SERVED bytes, so a [base] cell was serving 4753 bytes
+            # where E10 served 4829 and nothing fired. The launcher refuses the
+            # combination; this refuses it again for any other caller.
+            raise RuntimeError(
+                "allow_batching=True with skill_doc_coords=False would strip the "
+                "no-batch rule out of the frozen E10 baseline document, so the "
+                "bytes served would not be the bytes E10 served. A batching cell "
+                "is a different experiment: run it on its own tier."
+            )
+        data = _strip_no_batch_rule(data)
+    return data
 
 
 class PrimeAgentHarnessConfig(HarnessConfig):
@@ -132,12 +236,115 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     based cluster may not carry either."""
 
     thinking: str = ""
-    """`--thinking` level. Empty leaves Prime Agent's default (`xhigh`)."""
+    """`--thinking` level.
+
+    CORRECTED 2026-08-24: this said "Empty leaves Prime Agent's default
+    (`xhigh`)". The shipped 0.3.3 bundle says otherwise --
+    `DEFAULT_THINKING_LEVEL = "medium"` -- so every cell that left this empty has
+    been running at MEDIUM reasoning effort while the docstring (and
+    docs/settings.md) claimed xhigh. Reasoning effort is not a free variable in a
+    controlled comparison: pin it per arm rather than inheriting an undeclared
+    default that a scaffold upgrade can move."""
 
     websearch: bool = False
     """Load Prime Agent's bundled `websearch` skill. Off by default: the control
     arm and the Claude Code arm both run without web access, and a live search
     tool would not be capability-matched."""
+
+    continual_harness_dir: str = ""
+    """Share Prime Agent's GLOBAL continual-harness store across rollouts (E13).
+
+    Prime Agent persists prompt notes, memories, reusable skill descriptions and
+    sub-agent specs in a "continual harness" state file, and renders them into
+    the system prompt of every new session (`formatHarnessStateForPrompt`, called
+    from the base-prompt builder with `harnessState: _loadMergedHarnessState()`).
+    That is exactly the cross-episode learning channel E13 needs -- but it is
+    inert under this harness, for two independent reasons:
+
+      * LOCAL state lives in session artifacts, and this arm runs `--no-session`.
+      * GLOBAL state lives at `<agentDir>/harness/`, and `agentDir` here is the
+        PER-ROLLOUT `agent-<trace id>` (see `PRIME_AGENT_CODING_AGENT_DIR`
+        below), so "global" is really "per game".
+
+    Setting this to a directory makes `<agent_dir>/harness` a SYMLINK to it, so
+    every rollout reads and (if `continual_harness_writable`) writes one shared
+    store. Only the harness state is shared: `settings.json`, `models.json` and
+    `auth.json` stay per-rollout, which they must -- seeds run CONCURRENTLY and
+    each carries its own MCP URL and interception secret, so sharing the whole
+    agent directory would race five rollouts onto one settings file and point
+    agents at each other's games.
+
+    Empty (the default) leaves every existing arm byte-identical: no symlink is
+    created and each rollout keeps its own empty per-rollout store.
+
+    Note what this does NOT switch on. `_autoRefineAllowedForSession()` requires
+    a local (session) harness dir, so under `--no-session` automatic refinement
+    never fires; and auto-refine writes LOCAL entries anyway. Entries reach the
+    shared store only through an explicit `rlm.harness.create_*(global_=True)` /
+    `await refine.run(..., global_=True)` call -- from the player, if the prompt
+    asks for one, or from an orchestrator process pointed at the same directory
+    between cells. That is a feature for an experiment: every write is deliberate
+    and attributable, not a background process editing the arm mid-cell."""
+
+    rlm_max_depth: int = 1
+    """Recursion depth for `rlm(...)` sub-agents, written into the launch env.
+
+    1 = the root player may spawn children; children may not spawn
+    grandchildren. That is the scaffold default, but there is no CLI flag and no
+    settings key for it, so inheriting it leaves no record of what the arm
+    actually ran with."""
+
+    auto_refine: bool = False
+    """Prime Agent's automatic trajectory review (`autoRefine`).
+
+    Default OFF and always written into settings.json explicitly, because the
+    scaffold's own default is ON and only inert by accident under `--no-session`
+    (see the settings block in `launch`). Turning it on is a deliberate arm
+    choice with two consequences worth stating: it costs two extra model calls
+    per fire on the interception endpoint, unattributed to the rollout; and its
+    edits are LOCAL-scope, landing in the session artifact dir rather than the
+    shared continual store, so they are discarded unless something harvests
+    them."""
+
+    continual_harness_mode: str = "shared-ro"
+    """How the shared continual-harness store reaches a rollout.
+
+    `shared-ro` (default) symlinks every rollout's harness directory at ONE
+    store. Correct when a single writer (an orchestrator, between cells) owns
+    it, and the store is re-bound read-only so players cannot edit it.
+
+    `copy-merge` is for the arm where the PLAYERS write. Each rollout gets a
+    private COPY of the canonical store, seeded at launch so it reads everything
+    learned so far, and the runner merges the copies back afterwards.
+
+    Why copying rather than sharing a writable store, measured: `rlm.harness`
+    persists with a non-atomic whole-file rewrite -- `open("w")` + `json.dump`,
+    no lock, no tmp+rename -- and its loader treats an unreadable state file as
+    EMPTY rather than erroring. Five concurrent writers each adding six entries
+    to one store kept 12 of 30; one of the five contributed nothing at all, and
+    nothing reported the loss. A player landing mid-write would silently boot
+    with no accumulated knowledge.
+
+    Copying also buys attribution: each rollout's contribution is a separate
+    file, so "what did seed 7 add?" is answerable and same-id conflicts become a
+    deliberate merge decision instead of last-write-wins."""
+
+    continual_harness_writable: bool = False
+    """Let the PLAYER write to the shared continual-harness store.
+
+    Default False: under `sandbox = true` the store is re-bound READ-ONLY, on top
+    of the read-write `install_dir` bind, so a rollout can read the accumulated
+    lessons and cannot edit them. That keeps the learning channel single-writer
+    (an orchestrator between cells) and makes a cell reproducible from the store
+    snapshot taken before it ran.
+
+    Set True for the self-directed variant, where the player itself decides what
+    to persist. Then the store is shared MUTABLE state across concurrently
+    running seeds: writes are last-write-wins on one JSON file, so run such a
+    cell with one seed at a time, and expect a cell to change the store that
+    later cells read. With `sandbox = false` this flag cannot be enforced at all
+    (nothing is bound read-only) -- it is then a declaration of intent that the
+    launcher's before/after hash of the store has to police."""
 
     reasoning: bool | None = Field(default=None)
     """Declare the model as reasoning-capable in `models.json`. `None` derives it
@@ -203,6 +410,13 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     """`bwrap` executable. Resolved the same way as `binary` -- through PATH,
     with `path_prepend` applied first -- so an absolute override works for a
     non-PATH install."""
+
+    skill_doc_coords: bool = False
+    """Serve the SKILL.md coordinate-frame note (aee5c43). Default False =
+    serve the E10-baseline doc byte-for-byte (the note is swapped back to the
+    baseline wording at materialization -- `_restore_baseline_coord_note`).
+    The [human] tier turns this on together with the env-side tool_flags
+    (netplay_telemetry, melee_hints); see configs/tool_tiers.toml."""
 
     allow_batching: bool = False
     """Let Prime Agent issue as many skill calls per turn as it likes.
@@ -306,9 +520,18 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # The skill package, at a path that does not vary per rollout.
         package = resources.files(__package__) / "skill"
         for name in _SKILL_FILES:
-            data = (package / name).read_bytes()
-            if name == "SKILL.md" and self.config.allow_batching:
-                data = _strip_no_batch_rule(data)
+            if name == "SKILL.md":
+                # Tier-selected document; the baseline variant is a frozen file,
+                # not a patch (see `_skill_doc`). `SKILL.baseline.md` is never
+                # written into the runtime skill dir -- the agent must see
+                # exactly one SKILL.md.
+                data = _skill_doc(
+                    package,
+                    skill_doc_coords=self.config.skill_doc_coords,
+                    allow_batching=self.config.allow_batching,
+                )
+            else:
+                data = (package / name).read_bytes()
             await runtime.write(f"{self._skill_dir}/{name}", data)
 
         if self.config.sandbox:
@@ -449,6 +672,20 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "--bind",
             self.config.install_dir,
             self.config.install_dir,
+            # E13: in `shared-ro` the store is re-bound READ-ONLY on top of the
+            # read-write `install_dir` bind (bwrap applies binds in order, so the
+            # later, narrower one wins) -- that is what keeps a single-writer arm
+            # single-writer. In `copy-merge` the rollout writes its OWN private
+            # copy under install_dir and canonical is never touched by a player,
+            # so no re-bind applies.
+            *(
+                ["--ro-bind", self.config.continual_harness_dir,
+                 self.config.continual_harness_dir]
+                if self.config.continual_harness_dir
+                and str(self.config.continual_harness_mode).strip().lower() != "copy-merge"
+                and not self.config.continual_harness_writable
+                else []
+            ),
             "--bind",
             workdir,
             workdir,
@@ -479,7 +716,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                 "no per-tool deny flag. Removing it would leave the agent unable to "
                 "call the game at all."
             )
-        system_prompt, prompt = self.resolve_prompt(trace.task.data)
+        _system_prompt, prompt = self.resolve_prompt(trace.task.data)  # prompt only; AGENTS.md carries the system prompt
         if prompt is None:
             raise ValueError("Prime Agent requires a task prompt (it has no user simulator)")
 
@@ -540,6 +777,19 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         }
         settings = {
             "onboardingShown": True,
+            # PINNED, not inherited. `autoRefine` defaults to enabled (turnInterval
+            # 25, 20-minute cooldown) and is undocumented in settings.md. It is
+            # inert here only by ACCIDENT -- `_autoRefineAllowedForSession()`
+            # needs a local session dir and `--no-session` denies one -- but the
+            # moment a player calls `rlm(...)`, the host mints an ephemeral RLM
+            # session dir on the PARENT, the gate opens mid-run, and auto-refine
+            # starts spending two out-of-band `completeSimple` calls per fire on
+            # the eval's own interception endpoint. Those are real completions
+            # that never enter the session transcript, so they land in the run's
+            # provider cost unattributed, and their edits are LOCAL-scope and
+            # discarded. An arm must not change behaviour because the model
+            # happened to spawn a sub-agent.
+            "autoRefine": {"enabled": self.config.auto_refine},
             "quietStartup": True,
             # Belt and braces: `--provider/--model` already pin the route, but a
             # fallback that silently picked a built-in provider would run the
@@ -563,11 +813,69 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # reading (or migrating into) the operator's real credential store.
         await runtime.write(f"{agent_dir}/auth.json", b"{}\n")
 
+        # E13: give this rollout its GLOBAL continual-harness directory, so
+        # lessons written by an earlier game are in this game's system prompt.
+        # `getGlobalHarnessStateDir()` is `join(agentDir, "harness")` with no env
+        # override of its own, and the kernel is handed the same path as
+        # `RLM_GLOBAL_HARNESS_STATE_DIR`, so whatever sits at that one name
+        # serves both the host (refine) and the kernel (`rlm.harness.*`).
+        if self.config.continual_harness_dir:
+            ch = self.config.continual_harness_dir
+            if self.config.sandbox and not _within(ch, self.config.install_dir):
+                raise ValueError(
+                    f"harness.continual_harness_dir ({ch!r}) is outside "
+                    f"install_dir ({self.config.install_dir!r}) while "
+                    "harness.sandbox is true, so it is not bound into the "
+                    "sandbox and the shared store would be invisible to the "
+                    "agent. Put the store under install_dir, or set "
+                    "harness.sandbox = false."
+                )
+            mode = str(self.config.continual_harness_mode or "shared-ro").strip().lower()
+            if mode not in ("shared-ro", "copy-merge"):
+                raise ValueError(
+                    f"harness.continual_harness_mode={mode!r}; expected "
+                    "'shared-ro' or 'copy-merge'."
+                )
+            link = f"{agent_dir}/harness"
+            if mode == "copy-merge":
+                # A private copy, seeded from canonical. `cp -a .../.` copies the
+                # CONTENTS so an absent canonical store still yields an empty
+                # private one rather than a nested directory -- and an empty
+                # canonical is a rc=0 no-op, so no `|| true` is needed to
+                # tolerate round 1. It must NOT be suppressed: `... || true`
+                # forced the whole script to exit 0, which made the exit-code
+                # check below dead in this mode and let a failed copy hand the
+                # rollout an empty store -- exactly the "the agent learned
+                # nothing" reading the check exists to prevent.
+                script = (
+                    f"mkdir -p {shlex.quote(ch)} {shlex.quote(link)} && "
+                    f"cp -a {shlex.quote(ch)}/. {shlex.quote(link)}/"
+                )
+            else:
+                script = (
+                    f"mkdir -p {shlex.quote(ch)} && rm -rf {shlex.quote(link)} && "
+                    f"ln -sfn {shlex.quote(ch)} {shlex.quote(link)}"
+                )
+            probe = await runtime.run(["sh", "-c", script], self._env_with_path())
+            if probe.exit_code != 0:
+                raise RuntimeError(
+                    f"could not provision the continual-harness store ({mode}) at "
+                    f"{link}: "
+                    f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}. "
+                    "Running on would silently give this rollout an empty store."
+                )
+
         env = self._env_with_path(
             {
                 KEY_VAR: secret,
                 MCP_TOKEN_VAR: mcp_token,
                 "PRIME_AGENT_CODING_AGENT_DIR": agent_dir,
+                # DECLARED, not inherited. There is no CLI flag and no settings
+                # key for recursion depth -- this env var is the only record. The
+                # default is 1 (root may spawn children, children may not
+                # recurse), which is what we want; writing it down means a
+                # scaffold upgrade cannot move it silently.
+                "RLM_MAX_DEPTH": str(self.config.rlm_max_depth),
                 # No update checks, no telemetry, no package-update fetches.
                 "PI_OFFLINE": "1",
                 "PI_SKIP_VERSION_CHECK": "1",
@@ -603,8 +911,11 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         ]
         if self.config.thinking:
             argv += ["--thinking", self.config.thinking]
-        if system_prompt:
-            argv += ["--append-system-prompt", system_prompt]
+        # De-dup (2026-08-21): the workspace AGENTS.md already carries the full
+        # resolved system prompt and Prime Agent embeds it as Project Context,
+        # so ALSO passing --append-system-prompt delivered the identical
+        # gameplay block twice in node 0 (measured in the v3 seed-2 post-mortem
+        # at chars 14616 and 21992). AGENTS.md is the single source now.
         # `--` ends option parsing, so a prompt starting with `-` or containing
         # `@word` is never re-read as a flag or a file attachment.
         argv += ["--", prompt]

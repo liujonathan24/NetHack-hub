@@ -41,4 +41,9 @@ def test_env_response_reports_missing_tool_call():
         content = result[0]["content"]
     text = m.content_to_text(content) if hasattr(m, "content_to_text") else str(content)
     expected_tools = [s for s in m.list_skills() if s not in ("menu_option", "inventory_item")]
-    assert text == "You must call a tool. Available tools: " + ", ".join(expected_tools)
+    # A no-tool-call turn is still a dispatched LM turn: it writes a record,
+    # gets the next correlation id, and must echo it -- an id-bearing record
+    # whose marker never reached the transcript would refuse the whole join
+    # (`tools/trace_align.py`). The sentinel text itself is unchanged.
+    assert text == ("You must call a tool. Available tools: "
+                    + ", ".join(expected_tools) + "\n[call#1]")

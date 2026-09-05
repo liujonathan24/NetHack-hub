@@ -107,3 +107,53 @@ def test_every_trace_dir_is_absolute_and_mutually_distinct():
     for name, trace_dir in dirs.items():
         assert pathlib.PurePosixPath(trace_dir).is_absolute(), (name, trace_dir)
     assert len(set(dirs.values())) == len(dirs), dirs
+
+
+# --------------------------------------------------------------------------
+# whole-rollout retries: a cost multiplier, pinned identically across arms
+# --------------------------------------------------------------------------
+_ALL_ARMS = ("control.toml", "claude_code.toml", "prime_agent.toml",
+             "claude_code_b80.toml", "prime_agent_b80.toml")
+
+
+def test_every_arm_bounds_whole_rollout_retries_identically():
+    """`[retries.rollout] max_retries` is not a reliability knob, it is a COST
+    MULTIPLIER: `verifiers/v1/retries.py:run_with_retry` replays the entire
+    trajectory, so N retries means one attempt can bill N+1 full rollouts.
+    Measured in the E16 method test: a `429 Rate limit reached` storm ran
+    `retry 1/2` then `retry 2/2` and billed $31.43 for one attempt that still
+    ended `censored:harness_error`.
+
+    Capped at 1. The fault the knob was bought for (Prime's `finish_reason:
+    "error"` schema rejection) is a first-call, independent-per-attempt fault
+    that a single retry recovers; the second retry only pays off on a
+    time-CORRELATED failure, and `run_with_retry` passes no `wait=` at all, so
+    it re-enters a rate-limit storm with zero backoff.
+
+    Pinned per ARM as well as bounded: arms that retry different numbers of
+    times do not cost the same, and a cost difference between arms is a
+    confound in exactly the same way a model difference would be.
+    """
+    seen = {}
+    for name in _ALL_ARMS:
+        block = _load(name).get("retries", {}).get("rollout")
+        assert block is not None, f"{name} pins no rollout-retry policy"
+        n = block["max_retries"]
+        assert 0 <= n <= 1, (
+            f"{name}: max_retries={n} lets one attempt bill {n + 1} full "
+            f"rollouts. Raise it only with ROLLOUT_MAX_RETRIES at launch.")
+        seen[name] = (n, tuple(block.get("exclude", [])),
+                      tuple(block.get("include", [])))
+    assert len(set(seen.values())) == 1, seen
+
+
+def test_deterministic_failures_are_never_replayed():
+    """A whole-trajectory replay cannot fix a deterministic failure: an
+    over-long prompt hits the same context wall, and task/user code raising
+    raises again. Retrying those is pure spend. `ProviderError` is deliberately
+    NOT excluded -- it is the transient the knob exists for."""
+    for name in _ALL_ARMS:
+        block = _load(name)["retries"]["rollout"]
+        excluded = set(block.get("exclude", []))
+        assert {"OverlongPromptError", "TaskError", "UserError"} <= excluded, name
+        assert "ProviderError" not in excluded, name

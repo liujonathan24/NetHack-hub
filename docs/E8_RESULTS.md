@@ -72,3 +72,18 @@ The lever is not information (E8a/E8b null) and not mechanical friction
 **in-loop control changes** (single-swing melee vs pursue-until-dead), and the
 deferred **E8e infinite-life** planning probe. Advice doesn't transfer to
 policy; scaffold-enforced policy might.
+
+---
+
+## POST-HOC VALIDITY CAVEAT — RETRACTED (2026-08-21, same day)
+
+An earlier addendum here claimed every E8 cell ran without `tune.reveal_map`
+and `auto_dismiss=false`. That was a false alarm: the check grepped config.toml
+files that do not exist in the E8 output dirs (that launcher era wrote none).
+The authoritative resolved configs in each cell's eval.log carry BOTH knobs,
+and the first request_map observation in the transcripts shows the full level.
+**E8 ran with full vision, matching its control; its comparative findings
+stand.** The remaining (true) caveat: E8 predates the harness-honesty pass
+(fd8aa13), so its ABSOLUTE numbers sit on the old-docs harness -- consistent
+with the E7 control it was measured against, but ~2x below the honest-harness
+E10 baseline. Compare E8 cells to E7 controls only, never to E10+ cells.

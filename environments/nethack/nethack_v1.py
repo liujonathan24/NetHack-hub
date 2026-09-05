@@ -149,9 +149,20 @@ class NetHackState(vf.State):
     scout_reward_total: float = 0.0
     descent_count: float = 0.0
     max_dlvl_reached: int = 1
+    max_xp_level: int = 1
     succeeded: bool = False
     ascended: bool = False
     died: bool = False
+    # Fix1 (E15 P3) one-turn post-death rollback window. `rollback_published`
+    # is whether this rollout's tool surface includes `rollback`;
+    # `death_window_spent` mirrors the v0 flag set when the model's
+    # post-death call arrives. The `game_over` stop defers exactly one LM
+    # turn on death while (published and not spent), so the death
+    # observation actually reaches the model and a rollback can revive the
+    # run — in P3 r1 every death ended the rollout before the model ever
+    # saw "You die...".
+    rollback_published: bool = False
+    death_window_spent: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -218,6 +229,15 @@ class NetHackToolsetConfig(vf.ToolsetConfig):
     # decision.
     max_parallel_skill_calls: int = 0
     parallel_batch_window_s: float = 0.5
+    # Echo the per-call correlation id (`[call#N]`) into each tool result so
+    # the model transcript (`traces.jsonl`) and the turn NDJSON can be joined
+    # exactly (see `nethack_harness.helpers.CALL_ID_MARKER_FORMAT`). The id is
+    # always assigned server-side and stamped on the trace record; this knob
+    # only controls the result-payload echo, which costs a few tokens per call
+    # -- turn off for a cell that must be token-matched against pre-barrier
+    # runs. The published tool schemas are identical either way: the marker
+    # rides the payload, never the function definitions the model sees.
+    call_id_in_results: bool = True
     # Passed through to v0 load_environment (compaction knobs, refiner, game-setup
     # overrides such as tune/modify/level_blob/skill_set, etc.). Kept opaque so
     # the v1 layer never has to track the full v0 kwarg surface.
@@ -260,6 +280,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
     max_skill_calls: int = 150
     max_parallel_skill_calls: int = 0
     parallel_batch_window_s: float = 0.5
+    call_id_in_results: bool = True
     env_args: dict = {}
     # Where the tool server runs (colocated = share the harness's runtime).
     colocated: bool = False
@@ -289,6 +310,7 @@ class NetHackTasksetConfig(vf.TasksetConfig):
             max_skill_calls=self.max_skill_calls,
             max_parallel_skill_calls=self.max_parallel_skill_calls,
             parallel_batch_window_s=self.parallel_batch_window_s,
+            call_id_in_results=self.call_id_in_results,
             env_args=dict(self.env_args or {}),
         )
 
@@ -331,6 +353,7 @@ def _build_v0_env(cfg: NetHackToolsetConfig | NetHackTasksetConfig, *, n_example
         # CLI-agent arms. The control arm calls `nethack.load_environment`
         # directly and never reaches this function, so it never sets this.
         self_dispatch=cfg.self_dispatch,
+        call_id_in_results=getattr(cfg, "call_id_in_results", True),
         **dict(cfg.env_args or {}),
     )
 
@@ -483,8 +506,13 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
                 state.budget_exhausted = True
                 state.terminated = True
                 return (
-                    f"[Call budget exhausted: {budget} skill calls used. "
-                    "The episode is over.]"
+                    # The only place the call budget's SIZE ever reached a
+                    # model. Post-hoc, so it cannot shape play -- but an
+                    # orchestrator reading traces saw "200 skill calls used" and
+                    # wrote budget advice into the continual store as a learned
+                    # lesson. The episode ending is the fact; its arithmetic is
+                    # ours.
+                    "[The episode is over.]"
                 )
             state.skill_calls += 1
             if name == "move":
@@ -554,11 +582,29 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.scout_reward_total = float(v0.get("scout_reward_total", 0.0) or 0.0)
         state.descent_count = float(v0.get("descent_count", 0.0) or 0.0)
         state.max_dlvl_reached = int(v0.get("max_dlvl_reached", 1) or 1)
+        state.max_xp_level = int(v0.get("max_xp_level", 1) or 1)
         state.succeeded = bool(v0.get("succeeded"))
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
-        state.terminated = bool(v0.get("terminated")) or state.terminated
+        # Fix1: the latch used to be `or state.terminated`, which made a
+        # post-death rollback revive (v0 clears `terminated`) invisible at
+        # this layer — the typed state stayed terminated forever. Budget
+        # exhaustion is the one v1-only terminated setter, so it is the one
+        # latch that must survive the mirror.
+        state.terminated = bool(v0.get("terminated")) or state.budget_exhausted
+        state.rollback_published = state.rollback_published or self._rollback_published()
+        state.death_window_spent = bool(v0.get("_death_window_spent"))
         state.trace_run_id = str(v0.get("_trace_run_id") or "")
+
+    def _rollback_published(self) -> bool:
+        cached = getattr(self, "_rollback_published_cache", None)
+        if cached is None:
+            try:
+                cached = "rollback" in self.tool_functions()
+            except Exception:
+                cached = False
+            self._rollback_published_cache = cached
+        return cached
 
     def _register(self, mcp: FastMCP) -> None:
         """Publish the gated tool set over MCP.
@@ -695,11 +741,34 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
                 "parallel_refusals": float(state.parallel_refusals),
                 "budget_exhausted": float(state.budget_exhausted),
                 "max_dlvl_reached": float(state.max_dlvl_reached),
+                "max_xp_level": float(state.max_xp_level),
                 "descent_count": float(state.descent_count),
                 "scout_reward_total": float(state.scout_reward_total),
                 "died": float(state.died),
                 "terminated": float(state.terminated),
                 "moves_executed": float(state.moves_executed),
+            }
+        )
+        # BALROG, both halves. Previously absent from traces.jsonl entirely: XL
+        # was not published at all, so every report either skipped the metric or
+        # re-derived it by re-reading turns/*.ndjson and re-implementing the
+        # score. The house rule is that a table carries the `max` AND the `min`
+        # over the (Dlvl, XL) axes -- a max alone cannot distinguish "descended"
+        # from "levelled up while stuck" -- so publish the pair and the
+        # xp_carried flag that falls out of it.
+        from nethack_harness.prompt.balrog import balrog_both
+
+        _hi, _lo = balrog_both(
+            state.max_dlvl_reached,
+            state.max_xp_level,
+            reached_planes=False,
+            ascended=bool(state.ascended),
+        )
+        trace.metrics.update(
+            {
+                "balrog_pct": 100.0 * _hi,
+                "balrog_min_pct": 100.0 * _lo,
+                "xp_carried": float(_hi > 0.0 and _lo == 0.0),
             }
         )
         # Published so a run's own output says how much of the agent's reasoning
@@ -764,7 +833,24 @@ class NetHackTask(vf.Task[NetHackTaskData, NetHackState, NetHackTaskConfig]):
 
     @vf.stop
     async def game_over(self, trace) -> bool:
-        return bool(trace.state.terminated)
+        s = trace.state
+        # Fix1 (E15 P3): one-turn post-death rollback window. Stops run
+        # BEFORE each model call (v1/session.py `refused`), so returning
+        # False here exactly once lets the death observation — with its
+        # "ONE action still works: rollback(n)" banner — reach the model.
+        # The v0 env marks `_death_window_spent` when the post-death call
+        # arrives; a rollback that revives clears died/terminated (and the
+        # spent flag), anything else leaves them set and this stop fires on
+        # the next check. Ascension/step-cap terminations (died=False) and
+        # budget exhaustion (its own stop) are unaffected.
+        if (
+            s.terminated
+            and s.died
+            and s.rollback_published
+            and not s.death_window_spent
+        ):
+            return False
+        return bool(s.terminated)
 
     # -- rewards (v0 implementations, verbatim) ----------------------------- #
     @vf.reward(weight=1.0)
@@ -965,7 +1051,106 @@ __all__ = [
 ]
 
 
+#: Held for the life of the process on purpose: `faulthandler` writes to the
+#: file DESCRIPTOR, so letting this be garbage-collected closes the fd and the
+#: crash dump lands nowhere.
+_CRASH_LOG_FILE = None
+
+CRASH_LOG_NAME = "env_crash.log"
+
+#: What CPython's faulthandler prints on a fatal native signal. The orchestrator
+#: greps the crash log for this so a *started but never crashed* server (which
+#: still writes the header line below) is not read as a crash.
+CRASH_MARKER = "Fatal Python error"
+
+
+def arm_crash_capture() -> str:
+    """Make a FATAL NATIVE crash of this tool server leave evidence on disk.
+
+    THE PROBLEM THIS EXISTS FOR. The env drives NetHack through a C extension,
+    and a SIGSEGV/SIGABRT in there kills this process with no Python traceback
+    and no log line anywhere the operator can reach:
+
+      * nothing waits on the child -- `v1/runtimes/subprocess.py:run_background`
+        only appends to `_background`; there is no `proc.wait()`, no returncode
+        check, and no "tool server down" counterpart to the `tool server
+        'nethack': <url>` line the launcher prints;
+      * the child's merged stdout/stderr is `<runtime workdir>/vf_tool_*.log`,
+        and `SubprocessRuntime.cleanup()` `shutil.rmtree`s that workdir -- the
+        same teardown that fails to notice the death also deletes the evidence
+        (the identical loss is described at the `resume_from` fail-fast above);
+      * the workdir is also the server's CWD, so NLE's own `nle_crash_*.txt`
+        goes with it;
+      * core dumps are off (`core limit 0`), and Linux does not log a userspace
+        SIGSEGV to `dmesg` unless `kernel.print-fatal-signals` is set.
+
+    Measured on run `treesmoke2`: three attempts, three fatal signals of THIS
+    binary (11 / 6 / 11 in `/var/log/apport.log`, pids matching the three turn
+    files), and zero bytes of evidence in the run directory. All three attempts
+    were then filed as `censored:harness_error` -- the harness error being that
+    the harness could not say what had happened.
+
+    `faulthandler` is the right instrument because its handler is installed in
+    C: it fires from inside the extension, where a Python-level
+    `signal.signal` handler would never run (Python handlers only run between
+    bytecodes, and a segfaulted interpreter never gets there). The dump goes
+    next to the attempt's turn files -- `trace_dir` is the one durable
+    directory this process is already told about, and it outlives the runtime
+    workdir by design.
+
+    `faulthandler` is NOT sufficient on its own, and that is why this also
+    points the ENGINE's crash dumper at the same directory. `nle_sentinel.c`
+    installs its own SA_SIGINFO handlers for SIGSEGV/SIGABRT/SIGFPE/SIGBUS
+    when `libnethack.so` loads -- i.e. AFTER this runs -- so for a fault
+    inside the engine the sentinel wins and faulthandler never fires. The
+    sentinel writes a full native backtrace to
+    `$NLE_CRASH_DIR/nle_crash_<pid>.txt` and defaults `NLE_CRASH_DIR` to `"."`
+    (`nle_sentinel.c:236-241`), which is the runtime workdir teardown deletes.
+    Exporting it here is what turns "the tool server vanished" into a stack
+    with function names: the one that broke E16 resolves to
+    `NetHackRL::start_menu_method` -> `winrl.cc:1250`.
+
+    Returns the crash-log path, or "" when there is nowhere durable to write
+    (no `trace_dir`), which is the case for ad-hoc/in-process use. Never
+    raises: instrumentation must not be able to stop a tool server booting.
+    """
+    global _CRASH_LOG_FILE
+    try:
+        import faulthandler
+        import os as _os
+        from pathlib import Path as _Path
+
+        base = _os.environ.get("NETHACK_ENV_CRASH_DIR") or ""
+        if not base:
+            cfg = json.loads(_os.environ.get("VF_CONFIG") or "{}") or {}
+            trace_dir = cfg.get("trace_dir")
+            if trace_dir:
+                base = str(_Path(str(trace_dir)).parent)
+        if not base:
+            return ""
+        path = _Path(base)
+        path.mkdir(parents=True, exist_ok=True)
+        # Set BEFORE the engine is imported: the sentinel builds its path once,
+        # under a pthread_once, from the environment as it stands then.
+        _os.environ.setdefault("NLE_CRASH_DIR", str(path))
+        target = path / CRASH_LOG_NAME
+        # Line-buffered append: a retried rollout starts a second server into
+        # the same attempt directory, and losing the first one's dump to a
+        # truncating open is exactly the failure being fixed.
+        fh = open(target, "a", buffering=1)
+        fh.write(
+            "[env-server] start pid=%d ppid=%d cwd=%s t=%.3f\n"
+            % (_os.getpid(), _os.getppid(), _os.getcwd(), time.time())
+        )
+        faulthandler.enable(file=fh, all_threads=True)
+        _CRASH_LOG_FILE = fh
+        return str(target)
+    except Exception:  # pragma: no cover - never block the server on logging
+        return ""
+
+
 if __name__ == "__main__":  # pragma: no cover - tool-server entrypoint
     # `serve_in_runtime` launches a toolset as `python -m <module>`
     # (`v1/mcp/launch.py:208`), reading its config from VF_CONFIG.
+    arm_crash_capture()
     NetHackToolset.run()

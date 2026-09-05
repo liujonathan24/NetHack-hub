@@ -1,0 +1,5 @@
+# Generated. The datasets and pages are rebuilt from the live run directories
+# by refresh_e16.sh; only the generators belong in git.
+*.html
+*.json
+.gen_*.err

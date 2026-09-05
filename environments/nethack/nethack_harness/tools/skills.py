@@ -23,6 +23,10 @@ from typing import Any, Callable, Iterable, Literal, Optional
 from nethack_core import actions as nethack
 
 from nethack_core.env import NetHackCoreEnv
+from nethack_harness.integrity import (
+    CheckpointIntegrityError as _CheckpointIntegrityError,
+    assert_dungeon_on_disk as _assert_dungeon_on_disk,
+)
 from nethack_harness.memory.journal import Journal
 from nethack_core.observations import StructuredObservation, InventoryItem
 from nethack_harness.navigation.pathfinding import (
@@ -2327,18 +2331,28 @@ def _rollback_ring(env) -> list:
     return ring
 
 
-def push_rollback_snapshot(env, turn: int) -> None:
-    """Capture the post-turn state. Called by env_response, not by the agent."""
+def push_rollback_snapshot(env, turn: int, game_time=None) -> None:
+    """Capture the post-turn state. Called by env_response, not by the agent.
+
+    `game_time` is the in-game clock at capture time; the rollback feedback
+    quotes it ("restored to game turn T") because agents demonstrably reason
+    in game turns, not harness tool-calls (E15 P3 r1: "let me roll back to
+    turn 541", and a rollback(20) at 1 HP that meant ~23 game turns).
+    """
     eng = getattr(env, "_engine", None)
     if eng is None:
         return
     ring = _rollback_ring(env)
     try:
-        ring.append((int(turn), eng.snapshot()))
+        gt = None if game_time is None else int(game_time)
+    except Exception:
+        gt = None
+    try:
+        ring.append((int(turn), gt, eng.snapshot()))
     except Exception:
         return
     while len(ring) > ROLLBACK_RING:
-        _t, h = ring.pop(0)
+        _t, _gt, h = ring.pop(0)
         try:
             eng.free_snapshot(h)
         except Exception:
@@ -2347,13 +2361,15 @@ def push_rollback_snapshot(env, turn: int) -> None:
 
 @registry.register("rollback", {
     "description": (
-        "Undo the last n turns, returning the game to the state it was in "
-        "before them. Use after a mistake -- walking into a losing fight, "
+        "Undo the last n tool calls, returning the game to the state it was "
+        "in before them. Use after a mistake -- walking into a losing fight, "
         "triggering a trap, wasting turns in a dead end. Costs one turn and no "
-        "game time. n must be between 1 and 15."
+        "game time. n counts your tool calls (one call may span many game "
+        "turns); asking for more history than is retained rolls back as far "
+        "as possible."
     ),
     "parameters": {
-        "n": {"type": "integer", "description": "How many turns to undo.",
+        "n": {"type": "integer", "description": "How many tool calls to undo.",
               "default": 1},
     },
 })
@@ -2375,23 +2391,35 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
     max_n = len(ring) - 1
     if max_n < 1:
         return SkillResult(actions=[], feedback="rollback unavailable: no earlier turn recorded yet.")
+    clamp_note = ""
     if n > max_n:
-        return SkillResult(
-            actions=[],
-            feedback=(f"cannot roll back {n} turns; only {max_n} earlier turn(s) are "
-                      f"retained. Try n<={max_n}."),
-        )
+        # Fix1: clamp instead of erroring. E15 P3 r1 seed 3 issued
+        # rollback(20) at 1 HP (meaning ~20 GAME turns), got a range error,
+        # and wasted its crisis call; four calls later a rollback(6) failed
+        # the same way at 4 HP after a deep rollback truncated the ring.
+        # A best-effort restore is strictly better than a refusal here.
+        clamp_note = (f" (asked for {n}, but only {max_n} earlier turn(s) are "
+                      f"retained -- rolled back {max_n})")
+        n = max_n
     idx = len(ring) - 1 - n
-    turn_no, handle = ring[idx]
+    turn_no, game_time, handle = ring[idx]
     try:
         eng.restore(handle)
+        # E16: a restore whose level files did not all come back leaves the
+        # hero in a dungeon where the next stair use is a done(TRICKED) full-HP
+        # "death" (see nethack_harness/integrity.py). That must reach the
+        # caller as an engine fault, never as skill feedback the agent can play
+        # through, so this deliberately escapes the except below.
+        _assert_dungeon_on_disk(env, where="rollback restore")
+    except _CheckpointIntegrityError:
+        raise
     except Exception as exc:
         return SkillResult(actions=[], feedback=f"rollback failed: {exc}")
     # Everything AFTER the restored point is now an unreachable future. The
     # restored entry itself is KEPT, because the ring's invariant is
     # "ring[-1] is the current state" -- dropping it would leave the current
     # state unrepresented and make the next rollback(1) silently jump two turns.
-    for _t, h in ring[idx + 1:]:
+    for _t, _gt, h in ring[idx + 1:]:
         try:
             eng.free_snapshot(h)
         except Exception:
@@ -2408,8 +2436,200 @@ def rollback(env: NetHackCoreEnv, obs: StructuredObservation, n: int = 1) -> Ski
     except Exception:
         pass
     # ESC surfaces the restored frame without advancing the clock.
+    gt_note = f" (game turn {game_time})" if game_time is not None else ""
     return SkillResult(
         actions=[27],
-        feedback=(f"rolled back {n} turn(s) to the state after turn {turn_no}. "
+        feedback=(f"rolled back {n} call(s) to the state after call {turn_no}"
+                  f"{gt_note}{clamp_note}. "
                   "The moves you just made have been undone; choose differently."),
     )
+
+
+# --------------------------------------------------------------------------- #
+# E16 persistent checkpoints — `save(name, note)`
+#
+# STUB, DELIBERATELY UNPUBLISHED. Registering a skill makes it dispatchable via
+# `registry.call(...)`, and `skill_set="full"` publishes EVERY registered skill,
+# so a bare @register here would silently add a tool to every existing arm's
+# served prompt. `save` is therefore listed in `_HARNESS_OWNED`
+# (nethack_harness/helpers.py), which every skill_set branch filters out — so it
+# appears in no tier, and no served prompt bytes change. Publishing it is a
+# separate, deliberate edit to a tier's tool list.
+# --------------------------------------------------------------------------- #
+
+#: Where `save` writes when the caller has not put a run archive on the env.
+#: `archive/<run>/c<id>/` per the E16 design; the run dir comes from the env.
+CHECKPOINT_ARCHIVE_ATTR = "_checkpoint_archive"
+
+
+def _next_checkpoint_dir(root):
+    """`<root>/c<n>` with the lowest free n (checkpoint ids are stable, not reused)."""
+    from pathlib import Path
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    used = set()
+    for child in root.iterdir():
+        if child.is_dir() and child.name.startswith("c") and child.name[1:].isdigit():
+            used.add(int(child.name[1:]))
+    n = 1
+    while n in used:
+        n += 1
+    return root / f"c{n}"
+
+
+@registry.register("save", schema={
+    "description": (
+        "Save the current game as a named checkpoint you (or a later session) "
+        "can resume from. Use it before attempting something risky, or after "
+        "reaching a state that took a long time to build."
+    ),
+    # NB the design doc writes this as `save(name, note)`, but the parameter is
+    # `label`: SkillRegistry.call() strips "name"/"env"/"obs" from every tool
+    # call before dispatch (a v0.0.37 crash fix -- a model sending
+    # {"name": ...} collided with the dispatcher's own signature), so a `name`
+    # argument can never reach a skill. `label` carries the same meaning.
+    "parameters": {
+        "label": {"type": "string", "description": "Short label, e.g. 'before mines'."},
+        "note": {"type": "string",
+                 "description": "Why this checkpoint exists / what to try from it.",
+                 "default": ""},
+    },
+})
+def save(env: NetHackCoreEnv, obs: StructuredObservation,
+         label: str = "", note: str = "") -> SkillResult:
+    """Write a persistent checkpoint and name it back to the caller.
+
+    Costs no game time and takes no engine actions: the checkpoint is written
+    from the live state, and the observation is unchanged.
+    """
+    from nethack_harness.checkpoints import checkpoint_save
+
+    root = getattr(env, CHECKPOINT_ARCHIVE_ATTR, None)
+    if root is None:
+        return SkillResult(
+            actions=[],
+            feedback=("save unavailable: no checkpoint archive is configured "
+                      "for this run."),
+        )
+    directory = _next_checkpoint_dir(root)
+    try:
+        # High-water marks and the conversation prefix are NOT passed here:
+        # `checkpoint_save` reads them off the env itself (HIGH_WATER_*_ATTR,
+        # CONVERSATION_PREFIX_ATTR), because a skill is handed only `(env, obs)`
+        # and adding them to this signature would put two harness-owned numbers
+        # in a schema the model can write to.
+        meta = checkpoint_save(env, directory, name=label or directory.name,
+                               note=note or "", created_by="save")
+    except _CheckpointIntegrityError:
+        raise  # a broken game must not be silently checkpointed
+    except Exception as exc:
+        return SkillResult(actions=[], feedback=f"save failed: {exc}")
+    return SkillResult(
+        actions=[],
+        feedback=(
+            f"saved checkpoint {meta['id']} ({meta['name']!r}) at "
+            f"Dlvl {meta['dlvl']}, XL {meta['xl']}, HP {meta['hp']}/{meta['max_hp']}, "
+            f"game turn {meta['gameturn']}. Resume it with checkpoint id "
+            f"{meta['id']}."
+        ),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# E16 knowledge tool — `wiki(page, query, section)`
+#
+# UNPUBLISHED BY DEFAULT, for the same reason as `save`: `skill_set="full"`
+# publishes every registered skill, so a bare @register would add a tool to
+# every existing arm's served prompt and silently break the served-bytes
+# comparison against the frozen E14/E15 control. `wiki` is therefore listed in
+# `_HARNESS_OWNED` (nethack_harness/helpers.py), which every skill_set branch
+# filters out; only a tier that names it explicitly (`e16_gewiki`) publishes it.
+#
+# NOT `wiki_lookup`/`wiki_search`: those read the 2k-page snapshot index
+# (tools/wiki.py) and are part of other arms' surfaces. This one reads the
+# curated two-page subset copied into the run directory, so what the model saw
+# is recoverable byte-for-byte from the run's own output tree.
+# --------------------------------------------------------------------------- #
+
+#: Where `wiki` reads from when the caller has not put a KB on the env.
+#: Set by the E16 launcher to `<run>/wiki/` (the copied pages).
+WIKI_KB_ATTR = "_wiki_kb_dir"
+
+#: Env-var fallback. The tool server is a SEPARATE process (`python -m
+#: nethack_v1`) that inherits the launcher's environment, so a run directory
+#: that is decided by the orchestrator can reach the skill this way without a
+#: config round-trip.
+WIKI_KB_ENV = "NLD_E16_WIKI_DIR"
+
+#: Parsed KBs, keyed by directory. The pages are immutable for a run's
+#: lifetime, so parsing them once per process is safe and keeps the tool's
+#: latency off the game clock.
+_WIKI_KB_CACHE: dict = {}
+
+
+def _wiki_kb(env):
+    """The `WikiKB` for this run, or ``None`` if no knowledge base is configured."""
+    import os as _os
+    from pathlib import Path as _Path
+
+    root = getattr(env, WIKI_KB_ATTR, None) or _os.environ.get(WIKI_KB_ENV)
+    if not root:
+        return None
+    key = str(_Path(root))
+    if key not in _WIKI_KB_CACHE:
+        from nethack_harness.wiki_kb import WikiKB
+        _WIKI_KB_CACHE[key] = WikiKB(key)
+    return _WIKI_KB_CACHE[key]
+
+
+@registry.register("wiki", schema={
+    "description": (
+        "Look up NetHack knowledge (two curated pages: 'Why do I keep dying?' "
+        "and 'Standard strategy'). Call with no arguments for the list of "
+        "pages and their sections; page= to read a page (optionally with "
+        "section=); query= to search every section for a word. Costs no game "
+        "time. Use it BEFORE engaging an unfamiliar monster or spending a "
+        "one-shot resource such as prayer."
+    ),
+    "parameters": {
+        "page": {"type": "string",
+                 "description": "Page id or title, e.g. 'why_do_i_keep_dying'.",
+                 "default": ""},
+        "query": {"type": "string",
+                  "description": "Word to search for, e.g. 'wraith'.",
+                  "default": ""},
+        "section": {"type": "string",
+                    "description": "Section within page=, e.g. 'Praying'.",
+                    "default": ""},
+    },
+})
+def wiki(env: NetHackCoreEnv, obs: StructuredObservation,
+         page: str = "", query: str = "", section: str = "") -> SkillResult:
+    """Read the curated knowledge base. No engine actions, no game time.
+
+    ``interrupted=True`` matches the existing knowledge tools: the answer is
+    the whole result, and the caller should not have the observation re-pushed
+    as if a game action had happened.
+    """
+    try:
+        kb = _wiki_kb(env)
+    except Exception as exc:
+        return SkillResult(actions=[], feedback=f"wiki unavailable: {exc}",
+                           interrupted=True)
+    if kb is None:
+        return SkillResult(
+            actions=[],
+            feedback="wiki unavailable: no knowledge base is configured for this run.",
+            interrupted=True,
+        )
+    try:
+        if query:
+            body = kb.search(query)
+        elif page:
+            body = kb.read(page, section or None)
+        else:
+            body = kb.toc()
+    except Exception as exc:  # a KB read must never end a rollout
+        return SkillResult(actions=[], feedback=f"wiki failed: {exc}",
+                           interrupted=True)
+    return SkillResult(actions=[], feedback=body, interrupted=True)
