@@ -431,3 +431,41 @@ def test_save_skill_writes_a_checkpoint_and_names_it(tmp_path):
     # A second save takes the next free id rather than clobbering the first.
     registry.call("save", env, None, label="second", note="")
     assert {p.name for p in checkpoint_list(tmp_path / "archive" / "run")} == {"c1", "c2"}
+
+
+def test_restore_preserves_the_tune(tmp_path):
+    """A restore must come back with the arm's knobs, not vanilla's.
+
+    checkpoint_restore rebuilds the engine via reset() -> RawEngine.start(),
+    which reconstructs the C context with tune_n == 0 -- every knob back to
+    default. Before the capture-and-reapply fix nothing re-applied the arm's
+    tune, so a reveal_map=1.0 arm resumed with reveal_map=0: the hero's
+    REMEMBERED map survives in the player blob, which hid the loss on explored
+    floors, but a resume onto a fresh floor came up dark. Measured on the
+    finished E16 arms, 18-28% of full-vision attempts started with <50 map
+    cells. The knob dict is the assertion here, not a rendered-cell count,
+    because the count depends on the floor while the knob does not.
+    """
+    import numpy as np
+    from nethack_core.engine_env import EngineEnv
+
+    env = EngineEnv()
+    env.reset(seeds=(1, 1), tune={"reveal_map": 1.0})
+    env.step(13)
+    env._engine.goto_depth(2)
+    ck = tmp_path / "archive" / "run" / "c1"
+    checkpoint_save(env, ck, name="revealed", note="")
+
+    env2, _ = checkpoint_restore(ck, env=env)
+    assert float(env2.get_tune().get("reveal_map") or 0.0) == 1.0, (
+        "restore dropped the tune: reveal_map came back vanilla")
+
+    # And the knob must actually reach the served observation: the tty map the
+    # renderer reads should show far more of the floor than the hero has
+    # walked. 200 matches the preflight threshold for a first revealed frame.
+    obs, _, _ = env2.step(ord("."))
+    tty = np.array(obs.tty_chars).reshape(24, 80)
+    revealed = int((tty[1:22, :] != ord(" ")).sum())
+    assert revealed > 200, (
+        f"reveal_map survived as a knob but the restored frame shows only "
+        f"{revealed} cells")

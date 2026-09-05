@@ -763,8 +763,34 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     engine_env = _engine_of(env)
     raw = _raw_of(engine_env)
 
+    # THE TUNE DOES NOT SURVIVE THE RESET, so capture it before and re-apply
+    # after. reset() -> RawEngine.start(tune=None) tears down the C context and
+    # rebuilds it with tune_n == 0 -- every knob back to vanilla -- and nothing
+    # downstream of a restore re-applies the arm's tune. The hero's REMEMBERED
+    # map lives in the player blob and survives, which is what made this
+    # invisible for so long: a resume onto an explored floor looks normal, and
+    # only a resume onto a fresh floor (level-entry checkpoints, 12% of the
+    # archive but a favourite of the orchestrator) comes up dark. Measured on
+    # the finished E16 arms: 18-28% of reveal_map=1.0 attempts started with
+    # <50 map cells when their tier promised a fully revealed floor.
+    #
+    # Captured from the live engine rather than taken as a parameter, so every
+    # caller is fixed at once and a caller cannot pass a tune that contradicts
+    # the env it hands in. Generation-time knobs (room_density &c.) are inert
+    # when re-applied here -- the checkpoint's floors were already generated,
+    # and the level blobs loaded below carry their geometry -- so re-applying
+    # the full dict is safe; render-time knobs like reveal_map are the ones
+    # this exists for.
+    tune_before = None
+    try:
+        tune_before = dict(engine_env.get_tune() or {})
+    except Exception:
+        pass                     # a fresh EngineEnv has vanilla knobs anyway
+
     core, disp = (header.get("seed") or meta.get("seed") or [0, 0])[:2]
     engine_env.reset(seeds=(int(core), int(disp)))
+    if tune_before:
+        engine_env.set_tune(**tune_before)
     # Dismiss the fresh game's welcome --More-- BEFORE loading anything, or the
     # single ctrl-R below is swallowed by that prompt instead of running
     # docrt(): the returned observation then still shows the reset's level-1
