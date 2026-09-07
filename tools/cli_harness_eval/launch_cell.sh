@@ -412,7 +412,10 @@ if [ -n "${TOOL_TIER:-}" ]; then
     echo "  set PY_BIN to a 3.11+ interpreter." >&2
     exit 2
   fi
-  _TIER_CONTRACT="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" contract)" || exit 2
+  # Tier-aware: an experiment tier's [<tier>.contract] overrides (variant,
+  # skill_set, tune knobs) are part of ITS contract -- the checks below must
+  # enforce the tier as declared, not the global baseline row.
+  _TIER_CONTRACT="$("$PY_BIN" "${REPO}/tools/cli_harness_eval/tool_tiers.py" contract "${TOOL_TIER}")" || exit 2
   _TIER_VARIANT="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["variant"])')"
   _TIER_CALLS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.load(sys.stdin)["max_calls"])')"
   _TIER_SEEDS="$(printf '%s' "$_TIER_CONTRACT" | "$PY_BIN" -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["seeds"]))')"
@@ -544,7 +547,173 @@ if [ -n "${CONTINUAL_HARNESS:-}" ]; then
   echo "[launch_cell] continual: run_id=${CONTINUAL_RUN_ID} store=${CONTINUAL_HARNESS}"
 fi
 
+# E16_ARGS: a JSON object of E16 Go-Explore env_args, allowed ALONGSIDE
+# TOOL_TIER. That is the difference from ENV_ARGS, and it is a whitelist, not a
+# relaxation.
+#
+# ENV_ARGS is refused next to TOOL_TIER because both write arbitrary
+# `--taskset.env_args.*` paths and the eval CLI resolves duplicates last-wins,
+# SILENTLY -- measured: ENV_ARGS='{"netplay_telemetry":true}' with TOOL_TIER=base
+# produced a cell labelled base running a human-tier fix. That reasoning is about
+# COLLISION, not about the mechanism: keys no tier can ever write cannot collide.
+#
+# So this knob accepts exactly five keys, all of which name E16 run RESOURCES
+# (which archive, which pages, which checkpoint, where to log) rather than
+# experiment factors. Every experiment factor -- doc, model, surface, encoding,
+# budget, fix flags -- still comes only from the tier. The whitelist is enforced
+# below and an unknown key is a hard error, so this cannot become a second,
+# quieter ENV_ARGS.
+#
+#   resume_checkpoint   archive/<run>/c<id> this rollout resumes from
+#   checkpoint_archive  archive root the published `save` skill writes into
+#   wiki_dir            the run's own COPY of the curated wiki pages
+#   ledger_text         orchestrator-rendered ledger for the first observation
+#   fidelity_log        JSONL the restore-fidelity audit appends to
+#   directive           the orchestrator's instruction for THIS attempt, served
+#                       verbatim in the player's first observation
+#   reseed              "[core, disp]" to reseed the RNG with after the restore,
+#                       or absent for the deterministic default. It belongs
+#                       here and not in a tier for the same reason
+#                       resume_checkpoint does: it is derived PER ATTEMPT (from
+#                       the run's rng_seed, the checkpoint id and the attempt
+#                       index), so no fixed tier could carry it. WHETHER a run
+#                       reseeds at all is the experiment factor, and that lives
+#                       in the orchestrator's --reseed flag and in
+#                       provenance.json, where a reader can find it.
+if [ -n "${E16_ARGS:-}" ]; then
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*|*" claude_code "*) ;;
+    *)
+      echo "launch_cell: E16_ARGS is for the CLI arms (it writes taskset.env_args)." >&2
+      exit 2
+      ;;
+  esac
+  # NUL-SEPARATED, not newline-separated, and this is load-bearing rather than
+  # tidy. `ledger_text` is the rendered archive table plus the checkpoint's
+  # lessons plus its quoted conversation prefix: it is MULTI-LINE by
+  # construction, always. A `mapfile -t` over newline-separated records splits
+  # one such value into one array element per LINE, and every line after the
+  # first then reaches the eval CLI as a bare positional argument -- which it
+  # rejects with "Unrecognized arguments: id Dlvl XL HP turn score ...".
+  #
+  # Measured: that is not an edge case, it is EVERY E16 attempt. The 4-attempt
+  # dry run never saw it because a stub player never goes through this script,
+  # and the model-in-the-loop sims never saw it because they passed only a
+  # single-line `directive`. The first real resumed rollout hit it immediately.
+  # VIA A FILE, NOT A PROCESS SUBSTITUTION, and that is the second bug this
+  # block had. `mapfile ... < <(cmd) || { exit 2; }` binds the `||` to MAPFILE,
+  # whose status has nothing to do with `cmd`'s -- so the whitelist rejection
+  # below printed its error, returned 2, and the launch CONTINUED with an empty
+  # flag array. A cell that silently lost its resume_checkpoint, its ledger and
+  # its directive is the exact silent-substitution class that invalidated E15,
+  # and it exited 0 while doing it.
+  _E16_OUT="$(mktemp "${TMPDIR:-/tmp}/e16args.XXXXXX")"
+  if ! E16_ARGS="${E16_ARGS}" "$PY_BIN" - > "$_E16_OUT" <<'PYE16'
+import json, os, sys
+ALLOWED = {"resume_checkpoint", "checkpoint_archive", "wiki_dir",
+           "ledger_text", "fidelity_log", "directive", "reseed"}
+try:
+    obj = json.loads(os.environ["E16_ARGS"])
+except Exception as exc:
+    print(f"launch_cell: E16_ARGS is not valid JSON: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+if not isinstance(obj, dict):
+    print("launch_cell: E16_ARGS must be a JSON object", file=sys.stderr)
+    raise SystemExit(2)
+bad = sorted(set(obj) - ALLOWED)
+if bad:
+    print(f"launch_cell: E16_ARGS keys not allowed: {bad}. Allowed: "
+          f"{sorted(ALLOWED)}. An experiment FACTOR belongs in "
+          f"configs/tool_tiers.toml as its own tier, never here.", file=sys.stderr)
+    raise SystemExit(2)
+for k in sorted(obj):
+    v = obj[k]
+    if isinstance(v, (dict, list)):
+        print(f"launch_cell: E16_ARGS.{k} must be a scalar", file=sys.stderr)
+        raise SystemExit(2)
+    val = v if isinstance(v, str) else json.dumps(v)
+    if "\0" in val:
+        print(f"launch_cell: E16_ARGS.{k} contains a NUL byte", file=sys.stderr)
+        raise SystemExit(2)
+    sys.stdout.write(f"--taskset.env_args.{k}\0")
+    sys.stdout.write(val + "\0")
+PYE16
+  then
+    rm -f "$_E16_OUT"
+    echo "launch_cell: E16_ARGS rejected (see above)." >&2
+    exit 2
+  fi
+  mapfile -d '' -t _E16_FLAGS < "$_E16_OUT"
+  rm -f "$_E16_OUT"
+  # A value that is multi-line must arrive as ONE argv element. If the count is
+  # odd, the flag/value pairing broke and the next thing that happens is a
+  # rollout launched with a truncated ledger -- served bytes that no config
+  # would show as wrong. Refuse instead.
+  if [ $(( ${#_E16_FLAGS[@]} % 2 )) -ne 0 ]; then
+    echo "launch_cell: E16_ARGS produced ${#_E16_FLAGS[@]} argv items (odd);" >&2
+    echo "  flag/value pairing is broken and the served bytes would be wrong." >&2
+    exit 2
+  fi
+  OVERRIDES+=("${_E16_FLAGS[@]}")
+  # The ledger text can be long; log the KEYS only, and let the resolved
+  # config.toml carry the values (which is where an audit should read them).
+  echo "[launch_cell] E16 env_args: $(printf '%s\n' "${_E16_FLAGS[@]}" | grep '^--' | tr '\n' ' ')"
+fi
+
 echo "[launch_cell] arm=${ARM} config=${CFG} model=${MODEL:-<from config>} variant=${VARIANT:-<from config>} max_calls=${MAX_CALLS} n=${N} timeout=${ROLLOUT_TIMEOUT:-<from config>} out=${OUT_ABS} trace_dir=${TRACE_DIR}"
+
+# ROLLOUT_MAX_RETRIES: the WHOLE-ROLLOUT retry bound (verifiers'
+# `[retries.rollout] max_retries`). This is a COST MULTIPLIER, not a reliability
+# knob: `verifiers/v1/retries.py:run_with_retry` replays the entire trajectory
+# from turn 1, so an attempt with max_retries=2 can pay for THREE full rollouts.
+# Measured (E16 method test): a provider `429 Rate limit reached` storm drove
+# `retry 1/2` then `retry 2/2`, billing $31.43 for one attempt that then
+# recorded `censored:harness_error`.
+#
+# WHY THE ARMS DEFAULT TO 1 AND NOT 2. The knob was added to survive Prime's
+# intermittent `finish_reason: "error"` (see the arm configs) -- a FIRST-CALL
+# schema rejection that costs nothing to replay and is independent per attempt,
+# so a single retry already recovers essentially all of it. The second retry
+# only ever pays off on a failure that is CORRELATED in time, and the headline
+# correlated failure is a rate-limit storm -- which `run_with_retry` re-enters
+# immediately, because unlike the framework's `retrying()` policy it passes no
+# `wait=` at all, so there is no backoff between attempts. Retry 2 therefore
+# buys a third full rollout at the exact moment retrying cannot work. Capping
+# at 1 halves the worst-case multiplier (3x -> 2x); on a $385 run that is the
+# difference between $1,155 and $770 of exposure.
+#
+# Set explicitly to override; hard-capped, because a typo here is precisely the
+# unbounded-cost failure this exists to bound.
+if [ -n "${ROLLOUT_MAX_RETRIES:-}" ]; then
+  case "${ROLLOUT_MAX_RETRIES}" in
+    ''|*[!0-9]*)
+      echo "launch_cell: ROLLOUT_MAX_RETRIES must be a non-negative integer" \
+           "(got '${ROLLOUT_MAX_RETRIES}')" >&2
+      exit 2 ;;
+  esac
+  if [ "${ROLLOUT_MAX_RETRIES}" -gt "${ROLLOUT_MAX_RETRIES_CAP:-2}" ]; then
+    echo "launch_cell: ROLLOUT_MAX_RETRIES=${ROLLOUT_MAX_RETRIES} exceeds the cap" \
+         "of ${ROLLOUT_MAX_RETRIES_CAP:-2}. Each retry replays a WHOLE rollout;" >&2
+    echo "  N retries means an attempt can bill (N+1)x. Raise" \
+         "ROLLOUT_MAX_RETRIES_CAP deliberately if that is really intended." >&2
+    exit 2
+  fi
+  OVERRIDES+=("--retries.rollout.max_retries" "${ROLLOUT_MAX_RETRIES}")
+  echo "[launch_cell] rollout retries: max_retries=${ROLLOUT_MAX_RETRIES}" \
+       "(an attempt can bill up to $((ROLLOUT_MAX_RETRIES + 1)) full rollouts)"
+fi
+
+# EXTRA_EVAL_FLAGS: whitespace-separated eval-CLI flags appended LAST (they win
+# on duplicate dotted paths). Added for the localhost interception override
+# (--interception.tunnel.type custom ...): the default prime tunnel counts
+# against a 32-tunnel team quota, and quota exhaustion killed whole cells with
+# HarnessError at boot (E15 r1 groups 1-2, 2026-08-26). Infra-transport only —
+# never put experiment factors here; those belong in the tier registry.
+if [ -n "${EXTRA_EVAL_FLAGS:-}" ]; then
+  read -r -a _EXTRA_EVAL <<< "${EXTRA_EVAL_FLAGS}"
+  OVERRIDES+=("${_EXTRA_EVAL[@]}")
+  echo "[launch_cell] extra eval flags: ${EXTRA_EVAL_FLAGS}"
+fi
 
 exec "${EVAL_BIN}" @ "${CFG}" \
   --num_tasks "${N}" \

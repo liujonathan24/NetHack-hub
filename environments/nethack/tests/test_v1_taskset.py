@@ -30,6 +30,7 @@ sys.path.insert(
 )
 
 import nethack_v1 as m  # noqa: E402
+import nethack_v1  # noqa: E402  (module name used by the crash-capture tests)
 from verifiers.clients import Client  # noqa: E402
 from verifiers.types import Response, ResponseMessage, ToolCall  # noqa: E402
 from verifiers.v1.legacy import rollout_output_to_trace  # noqa: E402
@@ -217,6 +218,82 @@ def test_dataset_rows_do_not_shadow_the_reserved_task_field():
     assert "task" not in row
     assert row["info"]["seed"] == 123
     assert "prompt" in flatten_task_input(row)
+
+
+# --------------------------------------------------------------------------- #
+# a fatal NATIVE crash of the tool server must leave evidence
+# --------------------------------------------------------------------------- #
+
+def test_a_fatal_native_signal_leaves_a_dump_in_the_attempt_directory(tmp_path):
+    """The whole postmortem for a segfaulted tool server used to be deleted.
+
+    The env drives NetHack through a C extension. A SIGSEGV/SIGABRT there
+    kills `python -m nethack_v1` with no Python traceback; nothing in the eval
+    CLI waits on the child, and its merged stdout/stderr lives in the runtime
+    workdir that `SubprocessRuntime.cleanup()` `shutil.rmtree`s -- so the
+    evidence is destroyed by the same teardown that fails to notice the death.
+    Measured on run treesmoke2: three attempts, three fatal signals (11/6/11 in
+    /var/log/apport.log), zero bytes of evidence in the run directory.
+
+    `arm_crash_capture()` arms faulthandler on a file in the ATTEMPT
+    directory, which outlives the runtime. A subprocess is the only honest way
+    to assert this: the signal has to actually be fatal.
+    """
+    import json
+    import os
+    import subprocess
+
+    crash_dir = tmp_path / "a001"
+    script = (
+        "import faulthandler, nethack_v1\n"
+        "print(nethack_v1.arm_crash_capture())\n"
+        "faulthandler._sigsegv()\n"
+    )
+    env = dict(os.environ)
+    env["NETHACK_ENV_CRASH_DIR"] = str(crash_dir)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    proc = subprocess.run([sys.executable, "-c", script], env=env,
+                          capture_output=True, text=True, timeout=300)
+
+    assert proc.returncode < 0, f"expected a fatal signal, got {proc.returncode}"
+    log = crash_dir / nethack_v1.CRASH_LOG_NAME
+    assert log.is_file(), "the crash log must be where the ATTEMPT can find it"
+    text = log.read_text(errors="replace")
+    assert "[env-server] start pid=" in text, "the header identifies the server"
+    assert nethack_v1.CRASH_MARKER in text
+    assert "Segmentation fault" in text
+
+
+def test_arming_the_crash_capture_takes_its_path_from_the_served_config():
+    """`trace_dir` is the one durable directory the tool server is told about,
+    so the dump lands next to the attempt's turn files with no new plumbing."""
+    import json
+    import os
+    import tempfile
+
+    keys = ("VF_CONFIG", "NETHACK_ENV_CRASH_DIR", "NLE_CRASH_DIR")
+    with tempfile.TemporaryDirectory() as tmp:
+        turns = os.path.join(tmp, "turns")
+        prev = {k: os.environ.get(k) for k in keys}
+        for k in ("NETHACK_ENV_CRASH_DIR", "NLE_CRASH_DIR"):
+            os.environ.pop(k, None)
+        os.environ["VF_CONFIG"] = json.dumps({"trace_dir": turns})
+        try:
+            path = nethack_v1.arm_crash_capture()
+            nle_crash_dir = os.environ.get("NLE_CRASH_DIR")
+        finally:
+            for k, v in prev.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        assert path == os.path.join(tmp, nethack_v1.CRASH_LOG_NAME)
+        assert os.path.isfile(path)
+        # The ENGINE's own dumper is pointed at the same durable directory.
+        # It defaults to "." -- the runtime workdir teardown deletes -- and it
+        # is the only channel that fires for a fault inside libnethack.so,
+        # because the sentinel's handlers override CPython's faulthandler.
+        assert nle_crash_dir == tmp
 
 
 if __name__ == "__main__":

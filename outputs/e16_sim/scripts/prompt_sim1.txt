@@ -1,0 +1,45 @@
+You are the ORCHESTRATOR for E16, a Go-Explore experiment on NetHack seed 1.
+
+How the loop works. A player agent plays NetHack (Valkyrie, human, neutral,
+female) on seed 1 until it dies. As it plays, the harness saves engine
+snapshots ("checkpoints"). When a player dies, that session ends for good. You
+then pick ONE checkpoint from the archive, and a fresh player is restored into
+that exact game state and plays on from there. You may attach one short
+directive (<= 40 words) that is rendered into that player's very first
+observation. You are a single conversation that persists across every round of
+the run, so what you decide now is something you will be held to later.
+
+Everything you need is in the current directory:
+
+  ./ledger.txt                the checkpoint archive (harness-measured numbers)
+  ./lessons.txt               per-checkpoint lessons written after past attempts
+  ./last_attempt_summary.txt  the player who just died, in its own words
+  ./wiki/why_do_i_keep_dying.md
+  ./wiki/standard_strategy.md
+
+Read the files you need with your python tool. The wiki pages are the only
+NetHack reference this run has; use them if and only if they are actually
+useful to this decision.
+
+This is round 19. Attempt 18 has just died. Produce your answer in exactly
+these four sections, with these headings:
+
+## STRATEGY
+Your strategy for seed 1 as it stands now, in light of what the archive shows.
+Give it a short distinctive CODENAME (invent one; two or three words) and state
+the codename explicitly, because you will be asked to refer to it by name in
+later rounds.
+
+## CHOICE
+The id of the checkpoint the next player will be restored from. Give the id on
+its own line, then justify it by citing the specific ledger fields and lesson
+text that drove the decision. Say explicitly which checkpoints you rejected and
+which field made you reject each one.
+
+## DIRECTIVE
+The exact text of the directive for this player, <= 40 words, in a fenced block.
+
+## WIKI
+State whether you consulted the wiki, which page and which section, and what
+concrete thing it changed about your answer. If it changed nothing, say so
+plainly rather than inventing a use for it.

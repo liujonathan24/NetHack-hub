@@ -509,6 +509,62 @@ def _bbox_min_template(structured, journal, state, *, compact, journal_max_chars
     return _splice_placeholder(text, placeholder)
 
 
+def _bbox_min_odjson_template(structured, journal, state, *, compact,
+                              journal_max_chars):
+    """BBOX_BJSON_OD: BBOX_MIN quiet turns; request_map returns map PLUS JSON.
+
+    E15 V-arm follow-up (on-demand x encoding). Always-on encodings (B1,
+    B_JSON, JSON) all scored below the hidden-map control, and the V1 autopsy
+    localized the losses to (a) instant full-level stair targeting on arrival
+    and (b) the loss of the deliberate stop-and-look beat that `request_map`
+    turns provided; separately, the ADJACENT feed's multi-`@` anchoring
+    ambiguity generated phantom-target attacks. This variant keeps delivery
+    identical to BBOX_MIN — quiet turns are byte-identical, the map is only
+    ever bought — and changes ONLY what the purchase returns: the full section
+    set plus a `=== MAP (JSON) ===` block (the same structured, coordinate-
+    addressable body the B_JSON/JSON variants render), spliced ahead of
+    STATUS. One treatment, one axis: the encoding of the bought look.
+    """
+    force = bool(state.pop("_force_map", False)) if state else False
+    reveal_turn = bool(state) and state.get("_last_skill_name") == "reveal"
+    request_turn = (force and bool(state)
+                    and state.get("_last_skill_name") == "request_map")
+    text = format_observation_as_chat(
+        structured, journal, state, compact=compact,
+        journal_max_chars=journal_max_chars, include_map=request_turn,
+        minimal=not (reveal_turn or request_turn),
+    )
+    if request_turn:
+        # Splice the JSON body between the ASCII map and STATUS. Built from
+        # the same raw obs the ASCII render used, so the two views can never
+        # disagree; encoder failure degrades to the plain BBOX_MIN render
+        # rather than breaking the turn.
+        try:
+            from nethack_core.map_model import build_map_model
+            from nethack_harness.prompt.map_encoders import json_encode
+
+            raw = state["raw_obs"]
+            body = json_encode(
+                build_map_model(raw),
+                detail=state.get("map_detail", "full"),
+                chars=raw.chars,
+            )
+            block = f"=== MAP (JSON) ===\n{body}\n"
+            marker = "=== STATUS ==="
+            if marker in text:
+                text = text.replace(marker, f"{block}\n{marker}", 1)
+            else:
+                text = f"{text}\n{block}"
+        except Exception:
+            pass
+        return text
+    pub = {str(t) for t in ((state or {}).get("_published_tools") or ())}
+    placeholder = _BBOX_MIN_PLACEHOLDER
+    if pub and "reveal" not in pub and "request_map" in pub:
+        placeholder = _BBOX_MIN_PLACEHOLDER_REQUEST_MAP
+    return _splice_placeholder(text, placeholder)
+
+
 def _sparse_template(structured, journal, state, *, compact, journal_max_chars):
     """SPARSE: entity-only map, always shown. No terrain, no duplicate sections."""
     return format_observation_as_chat(
@@ -764,6 +820,12 @@ def _build_registry(system_prompt: str) -> dict:
         # _bbox_min_template.
         "BBOX_MIN": canonical("BBOX_MIN", turn_template=_bbox_min_template,
                               obs=ObsSpec(setup_flags={"_bbox_map": True})),
+        # BBOX_MIN with the bought look upgraded: request_map turns render the
+        # full section set PLUS the structured JSON map body. Quiet turns are
+        # byte-identical to BBOX_MIN. See _bbox_min_odjson_template.
+        "BBOX_BJSON_OD": canonical("BBOX_BJSON_OD",
+                                   turn_template=_bbox_min_odjson_template,
+                                   obs=ObsSpec(setup_flags={"_bbox_map": True})),
         # BBOX_MIN + the adaptive objective hint in LAG (explore) mode: every
         # observation opens by naming the BALROG axis that is BEHIND. Chosen
         # for exp4 as the metric-side answer to the exp3b death pattern -- 10

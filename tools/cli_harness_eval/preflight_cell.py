@@ -59,10 +59,18 @@ def check_config(run_dir: Path, stack: str, tier_hash: str | None, problems: lis
         reveal_ok = False
     if not reveal_ok:
         fail(f"tune.reveal_map is {reveal!r}, expected 1.0 (cell would run fog'd)", problems)
-    if ea.get("skill_set") != "np_core,request_map,search":
-        fail(f"skill_set is {ea.get('skill_set')!r}, not the np_core surface", problems)
-    if ts.get("variant") not in (None, "BBOX_MIN"):
-        fail(f"variant is {ts.get('variant')!r}, expected BBOX_MIN", problems)
+    # Tier-aware expectations: an experiment tier's [<tier>.contract] can
+    # legitimately override skill_set (p3_rollback) or variant (v1_b1,
+    # v2_*) -- the check must enforce the tier AS DECLARED, not the global
+    # baseline row, or every probe cell "fails" for running its own contract.
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from tool_tiers import contract_for
+    _want = contract_for(stack)
+    if ea.get("skill_set") != _want["skill_set"]:
+        fail(f"skill_set is {ea.get('skill_set')!r}, expected {_want['skill_set']!r}", problems)
+    if ts.get("variant") not in (None, _want["variant"]):
+        fail(f"variant is {ts.get('variant')!r}, expected {_want['variant']}", problems)
 
     # The provenance pin must have survived into the artifact.
     if ea.get("tool_tier") != stack:

@@ -16,8 +16,16 @@ import os
 
 from nethack_core import _engine
 
-# Dynamic dungeon-level files are "<s_lock>.<ledger>"; s_lock is empty in this
+# Dynamic dungeon-level files are "<base>.<ledger>". The base is empty in this
 # build, so they are ".<digits>" (e.g. ".50") in the hackdir.
+#
+# NB the base is NOT the same thing as ``s_lock``: set_levelfile_name()
+# (files.c:499) rewrites s_lock IN PLACE to "<base>.<lev>" on every level-file
+# operation, so s_lock is ".2" once the hero has been to ledger 2. Reading it
+# as a prefix -- which the bundler did until E16 -- matches nothing at all, and
+# every test in this file that only ever touches a fresh game (s_lock still
+# empty) passes anyway. See test_levelfile_integrity.py for the coverage that
+# actually exercises a transitioned game.
 _LOCK_PREFIX = "."
 
 
@@ -84,21 +92,35 @@ def test_static_template_files_are_not_bundled():
     env.end()
 
 
-def test_levelfile_created_after_snapshot_is_left_alone():
-    """A level file that did not exist at snapshot time is not deleted on
-    restore (NetHack regenerates unvisited levels rather than reading them)."""
+def test_levelfile_created_after_snapshot_is_deleted_on_restore():
+    """A level file that did not exist at snapshot time is DELETED on restore.
+
+    CONTRACT CHANGE (E16, 2026-08). This test previously asserted the opposite
+    ("post-snapshot level files are left alone"), on the reasoning that NetHack
+    regenerates unvisited levels via mklev rather than reading them, so a stale
+    file is harmless. It is harmless for READS, but it makes the restored
+    (heap, disk) pair a function of the abandoned future rather than of the
+    snapshot -- and that whole class of divergence is what produced three
+    rollouts' worth of corrupted data: when the heap says a level file exists
+    and it does not, goto_level hands the run to done(TRICKED), a full-HP
+    game-over indistinguishable from a monster kill.
+
+    The contract is now an equality in both directions: after restore, the set
+    of level files on disk is EXACTLY the set that existed at snapshot time.
+    """
     env = _engine.RawEngine()
     env.start(core=42, disp=42)
     hd = env._hackdir
 
-    h = env.snapshot()  # no 1lock.42 at this point
+    h = env.snapshot()  # no ".42" at this point
     newfile = os.path.join(hd, _LOCK_PREFIX + "42")
     _write(newfile, b"CREATED-AFTER-SNAPSHOT")
 
     env.restore(h)
 
-    assert os.path.exists(newfile) and _read(newfile) == b"CREATED-AFTER-SNAPSHOT", (
-        "restore should leave post-snapshot level files untouched"
+    assert not os.path.exists(newfile), (
+        "restore must drop level files that did not exist at snapshot time, so "
+        "the on-disk level set is exactly the snapshot's"
     )
     env.free_snapshot(h)
     env.end()
