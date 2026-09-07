@@ -1,0 +1,10 @@
+- [NetHack experiment setup](nethack-experiment-setup.md) — Prime-only inference, sandbox off, hub runs on exp/cli-harness-eval not main
+- [Prime Intellect sandbox is ephemeral](prime-intellect-sandbox-is-ephemeral.md) — no persistent volume; rebuild scripts over hand-run setup
+- [gh token workflow scope](gh-token-lacks-workflow-scope.md) — granted 2026-08-05; if it lapses, open the device URL before running `gh auth refresh -s workflow`
+- [Tool surface is frozen](tool-surface-frozen.md) — never change published tool schemas for logging; correlation IDs ride the result payload
+- [Commits authored as Jonathan](commits-authored-as-jonathan.md) — git author must be Jonathan Liu <jl0796@princeton.edu>, never Claude
+- [Prime Agent rebuilds dead game](prime-agent-rebuilds-dead-game.md) — zombie seeds counterfeit the NetHack backend in-kernel; security implications
+- [Prime Agent daemon wedges](prime-agent-daemon-wedges.md) — stale daemon.sock hangs every rollout at boot; fix: prime-agent shutdown --force
+- [NetHack E7 blog handoff](blog-nethack-e7-handoff.md) — index.md is source of truth; re-run build_index.py so index.html never goes stale
+- [Work in your own worktree](work-in-own-worktree.md) — never share /root/nld/blog-wt or hub-eval with other agents
+- [Harness pkg not from worktree](harness-package-not-from-worktree.md) — worktrees get env code but the prime-agent harness comes from the main checkout
