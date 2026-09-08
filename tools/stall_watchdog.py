@@ -567,7 +567,7 @@ def quarantine_root(turns_dir: str, override: str | None) -> str:
 class Watchdog:
     def __init__(self, turns_dirs, timeout=300.0, poll=15.0, kill_grace=10.0,
                  quarantine=None, log_path=None, dry_run=False, verbose=False,
-                 adaptive_factor=4.0, adaptive_ceiling=1800.0):
+                 adaptive_factor=4.0, adaptive_ceiling=1800.0, parent_pid=None):
         self.turns_dirs = [os.path.abspath(d) for d in turns_dirs]
         self.timeout = float(timeout)
         self.adaptive_factor = float(adaptive_factor)
@@ -578,9 +578,14 @@ class Watchdog:
         self.log_path = log_path
         self.dry_run = dry_run
         self.verbose = verbose
+        # The rollout's own live process (the eval CLI). Doubles as the exit
+        # condition in run() and as the fallback kill target when the turn-file
+        # writer has died but the ROLLOUT has not (see _live_rollout_pid).
+        self.parent_pid = parent_pid
         self.kills: list[dict] = []
         self._handled: set[tuple[str, int]] = set()
         self._warned_reuse: set[int] = set()
+        self._traces_cache: dict[str, tuple[tuple, set[int]]] = {}
 
     # -- logging ----------------------------------------------------------
     def _log_path_for(self, turns_dir: str) -> str:
@@ -610,11 +615,117 @@ class Watchdog:
         sys.stderr.write(f"[stall_watchdog] {msg}\n")
         sys.stderr.flush()
 
+    # -- relaunch coverage ------------------------------------------------
+    #
+    # THE HOLE THIS CLOSES. The harness relaunches a wedged player
+    # (`max_relaunches: 2`). The relaunch is a NEW process, and it opens a NEW
+    # turn file only once it produces its first turn — so between the relaunch
+    # and that first write, the rollout owns NO file the watchdog can see.
+    # Meanwhile the ORIGINAL writer's PID is dead, and the "finished or already
+    # dead, its files are final" branch below filed that entry as complete and
+    # stopped inspecting it. Net effect, measured twice (mechcheck, methodtest):
+    # a relaunched rollout had ZERO watchdog coverage and wedged a run for 45
+    # minutes with an armed 300s watchdog.
+    #
+    # The dead writer's stale file is the only remaining hook on that rollout,
+    # so we keep it — but a dead PID cannot be killed, so the kill target falls
+    # back to the process that is actually still running the rollout: the eval
+    # CLI we were armed against (`--parent-pid`).
+    #
+    # Three guards keep the legitimate "genuinely finished" case (the one the
+    # original comment describes) untouched:
+    #   * no live parent -> the rollout really is over. This is also the default
+    #     when the watchdog was armed without --parent-pid, so nothing changes
+    #     for an un-parented invocation.
+    #   * `traces.jsonl` already holds a record for every seed the dead PID
+    #     owned -> the eval CLI finalized it; its files are final, as before.
+    #   * the WHOLE turns dir must be silent past the threshold (checked by the
+    #     caller) -> a relaunch that IS writing under a new PID is progress, and
+    #     progress is never killed.
+    def _traces_cover(self, turns_dir: str, seeds: set[int]) -> bool:
+        """True when `traces.jsonl` already holds a record for every seed in
+        `seeds` — i.e. the eval CLI finalized those rollouts and the turn files
+        are the final artefact the original comment protects.
+
+        Cached on (mtime, size) so a 15s poll does not re-parse the cell's
+        traces every pass. Never raises: an unreadable traces file must read as
+        "not finalized" (keep watching) rather than take the watchdog down.
+        """
+        cell_dir = os.path.dirname(turns_dir.rstrip(os.sep))
+        path = os.path.join(cell_dir, "traces.jsonl")
+        try:
+            st = os.stat(path)
+            stamp = (st.st_mtime, st.st_size)
+        except OSError:
+            return False  # no traces yet == nothing finalized
+        hit = self._traces_cache.get(path)
+        if hit is None or hit[0] != stamp:
+            done: set[int] = set()
+            try:
+                with open(path, "rb") as fh:
+                    for raw in fh.read().splitlines():
+                        try:
+                            rec = json.loads(raw.decode("utf-8", "replace"))
+                        except (ValueError, UnicodeDecodeError):
+                            continue  # a half-written final line is not a record
+                        if not isinstance(rec, dict):
+                            continue
+                        task = rec.get("task")
+                        data = task.get("data") if isinstance(task, dict) else None
+                        idx = data.get("idx") if isinstance(data, dict) else None
+                        try:
+                            if idx is not None:
+                                done.add(int(idx))
+                        except (TypeError, ValueError):
+                            continue
+            except OSError:
+                return False
+            hit = (stamp, done)
+            self._traces_cache[path] = hit
+        return bool(seeds) and seeds.issubset(hit[1])
+
+    def _live_rollout_pid(self, turns_dir: str, slot: dict) -> int | None:
+        """The still-running process of a rollout whose turn-file writer died,
+        or None when the rollout is genuinely over and its files are final."""
+        parent = self.parent_pid
+        if parent is None or not pid_alive(parent):
+            return None
+        if self._traces_cover(turns_dir, set(slot["seeds"])):
+            return None
+        # Same PID-reuse rule applied to the fallback target: the eval CLI
+        # started before its rollouts wrote anything, so a "parent" that started
+        # after the newest turn file is a recycled PID and must not be killed.
+        start = pid_start_time(parent)
+        if start is not None and start > slot["newest_mtime"] + _PID_REUSE_SLACK_S:
+            if parent not in self._warned_reuse:
+                self._warned_reuse.add(parent)
+                self.say(f"parent pid={parent} started after the newest turn file — "
+                         f"PID reuse, refusing to kill an unrelated process")
+            return None
+        return parent
+
+    def _adaptive_for(self, files: list[str]) -> float:
+        """The effective stall threshold calibrated on the newest of `files`.
+        Degrades to the base timeout on ANY error (see check_dir)."""
+        try:
+            newest = max(files, key=lambda p: os.stat(p).st_mtime)
+            return adaptive_timeout(self.timeout, recent_call_gaps(newest),
+                                    factor=self.adaptive_factor,
+                                    ceiling=self.adaptive_ceiling)
+        except Exception:
+            return self.timeout
+
     # -- the check --------------------------------------------------------
     def check_dir(self, turns_dir: str, now: float | None = None) -> list[dict]:
         now = time.time() if now is None else now
         killed = []
-        for pid, slot in sorted(scan(turns_dir).items()):
+        by_pid = scan(turns_dir)
+        # Newest write by ANY pid in this cell. A dead writer's rollout is only
+        # silent if NOTHING in the cell has moved — otherwise the relaunch is
+        # writing under a new PID and is making progress.
+        dir_newest = max((s["newest_mtime"] for s in by_pid.values()), default=0.0)
+        dir_files = [p for s in by_pid.values() for p in s["files"]]
+        for pid, slot in sorted(by_pid.items()):
             key = (turns_dir, pid)
             if key in self._handled:
                 continue
@@ -648,8 +759,31 @@ class Watchdog:
                              f"calls justify the slack)")
                 continue
             if not pid_alive(pid):
-                # Finished or already dead. Its files are final; leave them for
-                # grading. Remember it so we do not re-inspect every poll.
+                target = self._live_rollout_pid(turns_dir, slot)
+                if target is None:
+                    # Finished or already dead. Its files are final; leave them
+                    # for grading. Remember it so we do not re-inspect every
+                    # poll.
+                    self._handled.add(key)
+                    continue
+                # The writer is dead but the ROLLOUT is not: a relaunch. Judge
+                # it on the whole cell's silence, not this dead file's, and do
+                # NOT mark it handled while the cell is still moving — the
+                # relaunch may be writing under a PID we have not seen yet.
+                dir_idle = now - dir_newest
+                dir_eff = self._adaptive_for(dir_files)
+                if dir_idle <= dir_eff:
+                    if self.verbose:
+                        self.say(f"pid={pid} is dead but its rollout is live "
+                                 f"(parent {target}); cell idle={dir_idle:.0f}s "
+                                 f"is inside {dir_eff:.0f}s — still watching")
+                    continue
+                self.say(f"pid={pid} is DEAD but its rollout is still live "
+                         f"(parent {target}, no traces.jsonl record, cell silent "
+                         f"{dir_idle:.0f}s): RELAUNCHED rollout, watching the "
+                         f"live process instead of filing it as finished")
+                killed.append(self.handle_stall(turns_dir, pid, slot, dir_idle,
+                                                kill_pid=target, relaunch=True))
                 self._handled.add(key)
                 continue
             start = pid_start_time(pid)
@@ -664,7 +798,13 @@ class Watchdog:
             self._handled.add(key)
         return killed
 
-    def handle_stall(self, turns_dir: str, pid: int, slot: dict, idle: float) -> dict:
+    def handle_stall(self, turns_dir: str, pid: int, slot: dict, idle: float,
+                     kill_pid: int | None = None, relaunch: bool = False) -> dict:
+        # `pid` is always the turn-file WRITER — it identifies the evidence and
+        # the files to quarantine. `kill_pid` is what actually gets killed, and
+        # differs from `pid` only in the relaunch case, where the writer is
+        # already dead and the live process is the rollout's eval CLI.
+        target = pid if kill_pid is None else kill_pid
         # Evidence first: read the last recorded turn for every seed this PID
         # owns BEFORE anything is killed or moved.
         seeds = {}
@@ -685,32 +825,38 @@ class Watchdog:
         self.say(f"STALL turns_dir={turns_dir} pid={pid} idle={idle:.0f}s "
                  f"(timeout={self.timeout:.0f}s) seeds={sorted(slot['seeds'])} "
                  f"likely_hung_seed={stalled_seeds[0]}"
+                 + (f" [RELAUNCHED: writer {pid} is dead, killing live rollout "
+                    f"{target}]" if relaunch else "")
                  + (" [DRY RUN]" if self.dry_run else ""))
 
         # Agent FIRST, tool server second (see the agent-first block above).
+        # Mapped from the LIVE target: a dead writer holds no sockets, so in the
+        # relaunch case the ports must come from the process still running.
         agent_kills = []
         try:
-            ports = listen_ports(pid)
-            excl = {pid, os.getpid()} | set(descendants(pid))
+            ports = listen_ports(target)
+            excl = {target, os.getpid()} | set(descendants(target))
             for apid in agent_pids_for_ports(ports, excl):
                 self.say(f"killing AGENT pid={apid} for stalled tool-server "
-                         f"pid={pid} (ports={sorted(ports)})")
+                         f"pid={target} (ports={sorted(ports)})")
                 agent_kills.append(
                     {"pid": apid, **kill_tree(apid, self.kill_grace,
                                               dry_run=self.dry_run)})
             if not agent_kills:
-                self.say(f"no agent process matched tool-server pid={pid} "
+                self.say(f"no agent process matched tool-server pid={target} "
                          f"(ports={sorted(ports)}); killing writer tree only")
         except Exception as exc:  # never let mapping kill the watchdog
             self.say(f"agent-first mapping failed ({exc!r}); "
                      f"falling back to writer tree only")
-        kill = kill_tree(pid, self.kill_grace, dry_run=self.dry_run)
+        kill = kill_tree(target, self.kill_grace, dry_run=self.dry_run)
         kill["agents"] = agent_kills
         moved, qdir = self.quarantine_files(turns_dir, pid, slot["files"])
 
         rec = self.log(
             turns_dir, "kill",
             pid=pid,
+            kill_pid=target,
+            relaunched=relaunch,
             idle_s=round(idle, 1),
             timeout_s=self.timeout,
             seeds=sorted(slot["seeds"]),
@@ -732,8 +878,8 @@ class Watchdog:
         n_partial = self.flush_partial_traces(turns_dir, moved, rec)
         if n_partial:
             self.say(f"wrote {n_partial} partial trace record(s) for the killed attempt(s)")
-        self.say(f"killed pid={pid} (survivors={kill['survivors']}); "
-                 f"quarantined {len(moved)} file(s) -> {qdir}")
+        self.say(f"killed pid={target} (survivors={kill['survivors']}); "
+                 f"quarantined {len(moved)} file(s) of writer pid={pid} -> {qdir}")
         self.kills.append(rec)
         return rec
 
@@ -808,6 +954,9 @@ class Watchdog:
 
     # -- loop -------------------------------------------------------------
     def run(self, once=False, parent_pid=None, max_seconds=None) -> int:
+        if parent_pid is not None:
+            self.parent_pid = parent_pid
+        parent_pid = self.parent_pid
         stop = {"flag": False}
 
         def _stop(_signum, _frame):
@@ -888,8 +1037,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log", default=None,
                    help="JSONL log path (default: <quarantine-dir>/stall_watchdog.jsonl)")
     p.add_argument("--parent-pid", type=int, default=None,
-                   help="exit when this PID exits — this is how the watchdog is "
-                        "re-armed per batch instead of outliving one")
+                   help="the eval process this watchdog guards. Exit when it "
+                        "exits (this is how the watchdog is re-armed per batch "
+                        "instead of outliving one), AND use it as the kill "
+                        "target when a turn file's writer has died but the "
+                        "rollout is still live — i.e. after a harness relaunch, "
+                        "which otherwise gets no coverage at all")
     p.add_argument("--once", action="store_true", help="one scan pass, then exit")
     p.add_argument("--max-seconds", type=float, default=None,
                    help="stop after this long (testing / bounded runs)")
@@ -964,6 +1117,7 @@ def main(argv=None) -> int:
         log_path=args.log, dry_run=args.dry_run, verbose=args.verbose,
         adaptive_factor=args.adaptive_factor,
         adaptive_ceiling=args.adaptive_ceiling,
+        parent_pid=args.parent_pid,
     )
     return wd.run(once=args.once, parent_pid=args.parent_pid,
                   max_seconds=args.max_seconds)

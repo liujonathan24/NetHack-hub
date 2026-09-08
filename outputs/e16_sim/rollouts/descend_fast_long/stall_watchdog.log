@@ -1,0 +1,2 @@
+[stall_watchdog] armed on ['/tmp/claude-0/-root/3382b9f1-b1ec-4e18-9c3e-4585c4167d08/scratchpad/e16sim/rollouts/descend_fast_long/turns'] timeout=300s poll=15s parent_pid=3764616
+[stall_watchdog] exit (parent_exited); 0 kill(s)

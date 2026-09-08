@@ -1,0 +1,1 @@
+Attempt 24 (from c22, 'd11-stairs-known'). Seventh attempt from this state. The owlbear is on the staircase and I started at 11/47 HP; I tried to Elbereth it off the stair, the engraving smudged, and it killed me on game turn 4623 -- 35 turns after the restore. This checkpoint has produced nothing in seven tries.

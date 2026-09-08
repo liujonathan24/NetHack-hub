@@ -1,0 +1,256 @@
+{
+ "engine": "/root/NetHack-engine",
+ "ident": {
+  "pkg": "/root/NetHack-engine/nethack_core/__init__.py",
+  "so": "/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so",
+  "so_md5": "8757c3d3e2bb25bd1c7786ee111e69fa",
+  "so_mtime": 1787909977.1335406,
+  "so_size": 12112000
+ },
+ "status": "ok",
+ "frames_written": 5527,
+ "gt_checked": 667,
+ "gt_ok": 621,
+ "gt_first_mismatch": {
+  "rec": 621,
+  "step": 5259,
+  "fields": [
+   "glyphs",
+   "chars",
+   "colors",
+   "blstats[0]",
+   "blstats[1]",
+   "blstats[10]",
+   "blstats[20]"
+  ],
+  "replay_time": 4783,
+  "gt_time": 4780
+ },
+ "events": [
+  {
+   "rec": 435,
+   "step": 4465,
+   "op": "rollback",
+   "n": 5,
+   "n_eff": 5,
+   "to_rec": 429,
+   "to_time": 3725
+  },
+  {
+   "rec": 613,
+   "step": 5225,
+   "op": "rollback",
+   "n": 3,
+   "n_eff": 3,
+   "to_rec": 609,
+   "to_time": 4778
+  },
+  {
+   "rec": 620,
+   "step": 5253,
+   "op": "forced_revive",
+   "to_rec": 619,
+   "to_time": 4789,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 621,
+   "step": 5257,
+   "op": "rollback",
+   "n": 5,
+   "n_eff": 5,
+   "to_rec": 615,
+   "to_time": 4783
+  },
+  {
+   "rec": 630,
+   "step": 5291,
+   "op": "rollback",
+   "n": 5,
+   "n_eff": 5,
+   "to_rec": 624,
+   "to_time": 4783
+  },
+  {
+   "rec": 641,
+   "step": 5356,
+   "op": "forced_revive",
+   "to_rec": 640,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 641,
+   "step": 5358,
+   "op": "forced_revive",
+   "to_rec": 640,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 645,
+   "step": 5366,
+   "op": "forced_revive",
+   "to_rec": 644,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 647,
+   "step": 5371,
+   "op": "forced_revive",
+   "to_rec": 646,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 647,
+   "step": 5386,
+   "op": "forced_revive",
+   "to_rec": 646,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 647,
+   "step": 5393,
+   "op": "forced_revive",
+   "to_rec": 646,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 652,
+   "step": 5474,
+   "op": "forced_revive",
+   "to_rec": 651,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 653,
+   "step": 5475,
+   "op": "rollback",
+   "n": 5,
+   "n_eff": 5,
+   "to_rec": 646,
+   "to_time": 4805
+  },
+  {
+   "rec": 653,
+   "step": 5477,
+   "op": "forced_revive",
+   "to_rec": 646,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 654,
+   "step": 5482,
+   "op": "forced_revive",
+   "to_rec": 646,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 656,
+   "step": 5490,
+   "op": "forced_revive",
+   "to_rec": 655,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 658,
+   "step": 5498,
+   "op": "forced_revive",
+   "to_rec": 657,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 659,
+   "step": 5503,
+   "op": "forced_revive",
+   "to_rec": 657,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 661,
+   "step": 5511,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 661,
+   "step": 5513,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 661,
+   "step": 5515,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 661,
+   "step": 5517,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 662,
+   "step": 5522,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 662,
+   "step": 5524,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  },
+  {
+   "rec": 662,
+   "step": 5526,
+   "op": "forced_revive",
+   "to_rec": 660,
+   "to_time": 4805,
+   "was_done": false,
+   "hp": 0
+  }
+ ]
+}

@@ -858,14 +858,27 @@ def _game_over_block(structured, state) -> list[str]:
     where = f"Dlvl {s.get('depth', '?')}"
     when = f"turn {s.get('time', '?')}"
     cause = _death_cause(structured, state)
+    attr = None
+    try:
+        attr = (state or {}).get("_death_attribution")
+    except Exception:
+        attr = None
     out = [
         "=== GAME OVER ===",
         f"YOUR CHARACTER IS DEAD. HP {hp}/{hp_max} on {where} at {when}."
         + (f" {cause}" if cause else ""),
+    ]
+    if attr:
+        # Fix1: explicit attribution so the one-turn death window (P3) opens
+        # with the model knowing exactly which call killed it.
+        out.append(
+            f"You died{': ' + cause if cause else ''} -- after calling {attr}."
+        )
+    out.append(
         "The game is over. Every further tool call is REFUSED without touching "
         "the engine — you cannot move, fight, eat, pray or descend, and nothing "
-        "you do now changes the outcome.",
-    ]
+        "you do now changes the outcome."
+    )
     if "rollback" in published_tools_for(state):
         out.append(
             "ONE action still works: `rollback(n)` rewinds the last n turns and "

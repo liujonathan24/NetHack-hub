@@ -1,0 +1,8 @@
+CHECKPOINT ARCHIVE (7 saved state(s); 1 on the Dlvl/XL/score frontier). All numbers below are measured by the harness from the game engine, not written by anyone.
+  id  Dlvl  XL   HP     turn   score  attempts  name / why it was saved
+   c22    11   5   29/47    4588   2140         1  d11-stairs-known | On D11 with the down staircase already mapped. An owlbear wa
+   c19     9   5   44/47    3921   1904         3  d9-post-elf | Killed the Grey-elf on D9 at 12 HP, then rested to near full
+   c15     7   4   38/41    2760   1180         1  d7-fountain-room | Big fountain room on D7, cleared. Long sword and +1 ring mai
+   c12     5   3   27/31    1893    702         4  d5-arrival | Arrived D5 with the Grey-elf still on D4 behind me. Escape p
+   c07     3   2   21/21    1044    388         2  mines-entrance | At the Gnomish Mines branch staircase on D3, full HP. Saved 
+  (2 dominated auto-checkpoint(s) not listed)

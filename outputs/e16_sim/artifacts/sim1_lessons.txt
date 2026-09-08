@@ -1,0 +1,29 @@
+--- lessons.md for c07 (mines-entrance) ---
+## attempt 2
+Went into the Mines. Gnome lord with a crossbow at the second Mines level; died at XL2. The Mines are not safe at this XL.
+
+--- lessons.md for c12 (d5-arrival) ---
+## attempt 3
+Grey-elf pursues through corridors; it does not give up when you break line of sight. Outrun it in the open or fight it with a corridor at your back -- do not try to lose it.
+## attempt 5
+Descended immediately on arrival and met the elf again one level down at 14 HP. Rest first.
+## attempt 8
+Took the north corridor per the escape plan; it dead-ends. The south door is the real exit.
+## attempt 11
+Rested to full before descending. Reached D7. This is the line that works.
+
+--- lessons.md for c15 (d7-fountain-room) ---
+## attempt 12
+Prayed at 6 HP and it worked, but the cooldown is now live -- do not count on prayer again for ~1000 turns.
+
+--- lessons.md for c19 (d9-post-elf) ---
+## attempt 13
+Descended to D11, met an owlbear in the open, melee'd it and died in 6 calls at XL5.
+## attempt 15
+Descended to D11, owlbear again, tried to flee north, cornered, died.
+## attempt 17
+Descended to D11, owlbear a third time. Died. Three attempts from this checkpoint, three owlbear deaths on D11. The problem is not the route, it is the fight.
+
+--- lessons.md for c22 (d11-stairs-known) ---
+## attempt 18
+Started on D11 south-east of the owlbear, reached the down staircase without a fight, descended to D12 at 29 HP, then died to a soldier ant on D12 at 29/47.
