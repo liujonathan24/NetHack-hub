@@ -1,0 +1,425 @@
+{
+ "sol": {
+  "model": "openai/gpt-5.6-sol",
+  "points": [
+   [
+    3,
+    4
+   ],
+   [
+    5,
+    1
+   ],
+   [
+    9,
+    3
+   ],
+   [
+    11,
+    3
+   ],
+   [
+    9,
+    3
+   ],
+   [
+    5,
+    1
+   ],
+   [
+    6,
+    2
+   ],
+   [
+    7,
+    2
+   ],
+   [
+    6,
+    5
+   ],
+   [
+    8,
+    3
+   ],
+   [
+    7,
+    1
+   ],
+   [
+    6,
+    3
+   ],
+   [
+    6,
+    2
+   ],
+   [
+    5,
+    3
+   ],
+   [
+    4,
+    4
+   ]
+  ],
+  "n": 15,
+  "deaths": 15,
+  "censored": 0,
+  "dlvl_mean": 6.467,
+  "dlvl_se": 0.542,
+  "xl_mean": 2.667,
+  "xl_se": 0.303,
+  "balrog_max_mean": 5.284,
+  "balrog_max_se": 1.001,
+  "balrog_min_mean": 1.654,
+  "balrog_min_se": 0.231,
+  "depth_higher": 13,
+  "xp_higher": 2,
+  "pilot": {
+   "model": "openai/gpt-5.6-sol",
+   "key": "sol",
+   "run": "sol__prime_agent",
+   "tag": "single",
+   "idx": 0,
+   "seed": 1,
+   "max_dlvl": 3,
+   "max_xl": 1,
+   "end_gturn": 236,
+   "died": true,
+   "censored": false,
+   "stop_condition": "game_over",
+   "model_calls": 34,
+   "lm_turns": 33,
+   "skill_calls": 33,
+   "trace_max_dlvl": 3,
+   "trace_max_xl": 1,
+   "trace_died": true,
+   "trace_balrog": 1.7539535798967012,
+   "trace_balrog_min": 0.0,
+   "has_ndjson": true,
+   "balrog_max": 1.7539535798967012,
+   "balrog_min": 0.0,
+   "depth_higher": true
+  }
+ },
+ "luna": {
+  "model": "openai/gpt-5.6-luna",
+  "points": [
+   [
+    1,
+    1
+   ],
+   [
+    5,
+    1
+   ],
+   [
+    6,
+    3
+   ],
+   [
+    9,
+    3
+   ],
+   [
+    7,
+    2
+   ],
+   [
+    7,
+    2
+   ],
+   [
+    5,
+    2
+   ],
+   [
+    7,
+    3
+   ],
+   [
+    7,
+    1
+   ],
+   [
+    8,
+    5
+   ],
+   [
+    3,
+    2
+   ],
+   [
+    3,
+    1
+   ],
+   [
+    4,
+    2
+   ],
+   [
+    6,
+    2
+   ],
+   [
+    5,
+    4
+   ]
+  ],
+  "n": 15,
+  "deaths": 15,
+  "censored": 0,
+  "dlvl_mean": 5.533,
+  "dlvl_se": 0.551,
+  "xl_mean": 2.267,
+  "xl_se": 0.3,
+  "balrog_max_mean": 3.791,
+  "balrog_max_se": 0.615,
+  "balrog_min_mean": 1.504,
+  "balrog_min_se": 0.254,
+  "depth_higher": 13,
+  "xp_higher": 2,
+  "pilot": {
+   "model": "openai/gpt-5.6-luna",
+   "key": "luna",
+   "run": "luna__prime_agent",
+   "tag": "single",
+   "idx": 0,
+   "seed": 1,
+   "max_dlvl": 8,
+   "max_xl": 3,
+   "end_gturn": 1196,
+   "died": true,
+   "censored": false,
+   "stop_condition": "game_over",
+   "model_calls": 133,
+   "lm_turns": 154,
+   "skill_calls": 154,
+   "trace_max_dlvl": 8,
+   "trace_max_xl": 3,
+   "trace_died": true,
+   "trace_balrog": 6.95812141543123,
+   "trace_balrog_min": 2.081163581974355,
+   "has_ndjson": true,
+   "balrog_max": 6.95812141543123,
+   "balrog_min": 2.081163581974355,
+   "depth_higher": true
+  }
+ },
+ "gemini37": {
+  "model": "google/gemini-3.7-flash",
+  "points": [
+   [
+    5,
+    1
+   ],
+   [
+    9,
+    3
+   ],
+   [
+    9,
+    2
+   ],
+   [
+    10,
+    4
+   ],
+   [
+    12,
+    4
+   ],
+   [
+    5,
+    1
+   ],
+   [
+    6,
+    3
+   ],
+   [
+    7,
+    2
+   ],
+   [
+    7,
+    1
+   ],
+   [
+    13,
+    2
+   ],
+   [
+    3,
+    2
+   ],
+   [
+    9,
+    1
+   ],
+   [
+    10,
+    2
+   ],
+   [
+    9,
+    3
+   ],
+   [
+    11,
+    2
+   ]
+  ],
+  "n": 15,
+  "deaths": 15,
+  "censored": 0,
+  "dlvl_mean": 8.333,
+  "dlvl_se": 0.722,
+  "xl_mean": 2.2,
+  "xl_se": 0.262,
+  "balrog_max_mean": 9.799,
+  "balrog_max_se": 1.796,
+  "balrog_min_mean": 1.471,
+  "balrog_min_se": 0.242,
+  "depth_higher": 14,
+  "xp_higher": 1,
+  "pilot": {
+   "model": "google/gemini-3.7-flash",
+   "key": "gemini37",
+   "run": "gemini37__prime_agent",
+   "tag": "single",
+   "idx": 0,
+   "seed": 1,
+   "max_dlvl": 16,
+   "max_xl": 4,
+   "end_gturn": 659,
+   "died": true,
+   "censored": false,
+   "stop_condition": "game_over",
+   "model_calls": 207,
+   "lm_turns": 205,
+   "skill_calls": 205,
+   "trace_max_dlvl": 16,
+   "trace_max_xl": 4,
+   "trace_died": true,
+   "trace_balrog": 32.490713493173814,
+   "trace_balrog_min": 2.416013655054698,
+   "has_ndjson": true,
+   "balrog_max": 32.490713493173814,
+   "balrog_min": 2.416013655054698,
+   "depth_higher": true
+  }
+ },
+ "qwen38": {
+  "model": "qwen/qwen3.8-max",
+  "points": [
+   [
+    2,
+    2
+   ],
+   [
+    2,
+    3
+   ],
+   [
+    4,
+    2
+   ],
+   [
+    6,
+    5
+   ],
+   [
+    9,
+    5
+   ],
+   [
+    1,
+    2
+   ],
+   [
+    9,
+    5
+   ],
+   [
+    4,
+    4
+   ],
+   [
+    4,
+    5
+   ],
+   [
+    10,
+    5
+   ],
+   [
+    2,
+    1
+   ],
+   [
+    1,
+    1
+   ],
+   [
+    1,
+    2
+   ],
+   [
+    10,
+    4
+   ],
+   [
+    6,
+    5
+   ]
+  ],
+  "n": 15,
+  "deaths": 15,
+  "censored": 0,
+  "dlvl_mean": 4.733,
+  "dlvl_se": 0.875,
+  "xl_mean": 3.4,
+  "xl_se": 0.412,
+  "balrog_max_mean": 4.557,
+  "balrog_max_se": 1.104,
+  "balrog_min_mean": 1.743,
+  "balrog_min_se": 0.307,
+  "depth_higher": 8,
+  "xp_higher": 7,
+  "pilot": {
+   "model": "qwen/qwen3.8-max",
+   "key": "qwen38",
+   "run": "qwen38__prime_agent",
+   "tag": "single",
+   "idx": 0,
+   "seed": 1,
+   "max_dlvl": 3,
+   "max_xl": 3,
+   "end_gturn": 327,
+   "died": true,
+   "censored": false,
+   "stop_condition": "game_over",
+   "model_calls": 132,
+   "lm_turns": 215,
+   "skill_calls": 215,
+   "trace_max_dlvl": 3,
+   "trace_max_xl": 3,
+   "trace_died": true,
+   "trace_balrog": 2.081163581974355,
+   "trace_balrog_min": 1.7539535798967012,
+   "has_ndjson": true,
+   "balrog_max": 2.081163581974355,
+   "balrog_min": 1.7539535798967012,
+   "depth_higher": false
+  }
+ },
+ "_provenance": {
+  "source": [
+   "/root/nld/e14div/outputs/e14_diversity_full"
+  ],
+  "design": "5 seeds (0-4) x 3 repeats per model, same uncapped base harness surface as the base arm",
+  "note": "Graded from turns/*.ndjson execution records, cross-checked against traces.jsonl (0 discrepancies over 73 rollouts). The seed-1 pilots in outputs/e14_diversity are carried under 'pilot' and are NOT in 'points'."
+ }
+}

@@ -1,0 +1,296 @@
+{
+ "source": "https://github.com/balrog-ai/experiments",
+ "run": "20260203_naive_gemini-3-pro",
+ "model": "Gemini 3 Pro",
+ "model_id": "gemini-3-pro",
+ "agent": "naive",
+ "task": "NetHackChallenge-v0",
+ "steps_format": "[gturn, dlvl, xl] recorded at every (dlvl,xl) change plus the final observed status line",
+ "episodes": [
+  {
+   "run": "run_00",
+   "num_steps": 2038,
+   "end_reason": "DEATH: died. Killed by a kobold zombie, while fainted from lack of food.",
+   "progression": 0.02081163581974355,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     681,
+     1,
+     2
+    ],
+    [
+     987,
+     1,
+     3
+    ],
+    [
+     1192,
+     2,
+     3
+    ],
+    [
+     1447,
+     1,
+     3
+    ],
+    [
+     1494,
+     2,
+     3
+    ],
+    [
+     1780,
+     1,
+     3
+    ],
+    [
+     1786,
+     1,
+     2
+    ],
+    [
+     1839,
+     1,
+     1
+    ],
+    [
+     1843,
+     1,
+     2
+    ],
+    [
+     2285,
+     1,
+     2
+    ]
+   ]
+  },
+  {
+   "run": "run_01",
+   "num_steps": 1785,
+   "end_reason": "DEATH: died. Killed by a soldier ant.",
+   "progression": 0.0695812141543123,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     87,
+     2,
+     1
+    ],
+    [
+     121,
+     3,
+     1
+    ],
+    [
+     124,
+     3,
+     2
+    ],
+    [
+     172,
+     3,
+     3
+    ],
+    [
+     381,
+     3,
+     4
+    ],
+    [
+     420,
+     4,
+     4
+    ],
+    [
+     529,
+     4,
+     5
+    ],
+    [
+     931,
+     5,
+     5
+    ],
+    [
+     986,
+     5,
+     6
+    ],
+    [
+     1551,
+     8,
+     6
+    ],
+    [
+     1768,
+     8,
+     6
+    ]
+   ]
+  },
+  {
+   "run": "run_02",
+   "num_steps": 1057,
+   "end_reason": "DEATH: died. Killed by a tiger.",
+   "progression": 0.20612854836308672,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     48,
+     2,
+     1
+    ],
+    [
+     50,
+     4,
+     1
+    ],
+    [
+     248,
+     5,
+     1
+    ],
+    [
+     277,
+     5,
+     2
+    ],
+    [
+     308,
+     6,
+     2
+    ],
+    [
+     371,
+     6,
+     3
+    ],
+    [
+     394,
+     7,
+     3
+    ],
+    [
+     455,
+     8,
+     3
+    ],
+    [
+     470,
+     8,
+     4
+    ],
+    [
+     508,
+     9,
+     4
+    ],
+    [
+     529,
+     10,
+     4
+    ],
+    [
+     598,
+     11,
+     4
+    ],
+    [
+     651,
+     12,
+     4
+    ],
+    [
+     693,
+     12,
+     4
+    ]
+   ]
+  },
+  {
+   "run": "run_03",
+   "num_steps": 2231,
+   "end_reason": "DEATH: died. Killed by the wrath of Hermes.",
+   "progression": 0.021221378364235505,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     56,
+     2,
+     1
+    ],
+    [
+     76,
+     3,
+     1
+    ],
+    [
+     115,
+     4,
+     1
+    ],
+    [
+     2192,
+     4,
+     1
+    ]
+   ]
+  },
+  {
+   "run": "run_04",
+   "num_steps": 2036,
+   "end_reason": "DEATH: was poisoned. Poisoned by a rotted fox corpse.",
+   "progression": 0.02081163581974355,
+   "steps": [
+    [
+     1,
+     1,
+     1
+    ],
+    [
+     809,
+     1,
+     2
+    ],
+    [
+     1637,
+     2,
+     2
+    ],
+    [
+     1699,
+     2,
+     3
+    ],
+    [
+     1858,
+     2,
+     2
+    ],
+    [
+     1863,
+     2,
+     2
+    ]
+   ]
+  }
+ ]
+}

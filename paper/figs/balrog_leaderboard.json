@@ -1,0 +1,201 @@
+{
+ "source": "https://github.com/balrog-ai/experiments",
+ "run": "20260225_naive_gemini-3.1-pro-thinking",
+ "model": "Gemini 3.1 Pro Thinking",
+ "model_id": "gemini-3.1-pro-preview",
+ "agent": "naive",
+ "task": "NetHackChallenge-v0",
+ "steps_format": "[gturn, dlvl, xl] recorded at every (dlvl,xl) change plus the final observed status line",
+ "episodes": [
+  {
+   "run": "NetHackChallenge-v0_run_00",
+   "num_steps": 2691,
+   "end_reason": "DEATH: died. Killed by a succubus of Poseidon, while fainted from lack of food.",
+   "progression": 0.01847840456172601,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     2278,
+     1,
+     2
+    ],
+    [
+     2287,
+     1,
+     1
+    ],
+    [
+     2349,
+     1,
+     1
+    ]
+   ]
+  },
+  {
+   "run": "NetHackChallenge-v0_run_01",
+   "num_steps": 1232,
+   "end_reason": "DEATH: died. Killed by a spear.",
+   "progression": 0.026482449457437766,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     37,
+     2,
+     1
+    ],
+    [
+     216,
+     3,
+     1
+    ],
+    [
+     281,
+     4,
+     1
+    ],
+    [
+     292,
+     5,
+     1
+    ],
+    [
+     862,
+     5,
+     2
+    ],
+    [
+     878,
+     5,
+     2
+    ]
+   ]
+  },
+  {
+   "run": "NetHackChallenge-v0_run_02",
+   "num_steps": 4801,
+   "end_reason": "DEATH: died. Killed by a little dog, while frozen by a monster's gaze.",
+   "progression": 0.024160136550546978,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     312,
+     2,
+     1
+    ],
+    [
+     569,
+     2,
+     2
+    ],
+    [
+     1919,
+     2,
+     3
+    ],
+    [
+     2758,
+     2,
+     4
+    ],
+    [
+     3103,
+     2,
+     4
+    ]
+   ]
+  },
+  {
+   "run": "NetHackChallenge-v0_run_03",
+   "num_steps": 19549,
+   "end_reason": "DEATH: died. Killed by an orcish dagger, while sleeping.",
+   "progression": 0.036887590648350246,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     1348,
+     1,
+     2
+    ],
+    [
+     2361,
+     1,
+     3
+    ],
+    [
+     3259,
+     1,
+     4
+    ],
+    [
+     6974,
+     1,
+     5
+    ],
+    [
+     11593,
+     1,
+     6
+    ],
+    [
+     17679,
+     1,
+     6
+    ]
+   ]
+  },
+  {
+   "run": "NetHackChallenge-v0_run_04",
+   "num_steps": 2836,
+   "end_reason": "DEATH: died. Killed by a kitten.",
+   "progression": 0.024160136550546978,
+   "steps": [
+    [
+     2,
+     1,
+     1
+    ],
+    [
+     41,
+     2,
+     1
+    ],
+    [
+     637,
+     2,
+     2
+    ],
+    [
+     1068,
+     2,
+     3
+    ],
+    [
+     2372,
+     2,
+     4
+    ],
+    [
+     2413,
+     2,
+     4
+    ]
+   ]
+  }
+ ]
+}
