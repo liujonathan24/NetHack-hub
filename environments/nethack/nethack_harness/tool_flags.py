@@ -44,6 +44,18 @@ _DEFAULTS: dict[str, bool] = {
     # so configs/tool_tiers.toml names all members of the [human] tier in one
     # place; setting it through ENV_ARGS is a no-op by design.
     "skill_doc_coords": False,
+    # SPEC_SKILLS_AS_CODE §4 step 4 -- the skills-as-code arm retires the four
+    # SERVER-side netplay composites (np_move_to, np_melee_attack,
+    # np_explore_level, np_kick) so the agent must use the client-side
+    # `netplay` package it can actually edit. Defaults TRUE, which is the
+    # surface every tier before this one ran: turning it off is the arm.
+    #
+    # Note the polarity. Every other flag here is a fix that defaults OFF; this
+    # one REMOVES capability and so defaults ON. Naming it `netplay_composites`
+    # rather than `retire_composites` keeps the tier table readable
+    # (`netplay_composites = false` in exactly one tier) at the cost of that
+    # inconsistency.
+    "netplay_composites": True,
 }
 
 _flags: dict[str, bool] = dict(_DEFAULTS)

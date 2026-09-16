@@ -16,7 +16,7 @@
 # thing it may write.
 set -uo pipefail
 
-TRAIN_DIR="${1:?usage: e13_orchestrate.sh <train_dir> <ch_dir> <round_out>}"
+TRAIN_DIR="${1:?usage: e13_orchestrate.sh <train_dir> <ch_dir> <round_out> [prompt] [run_root]}"
 CH="${2:?}"
 ROUND_OUT="${3:?}"
 # The reflection instructions, as a FILE. This is the knob that distinguishes
@@ -24,6 +24,11 @@ ROUND_OUT="${3:?}"
 # code -- different instructions to the orchestrator. Its sha is pinned into
 # every cell of the run, so two experiments are told apart from their artifacts.
 PROMPT_FILE="${4:-}"
+# The run root (parent of round*/), so the reflection pass can be shown how the
+# PREVIOUS rounds went. Without it the orchestrator sees only the round it just
+# ran -- it was being told "an entry that made things worse is the most valuable
+# thing you can find" while having no way to observe worse.
+RUN_ROOT="${5:-$(dirname "$ROUND_OUT")}"
 MODEL="${ORCH_MODEL:-z-ai/glm-5.2}"
 # PIN THE PROVIDER. `--model z-ai/glm-5.2` alone is a model *pattern*: it matched
 # openrouter's catalog entry first and died with "No API key found for
@@ -140,10 +145,56 @@ $(cat "$PROMPT_FILE")"
   echo "[orch ] reflection prompt: $PROMPT_FILE ($(sha256sum "$PROMPT_FILE" | cut -c1-16))"
 fi
 
+# --- round-over-round evidence ----------------------------------------------
+# Generated BEFORE the model call and appended to the prompt, so the reflection
+# pass can see which of its own past edits helped and which hurt.
+REPORT_TXT="$ROUND_OUT/round_report.txt"
+if [ -d "$RUN_ROOT" ]; then
+  "${PY_BIN:-python3}" "$(dirname "$0")/round_report.py" "$RUN_ROOT" --text \
+      > "$REPORT_TXT" 2>"$ROUND_OUT/round_report.err" \
+    && "${PY_BIN:-python3}" "$(dirname "$0")/round_report.py" "$RUN_ROOT" \
+      > "$ROUND_OUT/round_report.json" 2>/dev/null \
+    || echo "[orch ] WARNING: round_report failed; see $ROUND_OUT/round_report.err" >&2
+fi
+if [ -s "$REPORT_TXT" ]; then
+  PROMPT="${PROMPT}
+
+=== HOW THE PREVIOUS ROUNDS WENT ===
+This is the scoreboard for THIS run, including the rounds before the one you are
+reading. Every delta is seed-matched -- the same seeds compared against
+themselves -- because averaging different seeds across rounds compares luck.
+BALmax/BALmin are the BALROG pair over the (dungeon level, experience level)
+axes: a max that rises while the min stays at zero means the score came from one
+axis alone, which is usually a character that descended without levelling.
+
+Use this to check your own past edits. An entry you added that was followed by a
+drop is the strongest evidence available to you, and deleting it is a real
+result. But read the attribution note: when several entries changed at the same
+boundary, that round cannot tell them apart.
+
+$(cat "$REPORT_TXT")"
+  echo "[orch ] round report: $(wc -l < "$REPORT_TXT") lines"
+else
+  echo "[orch ] WARNING: no round report -- reflecting on this round alone" >&2
+fi
+
 echo "[orch ] $(date -u +%H:%M:%S) reading $TRAIN_DIR -> store $CH (provider=$PROVIDER model=$MODEL)"
+# TMPDIR: the orchestrator is the one prime-agent that runs UNSANDBOXED, so
+# without this its daemon socket is the box-shared /tmp/prime-agent-0 -- any
+# other unsandboxed prime-agent (another experiment's orchestrator) collides
+# with it. A per-round dir gives it a private socket; players are unaffected
+# (they run under bwrap --tmpfs /tmp and never see this variable).
+# SHORT tmp dir, not $ORCH_DIR/tmp: unix socket paths cap at ~108 bytes and the
+# worker socket under a round dir blows past it -- the worker then dies with an
+# uncaught ENOENT lstat on its own socket and the client times out after 30s
+# (cost: the E13 round-10 and E15 round-7 reflections, 01:08-01:09). A hash of
+# ORCH_DIR keeps it unique per round while staying ~40 chars total.
+ORCH_TMP="/tmp/pa-orch-$(printf '%s' "$ORCH_DIR" | md5sum | cut -c1-10)"
+mkdir -p "$ORCH_TMP"
+TMPDIR="$ORCH_TMP" \
 PRIME_AGENT_CODING_AGENT_DIR="$ORCH_DIR" \
-PRIME_AGENT_KERNEL_VENV="${PRIME_AGENT_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
-  prime-agent --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
+PRIME_AGENT_KERNEL_VENV="${ORCH_KERNEL_VENV:-$HOME/.prime/agent/kernel-venv}" \
+  "${PA38_BIN:-prime-agent}" --print --provider "$PROVIDER" --model "$MODEL" -- "$PROMPT" \
   > "$ROUND_OUT/orchestrator.stdout.txt" 2> "$ROUND_OUT/orchestrator.stderr.txt"
 rc=$?
 echo "[orch ] $(date -u +%H:%M:%S) rc=$rc"

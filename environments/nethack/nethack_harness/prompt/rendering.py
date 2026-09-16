@@ -344,7 +344,45 @@ def _fix_hint_vocabulary(hint: str, published_tools) -> str:
     return _re.sub(r"\s{2,}", " ", hint).strip()
 
 
-def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
+
+# The netplay policy layer. Injected ONLY for the skills-as-code tiers (see
+# `netplay_layer`), because it is the one thing the tool-gated prompt cannot
+# advertise: `netplay` is a Python PACKAGE the agent imports, not an MCP tool
+# with a schema, so it never appears in the SKILLS CHEAT SHEET. Without this
+# block the code-tier agent sees only the primitive tools and plays by pressing
+# keys one at a time -- measured on the first live rollout, 0 uses of netplay in
+# ~160 calls. This block is what tells it the policies exist and are its own.
+_NETPLAY_BLOCK = (
+    "=== YOUR POLICIES (netplay) ===\n"
+    "You have a Python package `netplay` built on the primitive tools. PREFER\n"
+    "these over pressing movement keys one at a time. It ships with THREE\n"
+    "policies:\n"
+    "  await netplay.move_to(x, y)   # pathfind to a tile and walk there\n"
+    "  await netplay.explore()       # auto-explore the level, frontier to frontier\n"
+    "  await netplay.attack(x, y)    # approach, pursue, and melee that monster\n"
+    "Every other policy is YOURS TO WRITE. The package is ordinary Python: add\n"
+    "new .py files in os.path.dirname(netplay.__file__) and they load on the\n"
+    "next import; edit existing ones with the built-in edit skill:\n"
+    "  await edit(path=f'{netplay_dir}/move.py', old_str=..., new_str=...)\n"
+    "  print(netplay.check())                       # compile-check your edit\n"
+    "  import importlib; importlib.reload(netplay)   # make it live this game\n"
+    "What you write persists into later episodes. Read SKILL.md in the skill\n"
+    "directory for the full contract and what is frozen.\n"
+    "\n"
+    "=== SYSTEM ACCESS (strict) ===\n"
+    "The shell and filesystem may be used for exactly TWO things: editing your\n"
+    "netplay policy code inside os.path.dirname(netplay.__file__), and keeping\n"
+    "notes in your memory/ workspace. Nothing else is permitted. Do NOT search\n"
+    "the filesystem, probe the network, or launch servers or background\n"
+    "processes. The game engine is NOT on disk: it cannot be found, inspected,\n"
+    "or rebuilt, and any substitute you build is not the real game and scores\n"
+    "zero. If a game tool call fails, read the message it returned and change\n"
+    "plan -- do not repeat the call unchanged, and do not investigate the\n"
+    "system."
+)
+
+def render_system_prompt(published_tools=None, verbose: bool = False,
+                         netplay_layer: bool = False) -> str:
     """Assemble the system prompt for a specific published tool set.
 
     `published_tools=None` means "everything the registry knows", which is the
@@ -378,6 +416,10 @@ def render_system_prompt(published_tools=None, verbose: bool = False) -> str:
     sheet = [f"- {blurb}" for name, blurb in _SKILL_BLURBS if name in available]
     if sheet:
         parts.insert(len(parts) - 1, "=== SKILLS CHEAT SHEET ===\n" + "\n".join(sheet))
+    if netplay_layer:
+        # Before the final objective block, so "use your policies" sits next to
+        # the action list rather than after the goal.
+        parts.insert(len(parts) - 1, _NETPLAY_BLOCK)
     return "\n\n".join(parts)
 
 

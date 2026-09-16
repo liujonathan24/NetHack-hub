@@ -28,7 +28,7 @@
 skill_set = "np_core,request_map,search"
 auto_dismiss = "false"
 variant = "BBOX_MIN"
-max_calls = 200
+max_calls = 0
 seeds = [0, 1, 2, 3, 4]
 model = "z-ai/glm-5.2"
 character = "Val-hum-neu-fem"
@@ -94,3 +94,72 @@ skill_doc_coords = true
 netplay_telemetry = false
 melee_hints = false
 skill_doc_coords = false
+
+# ---------------------------------------------------------------------------
+# tool_tier_hash CHURN, recorded here because the artifact cannot record it.
+#
+# `registry_hash` is sha256 of this WHOLE FILE (tool_tiers.py:48-49), not of a
+# tier's own table. So adding the two tables below changed the recorded
+# `tool_tier_hash` for EVERY tier -- base, human and continual included --
+# even though none of their behaviour changed by a byte.
+#
+#     base/human/continual, up to and including commit 461c7df:
+#         tool_tier_hash = d98f7d9432a2587b
+#
+# Everything recorded under that hash ran the same base/human/continual surface
+# as everything recorded under whatever this file hashes to now. The new value
+# is deliberately NOT written here: it would have to include itself, and each
+# attempt to record it changes it again. Read it from any cell's config.toml,
+# or from `python tool_tiers.py <tier> <arm>`.
+#
+# `tool_tier_commit` distinguishes the RUNS; this note is the only thing that
+# establishes their EQUIVALENCE. When this file next changes, APPEND the
+# then-current hash and its last commit rather than replacing this block.
+# ---------------------------------------------------------------------------
+[continual-code]
+# The skills-as-code treatment (docs/SPEC_SKILLS_AS_CODE.md). Two things differ
+# from [continual]: the four SERVER-side netplay composites are retired, and the
+# agent gets a `netplay` Python package under the skill's own `src/` that it can
+# read, rewrite and carry into the next round.
+#
+# STARTS FROM BASE, NOT HUMAN, for the same reason [continual] does -- the
+# independent variable is the code the agent writes, so the floor must be the
+# floor the denominator uses.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+netplay_composites = false
+netplay_code_mode = "mutable"
+
+[continual-code-frozen]
+# THE CONTROL, and the experiment is not interpretable without it. Identical to
+# [continual-code] in every way except that the code tree is re-materialised
+# each rollout, so the agent's edits never accumulate.
+#
+# What it isolates: [continual-code] beating [continual] could mean "the agent
+# improved its own code", or it could mean "our seed netplay implementations
+# are better than the vendored np_* ones". Only the gap between
+# [continual-code] and [continual-code-frozen] distinguishes those, and only
+# the first of the two is the hypothesis.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+netplay_composites = false
+netplay_code_mode = "frozen"
+
+[continual-code-heldout]
+# HELD-OUT EVALUATION of a finished code arm. Not an arm you run rounds on --
+# `eval_frozen.sh` selects it, and selects it for BOTH code arms, because a
+# held-out cell must measure the frozen artifact rather than reproduce the
+# accumulation that produced it.
+#
+# Identical to [continual-code] except `netplay_code_mode = "pinned"`: the
+# harness materialises nothing, so the tree the evaluator copied into place --
+# the agent's own final code -- is what runs. `mutable` would let the
+# evaluation write to the artifact it is measuring; `frozen` would overwrite
+# the agent's composites with our repo seeds and measure those instead.
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+netplay_composites = false
+netplay_code_mode = "pinned"
