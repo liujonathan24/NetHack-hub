@@ -204,6 +204,11 @@ def audit(run_dir: Path, arm: str) -> dict:
             scope = f"round{r.get('round')}"
             if arm == "A3":
                 add("orchestrator.prompt_fixed_notice", FIXED_NOTICE in p and CHOICE_TEXT not in p, "", scope)
+            elif arm == "A1":
+                add("orchestrator.prompt_selection_only",
+                    "NOTHING YOU WRITE REACHES THE PLAYER" in p
+                    and "served to the player verbatim" not in p
+                    and "Choose the checkpoint the next player resumes from" in p, "", scope)
             else:
                 add("orchestrator.prompt_offers_choice", CHOICE_TEXT in p, "", scope)
             add("orchestrator.prompt_has_ledger", "BRANCH" in p or "checkpoint" in p.lower(), "", scope)

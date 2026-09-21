@@ -3234,3 +3234,43 @@ def test_a3_fixed_selection_takes_only_the_directive_from_the_orchestrator(tmp_p
     prov = json.loads(cfg.provenance_path.read_text())
     assert prov["iclr_arm"] == "A3"
     assert orch.budget.orchestrator_usd > 0
+
+
+def test_a1_round_prompt_is_selection_only_and_says_so(tmp_path):
+    """A1: the orchestrator is told nothing it writes is served, and the
+    directive-writing guidance is gone from its prompt."""
+    cfg = cfg_for(tmp_path / "run", selector="llm", no_directive=True,
+                  blind_resume=True, budget_ceiling_usd=1000.0, max_attempts=2,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+    calls = {"n": 0}
+
+    def runner(argv, env, cwd, timeout_s):
+        calls["n"] += 1
+        body = _STUB_PLAN if calls["n"] == 1 else (
+            'ok\n' + json.dumps({"checkpoint": "1", "directive": "", "rationale": "root"}))
+        return _stub_stdout(argv, cwd, body,
+                            usage={"prompt_tokens": 100, "completion_tokens": 10,
+                                   "cached_input_tokens": 0}), "", 0
+
+    session = S.PrimeAgentSession(
+        work_dir=cfg.orchestrator_dir, agent_dir=cfg.orchestrator_dir / "agent",
+        log_path=cfg.orchestrator_log, runner=runner)
+    player = StubPlayer([{"died": True, "spend": 1.0}])
+    orch = E.Orchestrator(cfg, player, session=session)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=2)
+    rounds = [json.loads(l) for l in cfg.orchestrator_log.read_text().splitlines()]
+    decide = [r for r in rounds if str(r.get("kind", "")).startswith("round")]
+    assert decide, "no decision rounds recorded"
+    for r in decide:
+        p = r["prompt"]
+        assert "NOTHING YOU WRITE REACHES THE PLAYER" in p
+        assert "served to the player verbatim" not in p
+        assert "There is NO required form" not in p
+        assert '"directive": ""' in p
+    sels = [json.loads(l) for l in cfg.selection_path.read_text().splitlines()]
+    assert all(s["no_directive_notice_served"] for s in sels)
+    assert all(c.directive == "" for c in player.seen)
+    assert json.loads(cfg.provenance_path.read_text())["iclr_arm"] == "A1"

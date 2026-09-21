@@ -198,6 +198,13 @@ BLIND_PREFIX_LABEL = ("TRANSCRIPT SO FAR (your own earlier turns in this game, "
                       "most recent last):")
 #: The notice a fixed-selection orchestrator round (ICLR arm A3) gets in place
 #: of the choice instruction.
+#: The notice an A1 round gets: it selects, and nothing it writes is served.
+NO_DIRECTIVE_NOTICE = (
+    "Choose the checkpoint the next player resumes from. IN THIS RUN NOTHING "
+    "YOU WRITE REACHES THE PLAYER: it resumes from the checkpoint with no "
+    "instruction, no banner and no ledger, and plays on its own judgement. "
+    "Your only decision is WHICH checkpoint. Leave \"directive\" as an empty "
+    "string; a directive you write here is discarded, never served.")
 FIXED_PICK_NOTICE = ("The next player WILL resume checkpoint c{pick}. That is "
                      "fixed by rule (the latest checkpoint the previous attempt "
                      "saved), not your choice this round; set \"checkpoint\" to "
@@ -960,6 +967,7 @@ def selection_record(attempt: int, choice: dict, rows: list,
                             else scripted_pick == chosen_id),
         "scripted": scripted,
         "pre_death": choice.get("pre_death"),
+        "no_directive_notice_served": choice.get("no_directive_notice_served"),
         "llm": choice.get("decision"),
     }
 
@@ -4305,6 +4313,18 @@ player result.
                 f"The checkpoint for this round is c{fixed_pick} and is not "
                 f"yours to change.")
             out["pre_death"]["fixed_pick_notice_served"] = True
+        elif self.cfg.no_directive:
+            # A1: honest selection-only framing. The directive-writing guidance
+            # is cut, not merely contradicted, so the model does not choose a
+            # checkpoint on the belief that it can also steer the player.
+            head = ("Choose the checkpoint the next player resumes from, and write "
+                    "it a DIRECTIVE:")
+            assert head in prompt and "Any checkpoint id in the archive above" in prompt
+            a = prompt.index(head)
+            b = prompt.index("Any checkpoint id in the archive above")
+            prompt = prompt[:a] + NO_DIRECTIVE_NOTICE + "\n\n" + prompt[b:]
+            prompt = prompt.replace('"directive": "<your instruction>"', '"directive": ""')
+            out["no_directive_notice_served"] = True
         from e16_session import parse_decision
         # EVERY id in the archive, and the prompt now says so. `parse_decision`
         # has always validated against this set rather than against the
