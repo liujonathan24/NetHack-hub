@@ -1245,6 +1245,7 @@ def test_session_resume_serves_no_first_observation_blocks_and_continues_call_id
         tmp_path, directive=DIRECTIVE, ledger_text=ledger,
         resume_checkpoint=str(tmp_path / "c7"),
         fidelity_log=str(tmp_path / "fid.jsonl"),
+        checkpoint_archive=str(tmp_path / "archive"),
         session_resume="true")
     assert state["prefix_continuity"] == "session"
     assert state["resume_banner_served"] is False
@@ -1258,6 +1259,9 @@ def test_session_resume_serves_no_first_observation_blocks_and_continues_call_id
     assert "[call#262]" in served
     # The in-flight call id is published on the env for checkpoint_save.
     assert getattr(state["env"], CALL_ID_ATTR) == 262
+    # The periodic-checkpoint counter continues from the same base, so the
+    # next cadence checkpoint is named by the served call number.
+    assert state["_auto_ck"]["calls"] == 262
 
     # Text mode (the default) is untouched: same checkpoint, same kwargs,
     # blocks served and the counter starting at 1.

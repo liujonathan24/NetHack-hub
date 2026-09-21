@@ -3030,8 +3030,15 @@ def _maybe_auto_checkpoint(state: dict) -> None:
         if dlvl:
             auto["seen_dlvl"].add(dlvl)
         auto["last_xl"] = xl or None
-        auto["calls"] = 1
-        auto["last_periodic_call"] = 1
+        # Session resume: the served `[call#N]` counter continues from the
+        # checkpoint's own call, so the periodic-checkpoint counter (which
+        # names the checkpoint `auto call_N`) continues from the same base.
+        # Otherwise a resumed life's checkpoints read `call_21` while the
+        # model's last marker was `[call#342]` -- measured in the first
+        # session-resume smoke (ablate_A3_s3_srsmoke3 c23-c25).
+        base = int(state.get("session_resume_call_offset") or 0)
+        auto["calls"] = base + 1
+        auto["last_periodic_call"] = base + 1
         return
 
     # THE CALL COUNTER, advanced here and nowhere else. This function runs once
