@@ -304,6 +304,10 @@ def _status_snapshot(engine_env) -> dict:
         "max_hp": get("max_hitpoints"),
         "gameturn": get("time"),
         "score": get("score"),
+        # Armor class, audited on every restore since the character-less
+        # reset bug (see CHARACTER_ATTR): a restore that hands back a hero
+        # with a different AC than the one saved is a different game.
+        "ac": get("armor_class"),
         # Branch identity, for the E16 stop condition "Sokoban entrance". Depth
         # alone cannot express it: Sokoban's levels have small `depth` values
         # that a Dungeons-of-Doom checkpoint also has. NetHack numbers the
@@ -354,7 +358,19 @@ def hunger_label(state) -> str:
 #: is HARNESS-COMPUTED from blstats at save time (:func:`_status_snapshot`) —
 #: no model-authored text contributes to any of them, which is what makes the
 #: audit meaningful rather than a comparison of one narrative with another.
-AUDIT_FIELDS = ("dlvl", "xl", "hp", "max_hp", "gameturn", "score",
+#: The attribute a harness env sets to say which character its game runs.
+#: ``checkpoint_save`` records it in meta.json and ``checkpoint_restore`` resets
+#: the engine WITH it before loading the blobs. Without it, a restore reset the
+#: engine to the engine's default role (a Monk) and loaded the Valkyrie's hero
+#: struct over that game; role state that lives outside ``struct you`` survived,
+#: and every restored hero played at armor class 0 instead of 6. Found
+#: 2026-09-21; every bundle-restored life before then carried that advantage.
+CHARACTER_ATTR = "_checkpoint_character"
+DEFAULT_CHARACTER = "Val-hum-neu-fem"
+#: Audit fields that older checkpoints did not record; a missing one is
+#: reported as skipped rather than failed, so legacy archives still restore.
+OPTIONAL_AUDIT_FIELDS = ("ac",)
+AUDIT_FIELDS = ("dlvl", "xl", "hp", "max_hp", "gameturn", "score", "ac",
                 # Branch identity was written into meta and drives the Sokoban
                 # stop condition while being unauditable -- so a restore could
                 # disagree about WHICH BRANCH the hero is in and nothing would
@@ -437,6 +453,10 @@ def restore_fidelity(env, meta: dict, fields=AUDIT_FIELDS) -> dict:
     for name in fields:
         want = meta.get(name)
         got = live.get(name)
+        if want is None and name in OPTIONAL_AUDIT_FIELDS:
+            out[name] = {"meta": None, "engine": got, "match": None,
+                         "skipped": "not recorded by this checkpoint"}
+            continue
         match = (want is not None) and int(want) == int(got)
         ok = ok and match
         out[name] = {"meta": want, "engine": got, "match": match}
@@ -507,8 +527,13 @@ def checkpoint_save(
     prefix: Optional[list] = None,
     extra: Optional[dict] = None,
     overwrite: bool = False,
+    character: Optional[str] = None,
 ) -> dict:
     """Write ``directory`` as a complete, resumable checkpoint. Returns its meta.
+
+    ``character`` (e.g. ``"Val-hum-neu-fem"``) is recorded so that a restore
+    can reset the engine with the same role before loading the blobs; if not
+    given it is read from the env's ``CHARACTER_ATTR``.
 
     ``directory`` is the checkpoint itself (``archive/<run>/c<id>/``); its id is
     the trailing path component with any leading ``c`` stripped. The write is
@@ -560,6 +585,8 @@ def checkpoint_save(
         "seed": seeds,
         "created_at": time.time(),
         "created_by": created_by or os.environ.get("NLD_AGENT_ID") or "unknown",
+        "character": (character or getattr(env, CHARACTER_ATTR, None)
+                      or getattr(engine_env, CHARACTER_ATTR, None)),
         "balrog": balrog,
         "balrog_min": balrog_min,
         # WHAT THE PAIR WAS COMPUTED FROM. Without these, an archive row's
@@ -705,7 +732,8 @@ def checkpoint_list(root) -> list:
 
 
 def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
-                       audit: bool = True, fidelity_log=None, reseed=None):
+                       audit: bool = True, fidelity_log=None, reseed=None,
+                       character: Optional[str] = None):
     """Rebuild a playable env from a checkpoint. Returns ``(env, meta)``.
 
     Works in a process that has never seen the original game: everything comes
@@ -764,7 +792,16 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     raw = _raw_of(engine_env)
 
     core, disp = (header.get("seed") or meta.get("seed") or [0, 0])[:2]
-    engine_env.reset(seeds=(int(core), int(disp)))
+    # RESET WITH THE CHECKPOINT'S CHARACTER. The blobs carry the hero struct
+    # and the level, not the role-initialised globals; resetting a default
+    # (Monk) game and loading a Valkyrie over it left the hero at AC 0.
+    if character:
+        character_source = "argument"
+    elif meta.get("character"):
+        character, character_source = meta["character"], "meta"
+    else:
+        character, character_source = DEFAULT_CHARACTER, "default"
+    engine_env.reset(seeds=(int(core), int(disp)), character=character)
     # Dismiss the fresh game's welcome --More-- BEFORE loading anything, or the
     # single ctrl-R below is swallowed by that prompt instead of running
     # docrt(): the returned observation then still shows the reset's level-1
@@ -810,10 +847,13 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     # archive -- and every depth claim read off it -- describe a state the
     # engine never actually produced.
     record = None
+    setattr(env, CHARACTER_ATTR, character)
     if audit:
         record = restore_fidelity(env, meta)
         record["checkpoint"] = str(directory)
         record["id"] = meta.get("id")
+        record["character"] = character
+        record["character_source"] = character_source
         if fidelity_log is not None:
             try:
                 with open(fidelity_log, "a") as fh:

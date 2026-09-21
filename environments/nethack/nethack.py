@@ -891,6 +891,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_character pins the role for standard tiers (e.g. full_nle);
         # None keeps the engine default. Curriculum envs own their character.
         obs, meta = env.reset(character=self._setup_character)
+        # Every checkpoint written from this game records the role it runs,
+        # and every restore resets with it (nethack_harness.checkpoints).
+        from nethack_harness.checkpoints import CHARACTER_ATTR as _CHAR_ATTR
+        setattr(env, _CHAR_ATTR, self._setup_character)
 
         # ---- E16: resume from a persistent checkpoint -----------------------
         # Done HERE, right after reset and before anything reads the engine,
@@ -909,6 +913,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 self._resume_checkpoint, env=env,
                 fidelity_log=self._fidelity_log,
                 reseed=self._reseed,
+                character=self._setup_character,
             )
             # The restored frame, published by checkpoint_restore. Falling back
             # to the reset's obs would show the level-1 starting room under the

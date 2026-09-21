@@ -1275,8 +1275,27 @@ class StubPlayer:
         self.seen.append(ctx)
         env, meta = checkpoint_restore(ctx.checkpoint_dir,
                                        fidelity_log=ctx.fidelity_log)
+        # Full HP before playing. A jackal attacks at this seed's entrance; the
+        # stub used to survive it only because restored heroes carried a
+        # spurious AC 0 (fixed 2026-09-21). With honest AC 6 a chained lineage
+        # of six-step attempts dies, and a dead hero cannot be checkpointed.
+        import numpy as np
+
+        def _more(o):
+            tty = np.asarray(o.tty_chars).tolist()
+            return any("--More--" in "".join(chr(c) for c in row) for row in tty)
+
+        def _step(key):
+            o = env.step(key)[0]
+            for _ in range(4):          # dismiss a multi-message turn's --More--
+                if not _more(o):
+                    break
+                o = env.step(ord(" "))[0]
+            return o
+        max_hp = int(np.asarray(_step(ord(":")).blstats).tolist()[11])
+        env.modify(hp=max_hp)
         for _ in range(self.steps):
-            env.step(ord("s"))
+            _step(ord("s"))
         # A harness-computed advance: gold feeds `score`, which is one of the
         # three Pareto objectives, so the frontier moves for a reason the
         # engine produced rather than one the stub asserted.
@@ -3311,3 +3330,32 @@ def test_pre_death_walks_up_past_a_checkpoint_that_could_not_be_resumed(tmp_path
     orch.attempts.append({"attempt": 4, "from_checkpoint": root, "censored": True,
                           "calls": 55, "new_checkpoints": []})
     assert orch.pre_death_pick(rows) == (root, "previous_attempt_saved_nothing_so_its_start_state")
+
+
+def test_checkpoint_restore_keeps_the_heros_armor_class(tmp_path):
+    """A restore must hand back the same hero the checkpoint saved. Before
+    2026-09-21 it reset a default (Monk) game and loaded the Valkyrie over
+    it, and every restored hero played at AC 0 instead of 6."""
+    import numpy as np
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True)
+    E.Orchestrator(cfg, StubPlayer([{"died": True}])).prepare()
+    E.seed_archive(cfg)
+    meta = json.loads((cfg.archive_dir / "c1" / "meta.json").read_text())
+    assert meta["character"] == "Val-hum-neu-fem"
+    assert meta["ac"] == 6
+    env, _ = checkpoint_restore(cfg.archive_dir / "c1", fidelity_log=cfg.fidelity_path)
+    r = env.step(ord("s")); obs = r[0] if isinstance(r, tuple) else r
+    assert int(np.asarray(obs.blstats).tolist()[16]) == 6
+    rec = json.loads(cfg.fidelity_path.read_text().splitlines()[-1])
+    assert rec["ok"] and rec["fields"]["ac"]["match"] is True
+    assert rec["character"] == "Val-hum-neu-fem" and rec["character_source"] == "meta"
+    # a legacy bundle without a recorded character or ac still restores, and
+    # the record says where the character came from
+    legacy = dict(meta); legacy.pop("character"); legacy.pop("ac")
+    (cfg.archive_dir / "c1" / "meta.json").write_text(json.dumps(legacy))
+    env3, _ = checkpoint_restore(cfg.archive_dir / "c1", fidelity_log=cfg.fidelity_path)
+    rec = json.loads(cfg.fidelity_path.read_text().splitlines()[-1])
+    assert rec["ok"] and rec["fields"]["ac"]["match"] is None
+    assert rec["character_source"] == "default"
+    r = env3.step(ord("s")); obs = r[0] if isinstance(r, tuple) else r
+    assert int(np.asarray(obs.blstats).tolist()[16]) == 6

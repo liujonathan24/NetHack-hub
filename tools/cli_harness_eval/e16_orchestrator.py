@@ -6551,7 +6551,7 @@ def seed_archive(cfg: OrchestratorConfig, character: str = "Val-hum-neu-fem") ->
     # live heap can disagree there). Clear it, deliberately, before saving.
     env.step(13)
     target = cfg.archive_dir / "c1"
-    checkpoint_save(env, target, name="entrance",
+    checkpoint_save(env, target, character=character, name="entrance",
                     note=f"fresh game, seed {cfg.game_seed}, dungeon entrance",
                     created_by="orchestrator")
     return target
