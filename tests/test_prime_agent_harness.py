@@ -11,6 +11,7 @@ arms, and the three per-rollout files whose contents decide *which model* and
 from __future__ import annotations
 
 import json
+import os
 import logging
 import pathlib
 import tomllib
@@ -668,8 +669,15 @@ def test_resume_session_copies_the_seed_and_resumes_it_by_path(tmp_path):
     assert argv[i + 2:] == ["--", "Continue playing."]
     # The TASK prompt is not sent again: it is the first user turn already.
     assert "Play NetHack." not in argv
+    # The seed is written into the agent dir with its header cwd rewritten to
+    # this rollout's workdir (Prime Agent refuses a session whose stored cwd
+    # is gone); every other record is byte-identical.
+    written = runtime.files[dest].decode().split("\n")
+    header = json.loads(written[0])
+    assert header["id"] == "abc-123" and header["cwd"] == os.getcwd()
+    assert written[1:] == seed.read_text().split("\n")[1:]
     scripts = [a[-1] for a, _ in runtime.commands if a[:2] == ["sh", "-c"]]
-    seeding = [s for s in scripts if f"cp {seed} {dest}" in s]
+    seeding = [s for s in scripts if "session-artifacts/abc-123/" in s]
     assert seeding, scripts
     assert f"cp -a {arts}/. /tmp/vf-prime-agent/agent-trace-abc/session-artifacts/abc-123/" in seeding[0]
     # The seeding runs BEFORE the program, the export after it.

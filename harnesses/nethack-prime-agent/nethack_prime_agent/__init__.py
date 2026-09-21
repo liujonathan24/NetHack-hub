@@ -824,8 +824,12 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         """Copy the seed conversation (and kernel snapshot) into `agent_dir`.
 
         Returns the in-agent-dir path handed to `--resume`. The seed is read on
-        THIS host to learn the header id, so a remote runtime would need the
-        path to be visible here as well; the only runtime this arm uses is
+        THIS host (header id, and the header's `cwd` is rewritten to THIS
+        rollout's workdir: Prime Agent refuses to resume a session whose stored
+        working directory no longer exists -- measured 2026-09-21, "Stored
+        session working directory does not exist: /tmp/<old trace id>" -- and
+        every rollout gets a fresh one). A remote runtime would need the seed
+        path visible here as well; the only runtime this arm uses is
         `subprocess`, where the two file systems are the same one."""
         src = self.config.resume_session
         if not os.path.isfile(src):
@@ -834,11 +838,15 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                 "silently started fresh would be a different condition."
             )
         header_id = self._session_header_id(src)
+        with open(src, "r", encoding="utf-8") as fh:
+            lines = fh.read().split("\n")
+        header = json.loads(lines[0])
+        workdir = getattr(runtime, "workdir", None) or os.getcwd()
+        header["cwd"] = str(workdir)
+        lines[0] = json.dumps(header)
         dest = f"{agent_dir}/sessions/{header_id}.jsonl"
-        script = (
-            f"mkdir -p {shlex.quote(agent_dir + '/sessions')} && "
-            f"cp {shlex.quote(src)} {shlex.quote(dest)}"
-        )
+        await runtime.write(dest, "\n".join(lines).encode("utf-8"))
+        script = f"mkdir -p {shlex.quote(agent_dir + '/sessions')}"
         arts = self.config.resume_artifacts
         if arts:
             if not os.path.isdir(arts):
