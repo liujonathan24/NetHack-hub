@@ -1273,3 +1273,49 @@ def test_session_resume_serves_no_first_observation_blocks_and_continues_call_id
     assert state2["prefix_continuity"] == "text_only"
     assert DIRECTIVE in served2 and "RESUMED FROM CHECKPOINT 7" in served2
     assert "[call#1]" in served2
+
+
+def test_a_restored_hero_wears_only_what_it_saved_with(tmp_path):
+    """The engine's restore must not leave the reset game's starting kit bound
+    in worn slots the checkpointed hero does not use. Measured 2026-09-21
+    (ablate_A2_s2_sr1 c27): a Valkyrie whose small shield had been stolen
+    restored at AC 1 instead of 5 -- the reset kit's +3 shield was still
+    `uarms`, so find_ac() counted it. Here the hero takes the shield off and
+    drops it before saving; the restore must show the saved AC and no shield."""
+    from nethack_harness.checkpoints import _engine_of, _raw_of, _status_snapshot
+
+    env = _fresh_engine()
+    raw = env._engine._engine
+
+    def status():
+        return _status_snapshot(_engine_of(env))
+
+    def tty(r):
+        return bytes(r.tty_chars.reshape(-1).tobytes()).decode("ascii", "replace")
+
+    ac_with_shield = status()["ac"]
+    raw.step(ord("T")); raw.step(ord("d"))       # take off the small shield (d)
+    _clear_prompt(env)
+    for _ in range(3):                            # the take-off delay
+        raw.step(ord("s"))
+    _clear_prompt(env)
+    raw.step(ord("d")); raw.step(ord("d"))       # drop it
+    _clear_prompt(env)
+    ac_without = status()["ac"]
+    assert ac_without == ac_with_shield + 4, (ac_with_shield, ac_without)
+
+    meta = checkpoint_save(env, tmp_path / "c9", name="no shield", note="")
+    assert meta["ac"] == ac_without
+
+    env2, meta2 = checkpoint_restore(tmp_path / "c9", count_visit=False,
+                                     character="Val-hum-neu-fem",
+                                     fidelity_log=str(tmp_path / "fid.jsonl"))
+    fid = meta2["restore_fidelity"]
+    assert fid["ok"], fid
+    assert _status_snapshot(_engine_of(env2))["ac"] == ac_without
+    # And the inventory really has no shield: `T` must not offer one.
+    raw2 = _raw_of(_engine_of(env2))
+    raw2.step(ord("T"))
+    screen = tty(raw2)
+    raw2.step(27)
+    assert "shield" not in screen.lower(), screen
