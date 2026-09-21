@@ -3349,13 +3349,18 @@ def test_checkpoint_restore_keeps_the_heros_armor_class(tmp_path):
     rec = json.loads(cfg.fidelity_path.read_text().splitlines()[-1])
     assert rec["ok"] and rec["fields"]["ac"]["match"] is True
     assert rec["character"] == "Val-hum-neu-fem" and rec["character_source"] == "meta"
-    # a legacy bundle without a recorded character or ac still restores, and
-    # the record says where the character came from
-    legacy = dict(meta); legacy.pop("character"); legacy.pop("ac")
+    # a legacy bundle (no recorded character or ac) still restores: the AC
+    # audit is skipped, the record says the role was unrecorded, and the
+    # caller can still name the role explicitly to get the honest hero back
+    legacy = dict(meta); legacy.pop("character"); legacy.pop("character_recorded"); legacy.pop("ac")
     (cfg.archive_dir / "c1" / "meta.json").write_text(json.dumps(legacy))
     env3, _ = checkpoint_restore(cfg.archive_dir / "c1", fidelity_log=cfg.fidelity_path)
     rec = json.loads(cfg.fidelity_path.read_text().splitlines()[-1])
     assert rec["ok"] and rec["fields"]["ac"]["match"] is None
-    assert rec["character_source"] == "default"
-    r = env3.step(ord("s")); obs = r[0] if isinstance(r, tuple) else r
+    assert rec["character_source"] == "unrecorded"
+    env4, _ = checkpoint_restore(cfg.archive_dir / "c1", fidelity_log=cfg.fidelity_path,
+                                 character="Val-hum-neu-fem")
+    rec = json.loads(cfg.fidelity_path.read_text().splitlines()[-1])
+    assert rec["character_source"] == "argument"
+    r = env4.step(ord("s")); obs = r[0] if isinstance(r, tuple) else r
     assert int(np.asarray(obs.blstats).tolist()[16]) == 6

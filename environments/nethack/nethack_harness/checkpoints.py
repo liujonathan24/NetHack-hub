@@ -290,6 +290,17 @@ def _raw_of(engine_env):
     return getattr(engine_env, "_engine", None) or getattr(engine_env, "engine", None)
 
 
+def _character_of(env, engine_env, explicit: Optional[str]):
+    """The role this game was reset with: explicit > harness attr > engine memory."""
+    if explicit:
+        return explicit
+    for obj in (env, engine_env):
+        v = getattr(obj, CHARACTER_ATTR, None)
+        if v:
+            return v
+    return getattr(engine_env, "last_character", None)
+
+
 def _status_snapshot(engine_env) -> dict:
     """Read the fields meta.json records straight off the live engine."""
     from nethack_core.observations import BLSTATS_IDX
@@ -366,7 +377,8 @@ def hunger_label(state) -> str:
 #: and every restored hero played at armor class 0 instead of 6. Found
 #: 2026-09-21; every bundle-restored life before then carried that advantage.
 CHARACTER_ATTR = "_checkpoint_character"
-DEFAULT_CHARACTER = "Val-hum-neu-fem"
+#: Sentinel for "this checkpoint predates character recording".
+_UNRECORDED = object()
 #: Audit fields that older checkpoints did not record; a missing one is
 #: reported as skipped rather than failed, so legacy archives still restore.
 OPTIONAL_AUDIT_FIELDS = ("ac",)
@@ -585,8 +597,10 @@ def checkpoint_save(
         "seed": seeds,
         "created_at": time.time(),
         "created_by": created_by or os.environ.get("NLD_AGENT_ID") or "unknown",
-        "character": (character or getattr(env, CHARACTER_ATTR, None)
-                      or getattr(engine_env, CHARACTER_ATTR, None)),
+        # The role the game was reset with; None means the engine's default
+        # role, and is recorded as such (a restore must reset the same way).
+        "character": _character_of(env, engine_env, character),
+        "character_recorded": True,
         "balrog": balrog,
         "balrog_min": balrog_min,
         # WHAT THE PAIR WAS COMPUTED FROM. Without these, an archive row's
@@ -797,10 +811,14 @@ def checkpoint_restore(directory, env=None, *, count_visit: bool = True,
     # (Monk) game and loading a Valkyrie over it left the hero at AC 0.
     if character:
         character_source = "argument"
-    elif meta.get("character"):
-        character, character_source = meta["character"], "meta"
+    elif meta.get("character_recorded"):
+        character, character_source = meta.get("character"), "meta"
     else:
-        character, character_source = DEFAULT_CHARACTER, "default"
+        # A pre-2026-09-21 bundle: the role was never written down. Reset the
+        # way those archives were always resumed (engine default role) so
+        # replaying them stays comparable with how they were played; the AC
+        # audit is skipped for them (no recorded value) and the record says so.
+        character, character_source = None, "unrecorded"
     engine_env.reset(seeds=(int(core), int(disp)), character=character)
     # Dismiss the fresh game's welcome --More-- BEFORE loading anything, or the
     # single ctrl-R below is swallowed by that prompt instead of running
