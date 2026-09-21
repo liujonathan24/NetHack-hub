@@ -4191,6 +4191,7 @@ player result.
         XL change, so "latest" is at most ~20 calls behind the death.
         """
         ids = {r.id for r in rows}
+        by_id = {r.id: r for r in rows}
         roots = [r for r in rows if not r.parent]
         root = min(roots or rows, key=lambda r: _id_key(r.id)).id
         prev = self.attempts[-1] if self.attempts else None
@@ -4199,11 +4200,35 @@ player result.
         new = [str(c).lstrip("c") for c in (prev.get("new_checkpoints") or [])]
         new = [i for i in new if i in ids]
         if new:
-            return max(new, key=_id_key), "latest_checkpoint_of_previous_attempt"
-        frm = str(prev.get("from_checkpoint") or "")
-        if frm in ids:
-            return frm, "previous_attempt_saved_nothing_so_its_start_state"
-        return root, "fallback_archive_root"
+            cand, why = max(new, key=_id_key), "latest_checkpoint_of_previous_attempt"
+        else:
+            frm = str(prev.get("from_checkpoint") or "")
+            if frm in ids:
+                cand, why = frm, "previous_attempt_saved_nothing_so_its_start_state"
+            else:
+                return root, "fallback_archive_root"
+        # A checkpoint that could not be resumed (an attempt started there,
+        # was censored, and made no LM call: a corrupt bundle, a restore that
+        # failed its fidelity check, a tool server that never came up) is not
+        # a state the rule may keep choosing. The orchestrator arm simply
+        # picks another state; the fixed rule walks up to the parent, which
+        # is the nearest state the previous life actually held. Seen on seed 1
+        # of A2: a checkpoint the player saved during an engine panic failed
+        # restore fidelity twelve times in a row and ended the run on the
+        # plateau guard with zero play.
+        unresumable = {str(a.get("from_checkpoint"))
+                       for a in self.attempts
+                       if a.get("censored") and not (a.get("calls") or 0)}
+        hops = 0
+        while cand in unresumable:
+            parent = by_id[cand].parent if cand in by_id else None
+            parent = str(parent) if parent else ""
+            if not parent or parent not in ids:
+                return root, "fallback_archive_root_after_unresumable_checkpoint"
+            cand, why, hops = parent, "parent_of_unresumable_checkpoint", hops + 1
+        if hops:
+            why = f"{why}(x{hops})"
+        return cand, why
 
     def decide(self, rows: list) -> dict:
         """Who goes next and what they are told. Validated, then recorded.

@@ -3274,3 +3274,40 @@ def test_a1_round_prompt_is_selection_only_and_says_so(tmp_path):
     assert all(s["no_directive_notice_served"] for s in sels)
     assert all(c.directive == "" for c in player.seen)
     assert json.loads(cfg.provenance_path.read_text())["iclr_arm"] == "A1"
+
+
+def test_pre_death_walks_up_past_a_checkpoint_that_could_not_be_resumed(tmp_path):
+    """Seed 1 of A2: a corrupt bundle was re-resumed twelve times with zero
+    LM calls until the plateau guard fired. The rule now steps to the parent."""
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True)
+    orch = E.Orchestrator(cfg, StubPlayer([{"died": True}]))
+    orch.prepare()
+    E.seed_archive(cfg)
+    rows = orch.rows()
+    root = rows[0].id
+    # a real chain: root -> c101 -> c102 (attempt 1 wrote both)
+    env, _ = checkpoint_restore(rows[0].path, fidelity_log=cfg.fidelity_path)
+    env.step(ord("s"))
+    checkpoint_save(env, cfg.archive_dir / "c101", name="a", note="", created_by="save",
+                    parent=root)
+    env2, _ = checkpoint_restore(cfg.archive_dir / "c101", fidelity_log=cfg.fidelity_path)
+    env2.step(ord("s"))
+    checkpoint_save(env2, cfg.archive_dir / "c102", name="b", note="", created_by="save",
+                    parent="101")
+    rows = orch.rows()
+    orch.attempts.append({"attempt": 1, "from_checkpoint": root, "censored": False,
+                          "calls": 40, "new_checkpoints": ["c101", "c102"]})
+    assert orch.pre_death_pick(rows) == ("102", "latest_checkpoint_of_previous_attempt")
+    # attempt 2 resumed 102 and never made a call: the bundle is unresumable
+    orch.attempts.append({"attempt": 2, "from_checkpoint": "102", "censored": True,
+                          "calls": 0, "new_checkpoints": []})
+    assert orch.pre_death_pick(rows) == ("101", "parent_of_unresumable_checkpoint(x1)")
+    # if the parent is unresumable too, keep walking; past the root, use the root
+    orch.attempts.append({"attempt": 3, "from_checkpoint": "101", "censored": True,
+                          "calls": 0, "new_checkpoints": []})
+    pick, why = orch.pre_death_pick(rows)
+    assert pick == root and why == "parent_of_unresumable_checkpoint(x1)"
+    # a censored attempt that DID play (engine crash mid-life) is not unresumable
+    orch.attempts.append({"attempt": 4, "from_checkpoint": root, "censored": True,
+                          "calls": 55, "new_checkpoints": []})
+    assert orch.pre_death_pick(rows) == (root, "previous_attempt_saved_nothing_so_its_start_state")
