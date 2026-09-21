@@ -39,7 +39,6 @@ writes the operator's `~/.prime/agent`.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -82,26 +81,11 @@ _RESUME_PROMPT = (
 # package (`skills.md#python-backed-skills` layout).
 _SKILL_FILES = ("SKILL.md", "pyproject.toml", "src/nethack/__init__.py")
 
-# The no-batching instruction, verbatim. The honesty pass (9b8d5a4) rewrote
-# SKILL.md and shortened this line without updating the constant, so
-# `allow_batching=True` has been raising RuntimeError ever since -- the feature
-# was dead on both documents. Present in SKILL.md and SKILL.baseline.md
-# identically, so one constant still covers both.
 _NO_BATCH_RULE = (
-    "- One call, read the observation, then decide. Never batch blind sequences.\n"
+    "- Do not batch blind sequences of calls. NetHack is turn-based and adversarial;\n"
+    "  the observation after each call is what tells you whether the previous one\n"
+    "  worked.\n"
 )
-
-
-def _within(path: str, root: str) -> bool:
-    """Whether `path` is `root` or lives under it, after normalisation.
-
-    Used to refuse a shared continual-harness store the sandbox would not bind.
-    String-prefix comparison would accept `/tmp/vf-prime-agent-other`; this does
-    not.
-    """
-    p = os.path.normpath(os.path.abspath(path))
-    r = os.path.normpath(os.path.abspath(root))
-    return p == r or p.startswith(r + os.sep)
 
 
 def _strip_no_batch_rule(data: bytes) -> bytes:
@@ -124,9 +108,8 @@ def _strip_no_batch_rule(data: bytes) -> bytes:
 
 # The coordinate-frame note aee5c43 added to SKILL.md, and the baseline wording
 # it replaced. `skill_doc_coords` OFF (the default) must serve the E10-baseline
-# doc BYTE-FOR-BYTE. That is now done by serving the frozen `SKILL.baseline.md`
-# wholesale (see `_skill_doc`); the sentence-substitution below is superseded
-# and kept only so an old caller gets the same result. Same tool_flags family as netplay_telemetry /
+# doc BYTE-FOR-BYTE, so the strip substitutes the original sentence back rather
+# than merely deleting the note. Same tool_flags family as netplay_telemetry /
 # melee_hints, but consumed HERE: the doc is materialized by the harness
 # process, which never imports the env-side flag registry -- so it is a harness
 # config field, set by the same tier that sets the env flags.
@@ -145,12 +128,11 @@ _COORD_FRAME_BASELINE = (
 
 
 def _restore_baseline_coord_note(data: bytes) -> bytes:
-    """Deprecated: kept so a caller that still patches gets the same result.
+    """Swap the aee5c43 coordinate-frame note back to the baseline wording.
 
-    Superseded by serving `SKILL.baseline.md` wholesale (see `_skill_doc`). The
-    patch approach pinned ONE paragraph, so any future edit elsewhere in
-    SKILL.md would have broken byte-identity with E10 while every test still
-    passed. Serving the frozen file cannot drift by construction.
+    Fails loudly, same contract as `_strip_no_batch_rule`: a cell that believed
+    it was serving the baseline doc but shipped the annotated one (or vice
+    versa) is a silently invalid experiment.
     """
     text = data.decode()
     if _COORD_FRAME_NOTE not in text:
@@ -161,54 +143,6 @@ def _restore_baseline_coord_note(data: bytes) -> bytes:
         )
     return text.replace(_COORD_FRAME_NOTE, _COORD_FRAME_BASELINE).encode()
 
-
-# The E10-baseline SKILL.md, frozen. This is `aee5c43^` verbatim -- the exact
-# bytes the prime_agent arm served for every rollout in outputs/e10_baseline/.
-# Pinned by hash so an accidental edit to the fixture fails the run rather than
-# silently redefining what "baseline" means.
-# BASELINE v2 (2026-08-24). v1 was `aee5c43^` verbatim, sha256 8585082860c7...,
-# the document every rollout in outputs/e10_baseline/ was served. v2 removes the
-# call-budget language (see docs/PROMPT_BUDGET_REMOVAL.md), which means it is a
-# NEW baseline, not a correction: E10's numbers describe v1 and remain valid for
-# it. Regenerate after editing the doc:
-#   sha256sum harnesses/nethack-prime-agent/nethack_prime_agent/skill/SKILL.baseline.md
-_BASELINE_SKILL_SHA256 = "39f34ad07961a27cb440ced0ff53ec3001df6172b2813dfb33e7d344af3d10aa"
-
-
-def _skill_doc(package, *, skill_doc_coords: bool, allow_batching: bool) -> bytes:
-    """The SKILL.md bytes this tier serves.
-
-    `skill_doc_coords=False` (the default, i.e. [base]) serves the frozen
-    baseline file WHOLESALE rather than patching the live one. That is the only
-    way byte-identity with E10 survives future edits to SKILL.md: a patch pins
-    one paragraph, a fixture pins the document.
-    """
-    if not skill_doc_coords:
-        data = (package / "SKILL.baseline.md").read_bytes()
-        got = hashlib.sha256(data).hexdigest()
-        if got != _BASELINE_SKILL_SHA256:
-            raise RuntimeError(
-                "SKILL.baseline.md has been edited: expected sha256 "
-                f"{_BASELINE_SKILL_SHA256}, got {got}. This file is the E10 "
-                "baseline document; changing it silently redefines every [base] "
-                "cell. Restore it from `git show aee5c43^`."
-            )
-    else:
-        data = (package / "SKILL.md").read_bytes()
-    if allow_batching:
-        if not skill_doc_coords:
-            # The hash check above verifies the FIXTURE; stripping afterwards
-            # changes the SERVED bytes, so a [base] cell was serving 4753 bytes
-            # where E10 served 4829 and nothing fired. The launcher refuses the
-            # combination; this refuses it again for any other caller.
-            raise RuntimeError(
-                "allow_batching=True with skill_doc_coords=False would strip the "
-                "no-batch rule out of the frozen E10 baseline document, so the "
-                "bytes served would not be the bytes E10 served. A batching cell "
-                "is a different experiment: run it on its own tier."
-            )
-        data = _strip_no_batch_rule(data)
-    return data
 
 
 class PrimeAgentHarnessConfig(HarnessConfig):
@@ -236,115 +170,12 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     based cluster may not carry either."""
 
     thinking: str = ""
-    """`--thinking` level.
-
-    CORRECTED 2026-08-24: this said "Empty leaves Prime Agent's default
-    (`xhigh`)". The shipped 0.3.3 bundle says otherwise --
-    `DEFAULT_THINKING_LEVEL = "medium"` -- so every cell that left this empty has
-    been running at MEDIUM reasoning effort while the docstring (and
-    docs/settings.md) claimed xhigh. Reasoning effort is not a free variable in a
-    controlled comparison: pin it per arm rather than inheriting an undeclared
-    default that a scaffold upgrade can move."""
+    """`--thinking` level. Empty leaves Prime Agent's default (`xhigh`)."""
 
     websearch: bool = False
     """Load Prime Agent's bundled `websearch` skill. Off by default: the control
     arm and the Claude Code arm both run without web access, and a live search
     tool would not be capability-matched."""
-
-    continual_harness_dir: str = ""
-    """Share Prime Agent's GLOBAL continual-harness store across rollouts (E13).
-
-    Prime Agent persists prompt notes, memories, reusable skill descriptions and
-    sub-agent specs in a "continual harness" state file, and renders them into
-    the system prompt of every new session (`formatHarnessStateForPrompt`, called
-    from the base-prompt builder with `harnessState: _loadMergedHarnessState()`).
-    That is exactly the cross-episode learning channel E13 needs -- but it is
-    inert under this harness, for two independent reasons:
-
-      * LOCAL state lives in session artifacts, and this arm runs `--no-session`.
-      * GLOBAL state lives at `<agentDir>/harness/`, and `agentDir` here is the
-        PER-ROLLOUT `agent-<trace id>` (see `PRIME_AGENT_CODING_AGENT_DIR`
-        below), so "global" is really "per game".
-
-    Setting this to a directory makes `<agent_dir>/harness` a SYMLINK to it, so
-    every rollout reads and (if `continual_harness_writable`) writes one shared
-    store. Only the harness state is shared: `settings.json`, `models.json` and
-    `auth.json` stay per-rollout, which they must -- seeds run CONCURRENTLY and
-    each carries its own MCP URL and interception secret, so sharing the whole
-    agent directory would race five rollouts onto one settings file and point
-    agents at each other's games.
-
-    Empty (the default) leaves every existing arm byte-identical: no symlink is
-    created and each rollout keeps its own empty per-rollout store.
-
-    Note what this does NOT switch on. `_autoRefineAllowedForSession()` requires
-    a local (session) harness dir, so under `--no-session` automatic refinement
-    never fires; and auto-refine writes LOCAL entries anyway. Entries reach the
-    shared store only through an explicit `rlm.harness.create_*(global_=True)` /
-    `await refine.run(..., global_=True)` call -- from the player, if the prompt
-    asks for one, or from an orchestrator process pointed at the same directory
-    between cells. That is a feature for an experiment: every write is deliberate
-    and attributable, not a background process editing the arm mid-cell."""
-
-    rlm_max_depth: int = 1
-    """Recursion depth for `rlm(...)` sub-agents, written into the launch env.
-
-    1 = the root player may spawn children; children may not spawn
-    grandchildren. That is the scaffold default, but there is no CLI flag and no
-    settings key for it, so inheriting it leaves no record of what the arm
-    actually ran with."""
-
-    auto_refine: bool = False
-    """Prime Agent's automatic trajectory review (`autoRefine`).
-
-    Default OFF and always written into settings.json explicitly, because the
-    scaffold's own default is ON and only inert by accident under `--no-session`
-    (see the settings block in `launch`). Turning it on is a deliberate arm
-    choice with two consequences worth stating: it costs two extra model calls
-    per fire on the interception endpoint, unattributed to the rollout; and its
-    edits are LOCAL-scope, landing in the session artifact dir rather than the
-    shared continual store, so they are discarded unless something harvests
-    them."""
-
-    continual_harness_mode: str = "shared-ro"
-    """How the shared continual-harness store reaches a rollout.
-
-    `shared-ro` (default) symlinks every rollout's harness directory at ONE
-    store. Correct when a single writer (an orchestrator, between cells) owns
-    it, and the store is re-bound read-only so players cannot edit it.
-
-    `copy-merge` is for the arm where the PLAYERS write. Each rollout gets a
-    private COPY of the canonical store, seeded at launch so it reads everything
-    learned so far, and the runner merges the copies back afterwards.
-
-    Why copying rather than sharing a writable store, measured: `rlm.harness`
-    persists with a non-atomic whole-file rewrite -- `open("w")` + `json.dump`,
-    no lock, no tmp+rename -- and its loader treats an unreadable state file as
-    EMPTY rather than erroring. Five concurrent writers each adding six entries
-    to one store kept 12 of 30; one of the five contributed nothing at all, and
-    nothing reported the loss. A player landing mid-write would silently boot
-    with no accumulated knowledge.
-
-    Copying also buys attribution: each rollout's contribution is a separate
-    file, so "what did seed 7 add?" is answerable and same-id conflicts become a
-    deliberate merge decision instead of last-write-wins."""
-
-    continual_harness_writable: bool = False
-    """Let the PLAYER write to the shared continual-harness store.
-
-    Default False: under `sandbox = true` the store is re-bound READ-ONLY, on top
-    of the read-write `install_dir` bind, so a rollout can read the accumulated
-    lessons and cannot edit them. That keeps the learning channel single-writer
-    (an orchestrator between cells) and makes a cell reproducible from the store
-    snapshot taken before it ran.
-
-    Set True for the self-directed variant, where the player itself decides what
-    to persist. Then the store is shared MUTABLE state across concurrently
-    running seeds: writes are last-write-wins on one JSON file, so run such a
-    cell with one seed at a time, and expect a cell to change the store that
-    later cells read. With `sandbox = false` this flag cannot be enforced at all
-    (nothing is bound read-only) -- it is then a declaration of intent that the
-    launcher's before/after hash of the store has to police."""
 
     reasoning: bool | None = Field(default=None)
     """Declare the model as reasoning-capable in `models.json`. `None` derives it
@@ -443,49 +274,6 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     Default False so existing cells are unchanged.
     """
 
-    persist_session: bool = False
-    """Run WITHOUT `--no-session`, so Prime Agent writes the conversation to
-    `<agent_dir>/sessions/<file>.jsonl` and snapshots the IPython kernel to
-    `<agent_dir>/session-artifacts/<header id>/kernel-state.dill` when the
-    process exits. Off by default: every arm measured before 2026-09-21 ran
-    session-less, and a persisted session changes nothing the model sees in
-    a fresh rollout -- it only makes the conversation RESUMABLE. Implied by
-    `resume_session`. Relaunches (`max_relaunches`) then resume the SAME
-    session instead of starting a fresh `--no-session` process with
-    `_RESUME_PROMPT`, so a relaunch keeps the conversation too."""
-
-    resume_session: str = ""
-    """Path to a Prime Agent session file (`.jsonl`, header record first) whose
-    CONVERSATION this rollout continues. The file is copied to
-    `<agent_dir>/sessions/<header id>.jsonl` and the process is started with
-    `--resume <that path>`, so the model's context is the recorded exchange --
-    every user turn, assistant turn (reasoning included, as recorded) and
-    tool result -- followed by ONE new user turn, `resume_prompt`. The task
-    prompt is NOT sent: it is already the first user turn of the recorded
-    conversation. Measured 2026-09-21 (`/tmp/pa-resume-test`): resuming by
-    path works from any cwd and any agent dir, appends to the copied file,
-    and restores the kernel snapshot when `resume_artifacts` is given; the
-    CLI blocks forever on an open stdin, which `run_program` closes.
-    This is what E16's "resume the conversation at the checkpoint" needs and
-    what `prefix.jsonl` (a quoted text tail) never was."""
-
-    resume_artifacts: str = ""
-    """Directory copied to `<agent_dir>/session-artifacts/<header id>/` before
-    a resumed launch: the kernel snapshot Prime Agent restores on resume
-    (`kernel-state.dill` + `.json`). Optional; without it the kernel starts
-    empty (skills are re-bootstrapped either way) and the model's own
-    variables from the recorded conversation are gone."""
-
-    resume_prompt: str = ""
-    """The single new user turn a resumed session receives. Required with
-    `resume_session` (an empty prompt would make the CLI wait on stdin)."""
-
-    session_export_dir: str = ""
-    """After the run (relaunches included), copy `<agent_dir>/sessions/` and
-    `<agent_dir>/session-artifacts/` here, so the conversation this rollout
-    produced can be sealed into the checkpoints it wrote. Requires
-    `persist_session` (or `resume_session`); ignored otherwise."""
-
     max_relaunches: int = 5
     """Cap on auto-resume relaunches (`launch` returning `exit_code == 0` while
     the game is neither dead nor budget-exhausted -- see `PrimeAgentHarness.
@@ -563,18 +351,11 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # The skill package, at a path that does not vary per rollout.
         package = resources.files(__package__) / "skill"
         for name in _SKILL_FILES:
-            if name == "SKILL.md":
-                # Tier-selected document; the baseline variant is a frozen file,
-                # not a patch (see `_skill_doc`). `SKILL.baseline.md` is never
-                # written into the runtime skill dir -- the agent must see
-                # exactly one SKILL.md.
-                data = _skill_doc(
-                    package,
-                    skill_doc_coords=self.config.skill_doc_coords,
-                    allow_batching=self.config.allow_batching,
-                )
-            else:
-                data = (package / name).read_bytes()
+            data = (package / name).read_bytes()
+            if name == "SKILL.md" and self.config.allow_batching:
+                data = _strip_no_batch_rule(data)
+            if name == "SKILL.md" and not self.config.skill_doc_coords:
+                data = _restore_baseline_coord_note(data)
             await runtime.write(f"{self._skill_dir}/{name}", data)
 
         if self.config.sandbox:
@@ -683,15 +464,25 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         #   tunnels/        WRITE -- per-rollout frpc configs
         prime_home = os.path.join(os.path.expanduser("~"), ".prime")
         if os.path.isdir(prime_home):
-            for leaf, mode in (
-                ("config.json", "--ro-bind"),
-                ("bin", "--ro-bind"),
-                ("agent", "--bind"),
-                ("tunnels", "--bind"),
+            # `agent/` is the one leaf that is both WRITABLE and SHARED across
+            # every experiment on the box (daemon-workers/, session-leases/, a
+            # supervisor's recovery journals) -- a booting run scanning it can
+            # reap another run's live sessions. NETHACK_PA_AGENT_BIND_SRC binds
+            # a per-experiment COPY over the same in-sandbox path, so the
+            # kernel-venv's baked-in /root/.prime/agent/... paths still resolve.
+            # Default unchanged: the shared dir, exactly as before.
+            agent_src = os.environ.get("NETHACK_PA_AGENT_BIND_SRC") or os.path.join(
+                prime_home, "agent")
+            for leaf, mode, src in (
+                ("config.json", "--ro-bind", None),
+                ("bin", "--ro-bind", None),
+                ("agent", "--bind", agent_src),
+                ("tunnels", "--bind", None),
             ):
                 p = os.path.join(prime_home, leaf)
-                if os.path.exists(p):
-                    binds += [mode, p, p]
+                src = src or p
+                if os.path.exists(src):
+                    binds += [mode, src, p]
 
         # An absolute, non-PATH `sandbox_bwrap` override might live outside
         # everything bound above (e.g. a home-directory install of bwrap
@@ -715,20 +506,6 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "--bind",
             self.config.install_dir,
             self.config.install_dir,
-            # E13: in `shared-ro` the store is re-bound READ-ONLY on top of the
-            # read-write `install_dir` bind (bwrap applies binds in order, so the
-            # later, narrower one wins) -- that is what keeps a single-writer arm
-            # single-writer. In `copy-merge` the rollout writes its OWN private
-            # copy under install_dir and canonical is never touched by a player,
-            # so no re-bind applies.
-            *(
-                ["--ro-bind", self.config.continual_harness_dir,
-                 self.config.continual_harness_dir]
-                if self.config.continual_harness_dir
-                and str(self.config.continual_harness_mode).strip().lower() != "copy-merge"
-                and not self.config.continual_harness_writable
-                else []
-            ),
             "--bind",
             workdir,
             workdir,
@@ -820,19 +597,6 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         }
         settings = {
             "onboardingShown": True,
-            # PINNED, not inherited. `autoRefine` defaults to enabled (turnInterval
-            # 25, 20-minute cooldown) and is undocumented in settings.md. It is
-            # inert here only by ACCIDENT -- `_autoRefineAllowedForSession()`
-            # needs a local session dir and `--no-session` denies one -- but the
-            # moment a player calls `rlm(...)`, the host mints an ephemeral RLM
-            # session dir on the PARENT, the gate opens mid-run, and auto-refine
-            # starts spending two out-of-band `completeSimple` calls per fire on
-            # the eval's own interception endpoint. Those are real completions
-            # that never enter the session transcript, so they land in the run's
-            # provider cost unattributed, and their edits are LOCAL-scope and
-            # discarded. An arm must not change behaviour because the model
-            # happened to spawn a sub-agent.
-            "autoRefine": {"enabled": self.config.auto_refine},
             "quietStartup": True,
             # Belt and braces: `--provider/--model` already pin the route, but a
             # fallback that silently picked a built-in provider would run the
@@ -856,88 +620,17 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # reading (or migrating into) the operator's real credential store.
         await runtime.write(f"{agent_dir}/auth.json", b"{}\n")
 
-        # E13: give this rollout its GLOBAL continual-harness directory, so
-        # lessons written by an earlier game are in this game's system prompt.
-        # `getGlobalHarnessStateDir()` is `join(agentDir, "harness")` with no env
-        # override of its own, and the kernel is handed the same path as
-        # `RLM_GLOBAL_HARNESS_STATE_DIR`, so whatever sits at that one name
-        # serves both the host (refine) and the kernel (`rlm.harness.*`).
-        if self.config.continual_harness_dir:
-            ch = self.config.continual_harness_dir
-            if self.config.sandbox and not _within(ch, self.config.install_dir):
-                raise ValueError(
-                    f"harness.continual_harness_dir ({ch!r}) is outside "
-                    f"install_dir ({self.config.install_dir!r}) while "
-                    "harness.sandbox is true, so it is not bound into the "
-                    "sandbox and the shared store would be invisible to the "
-                    "agent. Put the store under install_dir, or set "
-                    "harness.sandbox = false."
-                )
-            mode = str(self.config.continual_harness_mode or "shared-ro").strip().lower()
-            if mode not in ("shared-ro", "copy-merge"):
-                raise ValueError(
-                    f"harness.continual_harness_mode={mode!r}; expected "
-                    "'shared-ro' or 'copy-merge'."
-                )
-            link = f"{agent_dir}/harness"
-            if mode == "copy-merge":
-                # A private copy, seeded from canonical. `cp -a .../.` copies the
-                # CONTENTS so an absent canonical store still yields an empty
-                # private one rather than a nested directory -- and an empty
-                # canonical is a rc=0 no-op, so no `|| true` is needed to
-                # tolerate round 1. It must NOT be suppressed: `... || true`
-                # forced the whole script to exit 0, which made the exit-code
-                # check below dead in this mode and let a failed copy hand the
-                # rollout an empty store -- exactly the "the agent learned
-                # nothing" reading the check exists to prevent.
-                script = (
-                    f"mkdir -p {shlex.quote(ch)} {shlex.quote(link)} && "
-                    f"cp -a {shlex.quote(ch)}/. {shlex.quote(link)}/"
-                )
-            else:
-                script = (
-                    f"mkdir -p {shlex.quote(ch)} && rm -rf {shlex.quote(link)} && "
-                    f"ln -sfn {shlex.quote(ch)} {shlex.quote(link)}"
-                )
-            probe = await runtime.run(["sh", "-c", script], self._env_with_path())
-            if probe.exit_code != 0:
-                raise RuntimeError(
-                    f"could not provision the continual-harness store ({mode}) at "
-                    f"{link}: "
-                    f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}. "
-                    "Running on would silently give this rollout an empty store."
-                )
-
         env = self._env_with_path(
             {
                 KEY_VAR: secret,
                 MCP_TOKEN_VAR: mcp_token,
                 "PRIME_AGENT_CODING_AGENT_DIR": agent_dir,
-                # DECLARED, not inherited. There is no CLI flag and no settings
-                # key for recursion depth -- this env var is the only record. The
-                # default is 1 (root may spawn children, children may not
-                # recurse), which is what we want; writing it down means a
-                # scaffold upgrade cannot move it silently.
-                "RLM_MAX_DEPTH": str(self.config.rlm_max_depth),
                 # No update checks, no telemetry, no package-update fetches.
                 "PI_OFFLINE": "1",
                 "PI_SKIP_VERSION_CHECK": "1",
                 "PI_TELEMETRY": "0",
             }
         )
-
-        persist = bool(self.config.persist_session or self.config.resume_session)
-        session_file = ""  # the persisted session this rollout writes/continues
-        if self.config.resume_session:
-            if not self.config.resume_prompt.strip():
-                raise ValueError(
-                    "harness.resume_session is set but harness.resume_prompt is "
-                    "empty: a resumed `--print` session with no new user turn "
-                    "blocks on stdin forever, and a rollout that sends the "
-                    "TASK prompt again would not be a resumed conversation."
-                )
-            session_file = await self._seed_resume_session(runtime, agent_dir)
-            prompt = self.config.resume_prompt
 
         argv = [
             # PYTHONPATH MUST NOT REACH THE AGENT'S KERNEL. The tool server needs
@@ -958,9 +651,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "vf-prime-agent",
             self.config.binary,
             "--print",
-            # `--no-session` unless the session is persisted/resumed (below):
-            # the flag is what makes Prime Agent write nothing to `sessions/`.
-            *([] if persist else ["--no-session"]),
+            "--no-session",
             "--offline",
             "--provider",
             PROVIDER,
@@ -976,8 +667,6 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # at chars 14616 and 21992). AGENTS.md is the single source now.
         # `--` ends option parsing, so a prompt starting with `-` or containing
         # `@word` is never re-read as a flag or a file attachment.
-        if session_file:
-            argv += ["--resume", session_file]
         argv += ["--", prompt]
 
         if self.config.sandbox:
@@ -1010,14 +699,6 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # argv/prompt as long as the toolset-side referee says the character is
         # alive and the call budget isn't exhausted, up to the configured cap.
         resume_argv = argv[:-1] + [_RESUME_PROMPT]
-        if persist and not session_file:
-            # A fresh persisted session: relaunches must continue THIS
-            # conversation, not open another one. The file only exists once
-            # the first process has exited, so it is located here. `argv`
-            # ends with `["--", prompt]`; `--resume` has to precede the `--`.
-            session_file = await self._find_session_file(runtime, agent_dir)
-            if session_file:
-                resume_argv = argv[:-2] + ["--resume", session_file, "--", _RESUME_PROMPT]
         relaunches = 0
         while (
             result.exit_code == 0
@@ -1043,97 +724,7 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             # Recorded every rollout, including 0, so a run that never needed
             # to resume is as visible in the aggregate as one that needed all 5.
             trace.record_metric("prime_agent_relaunches", float(relaunches))
-            trace.record_metric("prime_agent_session_resumed",
-                                1.0 if self.config.resume_session else 0.0)
-        if persist and self.config.session_export_dir:
-            await self._export_session(runtime, agent_dir)
         return result
-
-    # -- persistent sessions --------------------------------------------------
-
-    @staticmethod
-    def _session_header_id(path: str) -> str:
-        """The `id` of the session header (first record). NOT the filename
-        stem: Prime Agent mints the header id separately from the file name,
-        and keys `session-artifacts/<id>/` by the header."""
-        with open(path, "r", encoding="utf-8") as fh:
-            first = fh.readline()
-        try:
-            header = json.loads(first)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"harness.resume_session={path!r}: first line is not JSON ({exc})"
-            ) from exc
-        if header.get("type") != "session" or not isinstance(header.get("id"), str):
-            raise ValueError(
-                f"harness.resume_session={path!r}: first record is not a session "
-                f"header (type={header.get('type')!r})"
-            )
-        return header["id"]
-
-    async def _seed_resume_session(self, runtime: Runtime, agent_dir: str) -> str:
-        """Copy the seed conversation (and kernel snapshot) into `agent_dir`.
-
-        Returns the in-agent-dir path handed to `--resume`. The seed is read on
-        THIS host to learn the header id, so a remote runtime would need the
-        path to be visible here as well; the only runtime this arm uses is
-        `subprocess`, where the two file systems are the same one."""
-        src = self.config.resume_session
-        if not os.path.isfile(src):
-            raise FileNotFoundError(
-                f"harness.resume_session={src!r} does not exist; a rollout that "
-                "silently started fresh would be a different condition."
-            )
-        header_id = self._session_header_id(src)
-        dest = f"{agent_dir}/sessions/{header_id}.jsonl"
-        script = (
-            f"mkdir -p {shlex.quote(agent_dir + '/sessions')} && "
-            f"cp {shlex.quote(src)} {shlex.quote(dest)}"
-        )
-        arts = self.config.resume_artifacts
-        if arts:
-            if not os.path.isdir(arts):
-                raise FileNotFoundError(
-                    f"harness.resume_artifacts={arts!r} is not a directory"
-                )
-            adest = f"{agent_dir}/session-artifacts/{header_id}"
-            script += (
-                f" && mkdir -p {shlex.quote(adest)} && "
-                f"cp -a {shlex.quote(arts)}/. {shlex.quote(adest)}/"
-            )
-        probe = await runtime.run(["sh", "-c", script], self._env_with_path())
-        if probe.exit_code != 0:
-            raise RuntimeError(
-                f"could not seed the resumed session into {agent_dir}: "
-                f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}"
-            )
-        return dest
-
-    async def _find_session_file(self, runtime: Runtime, agent_dir: str) -> str:
-        """Newest `.jsonl` under `<agent_dir>/sessions/`, or ''."""
-        probe = await runtime.run(
-            ["sh", "-c",
-             f"ls -t {shlex.quote(agent_dir + '/sessions')}/*.jsonl 2>/dev/null | head -1"],
-            self._env_with_path(),
-        )
-        out = (probe.stdout or "").strip()
-        return out.splitlines()[0].strip() if out else ""
-
-    async def _export_session(self, runtime: Runtime, agent_dir: str) -> None:
-        dest = self.config.session_export_dir
-        script = (
-            f"mkdir -p {shlex.quote(dest)} && "
-            f"cp -a {shlex.quote(agent_dir + '/sessions')} {shlex.quote(dest)}/ && "
-            f"( [ -d {shlex.quote(agent_dir + '/session-artifacts')} ] && "
-            f"cp -a {shlex.quote(agent_dir + '/session-artifacts')} {shlex.quote(dest)}/ "
-            f"|| true )"
-        )
-        probe = await runtime.run(["sh", "-c", script], self._env_with_path())
-        if probe.exit_code != 0:
-            logger.warning(
-                "could not export the session from %s to %s: %s", agent_dir, dest,
-                (probe.stderr or probe.stdout).strip()[-300:],
-            )
 
     def _episode_live(self, trace) -> bool:
         """Whether the game is still worth relaunching into.
