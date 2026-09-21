@@ -129,6 +129,15 @@ HIGH_WATER_XL_ATTR = "_max_xp_level"
 #: ``--no-session`` / ``--no-session-persistence``, so a resumed player replays
 #: this as quoted TEXT rather than resuming an actual conversation.
 CONVERSATION_PREFIX_ATTR = "_conversation_prefix"
+#: Set on the env by ``nethack.py:_apply_tool_call`` before a call executes:
+#: the ``[call#N]`` correlation id of the call in flight. Recorded as
+#: ``meta["call"]`` so a checkpoint written DURING call N (auto, level entry,
+#: the ``save`` skill) can be paired with the tool result that carries
+#: ``[call#N]`` in the player's persisted session -- which is how
+#: ``e16_orchestrator.seal_checkpoint_session`` truncates the conversation at
+#: exactly the exchange the game state corresponds to. None for a checkpoint
+#: written outside a call (``seed_archive``).
+CALL_ID_ATTR = "_current_call_id"
 
 #: Attribute :func:`checkpoint_restore` publishes the restored frame on. The
 #: caller needs the observation itself; it cannot travel inside ``meta``, which
@@ -288,6 +297,18 @@ def _engine_of(env):
 
 def _raw_of(engine_env):
     return getattr(engine_env, "_engine", None) or getattr(engine_env, "engine", None)
+
+
+def _call_id_of(env, engine_env):
+    """The in-flight ``[call#N]`` id (see :data:`CALL_ID_ATTR`), or None."""
+    for obj in (env, engine_env):
+        v = getattr(obj, CALL_ID_ATTR, None) if obj is not None else None
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def _character_of(env, engine_env, explicit: Optional[str]):
@@ -601,6 +622,7 @@ def checkpoint_save(
         # role, and is recorded as such (a restore must reset the same way).
         "character": _character_of(env, engine_env, character),
         "character_recorded": True,
+        "call": _call_id_of(env, engine_env),
         "balrog": balrog,
         "balrog_min": balrog_min,
         # WHAT THE PAIR WAS COMPUTED FROM. Without these, an archive row's

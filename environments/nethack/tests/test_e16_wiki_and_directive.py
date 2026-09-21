@@ -1210,3 +1210,62 @@ def test_level_entry_and_level_up_fire_INDEPENDENTLY_of_the_cadence():
             "last_periodic_call": 0, "interval": 20}
     fired = [t[0] for t in T(both, 4, 2, 700)]
     assert fired == ["level_entry_d4", "level_up_xl2", "call_20"]
+
+
+# --------------------------------------------------------------------------- #
+# 10. TRUE conversation resume (2026-09-21): the env steps aside
+# --------------------------------------------------------------------------- #
+
+def test_a_checkpoint_records_the_call_it_was_written_during(tmp_path):
+    """`meta["call"]` is what pairs a checkpoint with the tool result carrying
+    `[call#N]` in the player's persisted session (the seal cuts there)."""
+    from nethack_harness.checkpoints import CALL_ID_ATTR
+
+    env = _fresh_engine()
+    assert checkpoint_save(env, tmp_path / "c0", name="x", note="")["call"] is None
+    setattr(env, CALL_ID_ATTR, 261)
+    assert checkpoint_save(env, tmp_path / "c1", name="x", note="")["call"] == 261
+
+
+def test_session_resume_serves_no_first_observation_blocks_and_continues_call_ids(tmp_path):
+    """With `session_resume`, the directive / RESUMED banner / ledger are the
+    resumed session's new USER turn (built by the orchestrator), so the env
+    must serve none of them -- and `[call#N]` continues from the checkpoint's
+    own call so every marker stays unique along a lineage."""
+    from nethack_harness.checkpoints import CALL_ID_ATTR
+
+    env0 = _fresh_engine()
+    setattr(env0, CALL_ID_ATTR, 261)
+    meta = checkpoint_save(env0, tmp_path / "c7", name="before the mines",
+                           note="descend from here")
+    assert meta["call"] == 261
+
+    ledger = "CHECKPOINT ARCHIVE (1 saved state)."
+    env, state, _ = _env_with(
+        tmp_path, directive=DIRECTIVE, ledger_text=ledger,
+        resume_checkpoint=str(tmp_path / "c7"),
+        fidelity_log=str(tmp_path / "fid.jsonl"),
+        session_resume="true")
+    assert state["prefix_continuity"] == "session"
+    assert state["resume_banner_served"] is False
+    assert state["session_resume_call_offset"] == 261
+
+    served = _served_text(asyncio.run(env._apply_tool_call(state, "search", {"times": 1})))
+    assert DIRECTIVE not in served
+    assert ledger not in served
+    assert "RESUMED FROM CHECKPOINT" not in served
+    assert "author's own words" not in served
+    assert "[call#262]" in served
+    # The in-flight call id is published on the env for checkpoint_save.
+    assert getattr(state["env"], CALL_ID_ATTR) == 262
+
+    # Text mode (the default) is untouched: same checkpoint, same kwargs,
+    # blocks served and the counter starting at 1.
+    env2, state2, _ = _env_with(
+        tmp_path / "t", directive=DIRECTIVE, ledger_text=ledger,
+        resume_checkpoint=str(tmp_path / "c7"),
+        fidelity_log=str(tmp_path / "fid2.jsonl"))
+    served2 = _served_text(asyncio.run(env2._apply_tool_call(state2, "search", {"times": 1})))
+    assert state2["prefix_continuity"] == "text_only"
+    assert DIRECTIVE in served2 and "RESUMED FROM CHECKPOINT 7" in served2
+    assert "[call#1]" in served2

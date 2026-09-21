@@ -70,6 +70,7 @@ CONVERSATION_PREFIX_CHARS = 1200
 
 #: Where the running transcript lives on the env, for the `save` skill to read.
 CONVERSATION_PREFIX_ATTR = "_conversation_prefix"
+_CALL_ID_ATTR = "_current_call_id"  # == nethack_harness.checkpoints.CALL_ID_ATTR
 
 
 def _parse_reseed(value):
@@ -644,6 +645,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # player cannot tell it is a resumed attempt. env_args arrive as
         # strings, hence the explicit parse below.
         resume_banner=True,
+        # E16 true conversation resume: the PLAYER PROCESS is a resumed Prime
+        # Agent session whose context is the checkpoint's own recorded
+        # conversation (harness.resume_session), and the orchestrator's
+        # directive / resume banner / ledger -- whatever the arm serves -- are
+        # its one new USER turn (harness.resume_prompt). So this env serves
+        # NONE of them in the first observation (it would duplicate the user
+        # turn), and the `[call#N]` counter continues from the checkpoint's
+        # own call number instead of restarting at 1, which keeps every marker
+        # unique along a lineage -- `seal_checkpoint_session` depends on that.
+        # Parsed like `resume_banner`: env_args arrive as strings.
+        session_resume=False,
         # Where the restore-fidelity audit records are appended (JSONL).
         fidelity_log: Optional[str] = None,
         # `[core, disp]` to reseed the gameplay RNG with AFTER the restore, or
@@ -700,6 +712,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._ledger_text = ledger_text or None
         self._directive = directive or None
         self._resume_banner = str(resume_banner).strip().lower() not in (
+            "0", "false", "no", "off", "")
+        self._session_resume = str(session_resume).strip().lower() not in (
             "0", "false", "no", "off", "")
         self._fidelity_log = fidelity_log or None
         self._reseed = _parse_reseed(reseed)
@@ -933,11 +947,20 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                  "visits", "parent")
             }
             state["restore_fidelity"] = ck_meta.get("restore_fidelity")
+            state["prefix_continuity"] = (
+                "session" if self._session_resume else "text_only")
+            if self._session_resume:
+                # The conversation IS the context; nothing is injected here.
+                # The call counter continues where the checkpoint's own call
+                # left off (meta["call"], None for a seed checkpoint).
+                state["_trace_call_seq"] = int(ck_meta.get("call") or 0)
+                state["session_resume_call_offset"] = state["_trace_call_seq"]
+                state["resume_banner_served"] = False
             # One-shot resume banner, rendered into the FIRST observation via
             # the existing `_resume_notice` hook (env_response). The numbers in
             # it come from the checkpoint's harness-computed meta, never from
             # the model's own note -- the note is quoted as text and labelled.
-            _ck_lines = [] if not self._resume_banner else [
+            _ck_lines = [] if (not self._resume_banner or self._session_resume) else [
                 f"RESUMED FROM CHECKPOINT {ck_meta.get('id')} "
                 f"({ck_meta.get('name') or 'unnamed'!r}) -- you are NOT starting "
                 f"fresh. Dlvl {ck_meta.get('dlvl')}, XL {ck_meta.get('xl')}, "
@@ -946,12 +969,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 f"{int(ck_meta.get('attempts_from') or 0)} previous attempt(s) "
                 f"started from this state.",
             ]
-            if ck_meta.get("note") and self._resume_banner:
+            if ck_meta.get("note") and self._resume_banner and not self._session_resume:
                 _ck_lines.append(
                     f"Why it was saved (author's own words): {ck_meta['note']}")
-            if self._ledger_text:
+            if self._ledger_text and not self._session_resume:
                 _ck_lines.append(self._ledger_text)
-            state["resume_banner_served"] = bool(self._resume_banner)
+            if not self._session_resume:
+                state["resume_banner_served"] = bool(self._resume_banner)
             if _ck_lines:
                 state["_resume_notice"] = "\n".join(_ck_lines)
         elif self._ledger_text:
@@ -959,7 +983,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # One-shot, and its OWN block rather than a line inside the resume
         # banner: an experiment that has to measure whether the player followed
         # the instruction cannot have that instruction blended into narration.
-        if self._directive:
+        if self._directive and not (self._session_resume
+                                    and state.get("resumed_checkpoint")):
             state["_directive_notice"] = self._directive
 
         # ---- E16: run resources the published skills read off the env -------
@@ -1383,6 +1408,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # dispatched call == one id per turn record; the end-of-rollout flush
         # (a call that was never dispatched) explicitly carries None instead.
         call_id = state["_trace_call_seq"] = int(state.get("_trace_call_seq", 0)) + 1
+        # Published to the env object so a checkpoint written during this
+        # call records which call it belongs to (checkpoints.CALL_ID_ATTR).
+        if state.get("env") is not None:
+            try:
+                setattr(state["env"], _CALL_ID_ATTR, call_id)
+            except Exception:
+                pass
         # The transport's own id, when this process can see one (OpenAI-style
         # `tool_calls[].id` on the harness route). Corroboration only -- the
         # MCP and code-mode transports never surface one to the server, which

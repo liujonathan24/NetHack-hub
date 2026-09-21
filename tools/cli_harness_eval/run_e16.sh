@@ -191,6 +191,7 @@ ARGS=(
 [ "${E16_NO_DIRECTIVE:-0}" = "1" ] && ARGS+=(--no-directive)
 [ "${E16_NO_LESSONS:-0}" = "1" ] && ARGS+=(--no-lessons)
 [ "${E16_BLIND_RESUME:-0}" = "1" ] && ARGS+=(--blind-resume)
+[ "${E16_SESSION_RESUME:-0}" = "1" ] && ARGS+=(--session-resume)
 # E16_NO_INFLIGHT_BUDGET=1 disables the mid-attempt budget guard. The guard
 # charges wall clock at DEFAULT_SPEND_RATE_USD_PER_HOUR ($90/hr) x a 2.0 safety
 # factor and there is NO in-flight usage source for prime_agent rollouts

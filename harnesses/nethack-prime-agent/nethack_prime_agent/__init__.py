@@ -443,6 +443,49 @@ class PrimeAgentHarnessConfig(HarnessConfig):
     Default False so existing cells are unchanged.
     """
 
+    persist_session: bool = False
+    """Run WITHOUT `--no-session`, so Prime Agent writes the conversation to
+    `<agent_dir>/sessions/<file>.jsonl` and snapshots the IPython kernel to
+    `<agent_dir>/session-artifacts/<header id>/kernel-state.dill` when the
+    process exits. Off by default: every arm measured before 2026-09-21 ran
+    session-less, and a persisted session changes nothing the model sees in
+    a fresh rollout -- it only makes the conversation RESUMABLE. Implied by
+    `resume_session`. Relaunches (`max_relaunches`) then resume the SAME
+    session instead of starting a fresh `--no-session` process with
+    `_RESUME_PROMPT`, so a relaunch keeps the conversation too."""
+
+    resume_session: str = ""
+    """Path to a Prime Agent session file (`.jsonl`, header record first) whose
+    CONVERSATION this rollout continues. The file is copied to
+    `<agent_dir>/sessions/<header id>.jsonl` and the process is started with
+    `--resume <that path>`, so the model's context is the recorded exchange --
+    every user turn, assistant turn (reasoning included, as recorded) and
+    tool result -- followed by ONE new user turn, `resume_prompt`. The task
+    prompt is NOT sent: it is already the first user turn of the recorded
+    conversation. Measured 2026-09-21 (`/tmp/pa-resume-test`): resuming by
+    path works from any cwd and any agent dir, appends to the copied file,
+    and restores the kernel snapshot when `resume_artifacts` is given; the
+    CLI blocks forever on an open stdin, which `run_program` closes.
+    This is what E16's "resume the conversation at the checkpoint" needs and
+    what `prefix.jsonl` (a quoted text tail) never was."""
+
+    resume_artifacts: str = ""
+    """Directory copied to `<agent_dir>/session-artifacts/<header id>/` before
+    a resumed launch: the kernel snapshot Prime Agent restores on resume
+    (`kernel-state.dill` + `.json`). Optional; without it the kernel starts
+    empty (skills are re-bootstrapped either way) and the model's own
+    variables from the recorded conversation are gone."""
+
+    resume_prompt: str = ""
+    """The single new user turn a resumed session receives. Required with
+    `resume_session` (an empty prompt would make the CLI wait on stdin)."""
+
+    session_export_dir: str = ""
+    """After the run (relaunches included), copy `<agent_dir>/sessions/` and
+    `<agent_dir>/session-artifacts/` here, so the conversation this rollout
+    produced can be sealed into the checkpoints it wrote. Requires
+    `persist_session` (or `resume_session`); ignored otherwise."""
+
     max_relaunches: int = 5
     """Cap on auto-resume relaunches (`launch` returning `exit_code == 0` while
     the game is neither dead nor budget-exhausted -- see `PrimeAgentHarness.
@@ -883,6 +926,19 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             }
         )
 
+        persist = bool(self.config.persist_session or self.config.resume_session)
+        session_file = ""  # the persisted session this rollout writes/continues
+        if self.config.resume_session:
+            if not self.config.resume_prompt.strip():
+                raise ValueError(
+                    "harness.resume_session is set but harness.resume_prompt is "
+                    "empty: a resumed `--print` session with no new user turn "
+                    "blocks on stdin forever, and a rollout that sends the "
+                    "TASK prompt again would not be a resumed conversation."
+                )
+            session_file = await self._seed_resume_session(runtime, agent_dir)
+            prompt = self.config.resume_prompt
+
         argv = [
             # PYTHONPATH MUST NOT REACH THE AGENT'S KERNEL. The tool server needs
             # it (verifiers launches `python -m nethack_v1` with the parent
@@ -902,7 +958,9 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             "vf-prime-agent",
             self.config.binary,
             "--print",
-            "--no-session",
+            # `--no-session` unless the session is persisted/resumed (below):
+            # the flag is what makes Prime Agent write nothing to `sessions/`.
+            *([] if persist else ["--no-session"]),
             "--offline",
             "--provider",
             PROVIDER,
@@ -918,6 +976,8 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # at chars 14616 and 21992). AGENTS.md is the single source now.
         # `--` ends option parsing, so a prompt starting with `-` or containing
         # `@word` is never re-read as a flag or a file attachment.
+        if session_file:
+            argv += ["--resume", session_file]
         argv += ["--", prompt]
 
         if self.config.sandbox:
@@ -950,6 +1010,14 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # argv/prompt as long as the toolset-side referee says the character is
         # alive and the call budget isn't exhausted, up to the configured cap.
         resume_argv = argv[:-1] + [_RESUME_PROMPT]
+        if persist and not session_file:
+            # A fresh persisted session: relaunches must continue THIS
+            # conversation, not open another one. The file only exists once
+            # the first process has exited, so it is located here. `argv`
+            # ends with `["--", prompt]`; `--resume` has to precede the `--`.
+            session_file = await self._find_session_file(runtime, agent_dir)
+            if session_file:
+                resume_argv = argv[:-2] + ["--resume", session_file, "--", _RESUME_PROMPT]
         relaunches = 0
         while (
             result.exit_code == 0
@@ -975,7 +1043,97 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             # Recorded every rollout, including 0, so a run that never needed
             # to resume is as visible in the aggregate as one that needed all 5.
             trace.record_metric("prime_agent_relaunches", float(relaunches))
+            trace.record_metric("prime_agent_session_resumed",
+                                1.0 if self.config.resume_session else 0.0)
+        if persist and self.config.session_export_dir:
+            await self._export_session(runtime, agent_dir)
         return result
+
+    # -- persistent sessions --------------------------------------------------
+
+    @staticmethod
+    def _session_header_id(path: str) -> str:
+        """The `id` of the session header (first record). NOT the filename
+        stem: Prime Agent mints the header id separately from the file name,
+        and keys `session-artifacts/<id>/` by the header."""
+        with open(path, "r", encoding="utf-8") as fh:
+            first = fh.readline()
+        try:
+            header = json.loads(first)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"harness.resume_session={path!r}: first line is not JSON ({exc})"
+            ) from exc
+        if header.get("type") != "session" or not isinstance(header.get("id"), str):
+            raise ValueError(
+                f"harness.resume_session={path!r}: first record is not a session "
+                f"header (type={header.get('type')!r})"
+            )
+        return header["id"]
+
+    async def _seed_resume_session(self, runtime: Runtime, agent_dir: str) -> str:
+        """Copy the seed conversation (and kernel snapshot) into `agent_dir`.
+
+        Returns the in-agent-dir path handed to `--resume`. The seed is read on
+        THIS host to learn the header id, so a remote runtime would need the
+        path to be visible here as well; the only runtime this arm uses is
+        `subprocess`, where the two file systems are the same one."""
+        src = self.config.resume_session
+        if not os.path.isfile(src):
+            raise FileNotFoundError(
+                f"harness.resume_session={src!r} does not exist; a rollout that "
+                "silently started fresh would be a different condition."
+            )
+        header_id = self._session_header_id(src)
+        dest = f"{agent_dir}/sessions/{header_id}.jsonl"
+        script = (
+            f"mkdir -p {shlex.quote(agent_dir + '/sessions')} && "
+            f"cp {shlex.quote(src)} {shlex.quote(dest)}"
+        )
+        arts = self.config.resume_artifacts
+        if arts:
+            if not os.path.isdir(arts):
+                raise FileNotFoundError(
+                    f"harness.resume_artifacts={arts!r} is not a directory"
+                )
+            adest = f"{agent_dir}/session-artifacts/{header_id}"
+            script += (
+                f" && mkdir -p {shlex.quote(adest)} && "
+                f"cp -a {shlex.quote(arts)}/. {shlex.quote(adest)}/"
+            )
+        probe = await runtime.run(["sh", "-c", script], self._env_with_path())
+        if probe.exit_code != 0:
+            raise RuntimeError(
+                f"could not seed the resumed session into {agent_dir}: "
+                f"{(probe.stderr or probe.stdout).strip()[-300:] or '<no output>'}"
+            )
+        return dest
+
+    async def _find_session_file(self, runtime: Runtime, agent_dir: str) -> str:
+        """Newest `.jsonl` under `<agent_dir>/sessions/`, or ''."""
+        probe = await runtime.run(
+            ["sh", "-c",
+             f"ls -t {shlex.quote(agent_dir + '/sessions')}/*.jsonl 2>/dev/null | head -1"],
+            self._env_with_path(),
+        )
+        out = (probe.stdout or "").strip()
+        return out.splitlines()[0].strip() if out else ""
+
+    async def _export_session(self, runtime: Runtime, agent_dir: str) -> None:
+        dest = self.config.session_export_dir
+        script = (
+            f"mkdir -p {shlex.quote(dest)} && "
+            f"cp -a {shlex.quote(agent_dir + '/sessions')} {shlex.quote(dest)}/ && "
+            f"( [ -d {shlex.quote(agent_dir + '/session-artifacts')} ] && "
+            f"cp -a {shlex.quote(agent_dir + '/session-artifacts')} {shlex.quote(dest)}/ "
+            f"|| true )"
+        )
+        probe = await runtime.run(["sh", "-c", script], self._env_with_path())
+        if probe.exit_code != 0:
+            logger.warning(
+                "could not export the session from %s to %s: %s", agent_dir, dest,
+                (probe.stderr or probe.stdout).strip()[-300:],
+            )
 
     def _episode_live(self, trace) -> bool:
         """Whether the game is still worth relaunching into.

@@ -281,6 +281,62 @@ fi
 # failure took m3 seed 1 earlier. Lower this when a run must not lose seeds to
 # infrastructure -- the rollouts are long, so the wall-clock cost is real but the
 # alternative is discarding whole cells.
+# HARNESS_ARGS: a JSON object of `[harness]` overrides for the Prime Agent
+# arm's persistent-session machinery (E16 true conversation resume). Same
+# shape as E16_ARGS: scalar values only, a fixed whitelist, one `--harness.<k>`
+# flag per key. `resume_prompt` is the ONE new user turn a resumed session
+# gets, so it is passed here verbatim -- it is the served bytes.
+if [ -n "${HARNESS_ARGS:-}" ]; then
+  case " ${ARM} " in
+    *" prime_agent "*|*" prime_agent_b80 "*) ;;
+    *)
+      echo "launch_cell: HARNESS_ARGS is for the prime_agent arms only." >&2
+      exit 2
+      ;;
+  esac
+  _HA_OUT="$(mktemp "${TMPDIR:-/tmp}/harnessargs.XXXXXX")"
+  if ! HARNESS_ARGS="${HARNESS_ARGS}" "$PY_BIN" - > "$_HA_OUT" <<'PYHA'
+import json, os, sys
+ALLOWED = {"persist_session", "resume_session", "resume_artifacts",
+           "resume_prompt", "session_export_dir"}
+try:
+    obj = json.loads(os.environ["HARNESS_ARGS"])
+except Exception as exc:
+    print(f"launch_cell: HARNESS_ARGS is not valid JSON: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+if not isinstance(obj, dict):
+    print("launch_cell: HARNESS_ARGS must be a JSON object", file=sys.stderr)
+    raise SystemExit(2)
+bad = sorted(set(obj) - ALLOWED)
+if bad:
+    print(f"launch_cell: HARNESS_ARGS keys not allowed: {bad}. Allowed: "
+          f"{sorted(ALLOWED)}.", file=sys.stderr)
+    raise SystemExit(2)
+for k in sorted(obj):
+    v = obj[k]
+    if isinstance(v, (dict, list)):
+        print(f"launch_cell: HARNESS_ARGS.{k} must be a scalar", file=sys.stderr)
+        raise SystemExit(2)
+    val = v if isinstance(v, str) else json.dumps(v)
+    if "\0" in val:
+        print(f"launch_cell: HARNESS_ARGS.{k} contains a NUL byte", file=sys.stderr)
+        raise SystemExit(2)
+    sys.stdout.write(f"--harness.{k}\0")
+    sys.stdout.write(val + "\0")
+PYHA
+  then
+    rm -f "$_HA_OUT"
+    echo "launch_cell: HARNESS_ARGS rejected (see above)." >&2
+    exit 2
+  fi
+  mapfile -d '' -t _HA_FLAGS < "$_HA_OUT"
+  rm -f "$_HA_OUT"
+  if [ $(( ${#_HA_FLAGS[@]} % 2 )) -ne 0 ]; then
+    echo "launch_cell: HARNESS_ARGS produced ${#_HA_FLAGS[@]} argv items (odd)." >&2
+    exit 2
+  fi
+  OVERRIDES+=("${_HA_FLAGS[@]}")
+fi
 if [ -n "${MAX_CONCURRENT:-}" ]; then
   OVERRIDES+=(--max_concurrent "${MAX_CONCURRENT}")
 fi
@@ -612,7 +668,7 @@ if [ -n "${E16_ARGS:-}" ]; then
 import json, os, sys
 ALLOWED = {"resume_checkpoint", "checkpoint_archive", "wiki_dir",
            "ledger_text", "fidelity_log", "directive", "reseed",
-           "resume_banner"}
+           "resume_banner", "session_resume"}
 try:
     obj = json.loads(os.environ["E16_ARGS"])
 except Exception as exc:

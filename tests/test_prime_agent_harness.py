@@ -925,3 +925,127 @@ def test_an_unset_thinking_level_is_recorded_as_a_known_unknown():
     runtime = _launch(thinking="xhigh")
     argv, _ = runtime.programs[0]
     assert argv[argv.index("--thinking") + 1] == "xhigh"
+
+
+# -- persistent / resumed sessions (E16 true conversation resume) -------------
+#
+# Measured 2026-09-21 against prime-agent 0.3.3 (/tmp/pa-resume-test): a
+# `--print` run without `--no-session` writes `<agent_dir>/sessions/<f>.jsonl`
+# and `<agent_dir>/session-artifacts/<header id>/kernel-state.dill`;
+# `--resume <path>` continues that file from any cwd/agent dir, appending to
+# it, and restores the kernel snapshot keyed by the HEADER id (not the file
+# name). These tests pin the argv and the copy commands, which are the whole
+# contract the orchestrator's seal relies on.
+
+
+class _RuntimeWithSessionListing(_RecordingRuntime):
+    """`run` answers the `ls -t .../sessions/*.jsonl` probe with one file."""
+
+    async def run(self, argv, env):
+        from verifiers.v1.runtimes import ProgramResult
+
+        self.commands.append((argv, env))
+        if "sessions" in argv[-1] and argv[-1].startswith("ls -t"):
+            return ProgramResult(
+                exit_code=0,
+                stdout="/tmp/vf-prime-agent/agent-trace-abc/sessions/f.jsonl\n",
+                stderr="",
+            )
+        return ProgramResult(exit_code=0, stdout="", stderr="")
+
+
+def _seed_session(tmp_path, header_id="abc-123"):
+    seed = tmp_path / "seed.jsonl"
+    seed.write_text(
+        json.dumps({"type": "session", "version": 3, "id": header_id, "cwd": "/x"})
+        + "\n"
+        + json.dumps({"type": "message", "id": "m1", "parentId": None,
+                      "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}})
+        + "\n"
+    )
+    arts = tmp_path / "arts"
+    arts.mkdir()
+    (arts / "kernel-state.dill").write_bytes(b"\x80")
+    return seed, arts
+
+
+def test_the_default_is_still_session_less():
+    argv, _ = _launch().programs[0]
+    assert "--no-session" in argv
+    assert "--resume" not in argv
+
+
+def test_persist_session_drops_no_session_and_exports_the_conversation():
+    runtime = _launch(persist_session=True, session_export_dir="/out/a001/session")
+    argv, _ = runtime.programs[0]
+    assert "--no-session" not in argv
+    assert "--resume" not in argv           # a fresh persisted session
+    assert argv[-2:] == ["--", "Play NetHack."]
+    scripts = [a[-1] for a, _ in runtime.commands if a[:2] == ["sh", "-c"]]
+    assert any(
+        "cp -a /tmp/vf-prime-agent/agent-trace-abc/sessions /out/a001/session/" in s
+        and "session-artifacts" in s
+        for s in scripts
+    ), scripts
+
+
+def test_resume_session_copies_the_seed_and_resumes_it_by_path(tmp_path):
+    seed, arts = _seed_session(tmp_path)
+    runtime = _launch(resume_session=str(seed), resume_artifacts=str(arts),
+                      resume_prompt="Continue playing.",
+                      session_export_dir="/out/a002/session")
+    argv, _ = runtime.programs[0]
+    assert "--no-session" not in argv
+    i = argv.index("--resume")
+    dest = "/tmp/vf-prime-agent/agent-trace-abc/sessions/abc-123.jsonl"
+    assert argv[i + 1] == dest
+    assert argv[i + 2:] == ["--", "Continue playing."]
+    # The TASK prompt is not sent again: it is the first user turn already.
+    assert "Play NetHack." not in argv
+    scripts = [a[-1] for a, _ in runtime.commands if a[:2] == ["sh", "-c"]]
+    seeding = [s for s in scripts if f"cp {seed} {dest}" in s]
+    assert seeding, scripts
+    assert f"cp -a {arts}/. /tmp/vf-prime-agent/agent-trace-abc/session-artifacts/abc-123/" in seeding[0]
+    # The seeding runs BEFORE the program, the export after it.
+    assert runtime.commands.index(next(c for c in runtime.commands if c[0][-1] == seeding[0])) \
+        < len(runtime.commands) - 1
+
+
+def test_resume_session_without_a_prompt_is_refused(tmp_path):
+    seed, _ = _seed_session(tmp_path)
+    with pytest.raises(ValueError, match="resume_prompt"):
+        _launch(resume_session=str(seed))
+
+
+def test_resume_session_with_a_missing_seed_is_refused(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        _launch(resume_session=str(tmp_path / "nope.jsonl"), resume_prompt="go")
+
+
+def test_a_relaunch_of_a_persisted_session_resumes_the_same_session():
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False, skill_calls=3)
+    runtime, trace = _launch_with_state(
+        live, runtime=_RuntimeWithSessionListing(), persist_session=True, max_relaunches=1
+    )
+    assert len(runtime.programs) == 2
+    first, second = (a for a, _ in runtime.programs)
+    assert "--resume" not in first
+    i = second.index("--resume")
+    assert second[i + 1] == "/tmp/vf-prime-agent/agent-trace-abc/sessions/f.jsonl"
+    assert second[i + 2] == "--"
+    assert second[-1].startswith("Your previous session ended")
+    assert trace.metrics["prime_agent_session_resumed"] == 0.0
+
+
+def test_a_relaunch_of_a_resumed_session_keeps_resuming_it(tmp_path):
+    seed, _ = _seed_session(tmp_path)
+    live = _FakeNetHackState(terminated=False, budget_exhausted=False, skill_calls=3)
+    runtime, trace = _launch_with_state(
+        live, resume_session=str(seed), resume_prompt="Continue playing.",
+        max_relaunches=1,
+    )
+    dest = "/tmp/vf-prime-agent/agent-trace-abc/sessions/abc-123.jsonl"
+    for argv, _ in runtime.programs:
+        assert argv[argv.index("--resume") + 1] == dest
+    assert runtime.programs[1][0][-1].startswith("Your previous session ended")
+    assert trace.metrics["prime_agent_session_resumed"] == 1.0

@@ -3364,3 +3364,346 @@ def test_checkpoint_restore_keeps_the_heros_armor_class(tmp_path):
     assert rec["character_source"] == "argument"
     r = env4.step(ord("s")); obs = r[0] if isinstance(r, tuple) else r
     assert int(np.asarray(obs.blstats).tolist()[16]) == 6
+
+
+# --------------------------------------------------------------------------- #
+# TRUE conversation resume (2026-09-21): seal, prompt, selection, dry run
+# --------------------------------------------------------------------------- #
+
+def _fake_session_lines(header_id, calls, *, start=1):
+    """A Prime Agent session file in the recorded shape: header, task prompt,
+    then one assistant toolCall + toolResult pair per game call, the result
+    carrying the env's `[call#N]` marker in its stdout."""
+    recs = [{"type": "session", "version": 3, "id": header_id, "cwd": "/w"},
+            {"type": "message", "id": "u0", "parentId": None,
+             "message": {"role": "user",
+                         "content": [{"type": "text", "text": "Play NetHack."}]}}]
+    prev = "u0"
+    for k in range(start, start + calls):
+        recs.append({"type": "message", "id": f"a{k}", "parentId": prev,
+                     "message": {"role": "assistant", "content": [
+                         {"type": "thinking", "thinking": f"step {k}"},
+                         {"type": "toolCall", "id": f"t{k}", "name": "ipython",
+                          "arguments": {"code": "await nethack.search()"}}]}})
+        recs.append({"type": "message", "id": f"r{k}", "parentId": f"a{k}",
+                     "message": {"role": "toolResult", "toolCallId": f"t{k}",
+                                 "toolName": "ipython",
+                                 "content": [{"type": "text",
+                                              "text": f"=== STATUS === turn {k}\n[call#{k}]\n"}],
+                                 "details": {"stdout": f"[call#{k}]"}}})
+        prev = f"r{k}"
+    recs.append({"type": "session_state", "id": "s9", "parentId": prev,
+                 "state": {"status": "idle"}})
+    return [json.dumps(r) for r in recs]
+
+
+def _write_export(export_dir, header_id, calls, *, start=1, artifacts=True):
+    export_dir = Path(export_dir)
+    (export_dir / "sessions").mkdir(parents=True, exist_ok=True)
+    (export_dir / "sessions" / "file.jsonl").write_text(
+        "\n".join(_fake_session_lines(header_id, calls, start=start)) + "\n")
+    if artifacts:
+        a = export_dir / "session-artifacts" / header_id
+        a.mkdir(parents=True, exist_ok=True)
+        (a / "kernel-state.dill").write_bytes(b"\x80\x04")
+    return export_dir
+
+
+def _bare_checkpoint(archive, ident, *, parent="1", call=None):
+    d = Path(archive) / f"c{ident}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "meta.json").write_text(json.dumps(
+        {"id": str(ident), "parent": parent, "call": call, "dlvl": 3, "xl": 2,
+         "hp": 9, "max_hp": 16, "gameturn": 400, "name": "auto call_3",
+         "note": "twenty calls", "attempts_from": 1}))
+    return d
+
+
+def test_seal_cuts_the_conversation_at_the_checkpoints_call(tmp_path):
+    export = _write_export(tmp_path / "a001" / "session", "hdr-1", calls=5)
+    ck = _bare_checkpoint(tmp_path / "archive", 9, call=3)
+
+    seal = E.seal_checkpoint_session(ck, export, call=3)
+    assert seal["ok"], seal
+    assert seal["records_kept"] == 2 + 2 * 3          # header, prompt, 3 pairs
+    assert seal["records_total"] == 2 + 2 * 5 + 1
+    assert seal["overshoot"] is False
+    assert seal["artifacts"] is True
+    lines = (ck / "session" / "session.jsonl").read_text().splitlines()
+    assert len(lines) == seal["records_kept"]
+    header = json.loads(lines[0])
+    assert header["type"] == "session" and header["id"] != "hdr-1"
+    assert header["id"] == seal["header_id"]
+    last = json.loads(lines[-1])
+    assert last["message"]["role"] == "toolResult"
+    assert "[call#3]" in json.dumps(last)
+    assert "[call#4]" not in "\n".join(lines)
+    assert (ck / "session" / "artifacts" / "kernel-state.dill").is_file()
+    # The checkpoint now advertises its conversation, and meta says so.
+    got = E.checkpoint_session(ck)
+    assert got and got["session"] == ck / "session" / "session.jsonl"
+    assert got["artifacts"] == ck / "session" / "artifacts"
+    assert checkpoint_meta(ck)["session"] == {
+        "sealed": True, "call": 3, "records": 8, "reason": ""}
+
+
+def test_a_seal_that_cannot_find_its_call_is_recorded_and_not_resumable(tmp_path):
+    export = _write_export(tmp_path / "a001" / "session", "hdr-1", calls=5)
+    ck = _bare_checkpoint(tmp_path / "archive", 9, call=42)
+    seal = E.seal_checkpoint_session(ck, export, call=42)
+    assert not seal["ok"] and "[call#42]" in seal["reason"]
+    assert E.checkpoint_session(ck) is None
+    assert checkpoint_meta(ck)["session"]["sealed"] is False
+    # No call id at all (a checkpoint written outside any call).
+    ck2 = _bare_checkpoint(tmp_path / "archive", 10, call=None)
+    seal2 = E.seal_checkpoint_session(ck2, export, call=None)
+    assert not seal2["ok"] and "no call id" in seal2["reason"]
+    # No export at all (the player crashed before the harness copied it).
+    ck3 = _bare_checkpoint(tmp_path / "archive", 11, call=2)
+    seal3 = E.seal_checkpoint_session(ck3, tmp_path / "missing", call=2)
+    assert not seal3["ok"] and "no exported session" in seal3["reason"]
+
+
+def test_a_batched_tool_result_is_flagged_as_overshoot(tmp_path):
+    """Two markers in one tool result means the game is one call past the
+    checkpoint when the model reads the transcript. Recorded, not hidden."""
+    export = tmp_path / "s"
+    (export / "sessions").mkdir(parents=True)
+    lines = _fake_session_lines("h", 2)
+    # records: header, prompt, a1, r1, a2, r2, session_state -> r1 is lines[3]
+    rec = json.loads(lines[3])
+    assert rec["message"]["role"] == "toolResult"
+    rec["message"]["content"][0]["text"] = "[call#1]\n[call#2]\n"
+    lines[3] = json.dumps(rec)
+    (export / "sessions" / "f.jsonl").write_text("\n".join(lines) + "\n")
+    ck = _bare_checkpoint(tmp_path / "archive", 9, call=1)
+    seal = E.seal_checkpoint_session(ck, export, call=1)
+    assert seal["ok"] and seal["overshoot"] is True
+
+
+def test_build_resume_prompt_blind_versus_full():
+    meta = {"id": "9", "name": "auto call_3", "note": "twenty calls", "dlvl": 3,
+            "xl": 2, "hp": 9, "max_hp": 16, "gameturn": 400, "attempts_from": 1}
+    assert E.build_resume_prompt(blind=True, directive="", meta=meta,
+                                 ledger_text="CHECKPOINT ARCHIVE") == E.BLIND_RESUME_PROMPT
+    with pytest.raises(ValueError):
+        E.build_resume_prompt(blind=True, directive="go down", meta=meta, ledger_text="")
+    full = E.build_resume_prompt(blind=False, directive="go down", meta=meta,
+                                 ledger_text="CHECKPOINT ARCHIVE: 3 states")
+    assert full.startswith("[ORCHESTRATOR DIRECTIVE for this attempt: go down]\n[")
+    assert "RESUMED FROM CHECKPOINT 9 ('auto call_3') -- you are NOT starting fresh. " \
+           "Dlvl 3, XL 2, HP 9/16, game turn 400. 1 previous attempt(s) started from " \
+           "this state." in full
+    assert "Why it was saved (author's own words): twenty calls" in full
+    assert full.endswith("CHECKPOINT ARCHIVE: 3 states]")
+    # A3-style: fixed selection, directive present, everything full serves.
+    assert E.BLIND_RESUME_PROMPT not in full
+    # A1-style would be blind; a no-directive non-blind arm still gets banner+ledger.
+    ctl = E.build_resume_prompt(blind=False, directive="", meta=meta, ledger_text="L")
+    assert ctl.startswith("[RESUMED FROM CHECKPOINT 9") and ctl.endswith("L]")
+    assert "ORCHESTRATOR DIRECTIVE" not in ctl
+
+
+class SessionStubPlayer(StubPlayer):
+    """`StubPlayer` that behaves like a persisted-session player: it publishes
+    the in-flight call id on the env before saving (so meta["call"] is set)
+    and exports a session file with that many `[call#N]` results, continuing
+    the numbering from the checkpoint it resumed -- exactly what the env does
+    under `session_resume`. `skip_export` lists attempts whose export is
+    withheld (a player killed before the harness could copy it)."""
+
+    def __init__(self, outcomes, steps=6, *, calls_per_life=4, skip_export=()):
+        super().__init__(outcomes, steps)
+        self.calls_per_life = calls_per_life
+        self.skip_export = set(skip_export)
+
+    def __call__(self, ctx):
+        from nethack_harness.checkpoints import CALL_ID_ATTR
+        self.seen.append(ctx)
+        env, meta = checkpoint_restore(ctx.checkpoint_dir,
+                                       fidelity_log=ctx.fidelity_log)
+        base = int(meta.get("call") or 0) if ctx.session_seed is not None else 0
+        import numpy as np
+
+        def _more(o):
+            tty = np.asarray(o.tty_chars).tolist()
+            return any("--More--" in "".join(chr(c) for c in row) for row in tty)
+
+        def _step(key):
+            o = env.step(key)[0]
+            for _ in range(4):
+                if not _more(o):
+                    break
+                o = env.step(ord(" "))[0]
+            return o
+        max_hp = int(np.asarray(_step(ord(":")).blstats).tolist()[11])
+        env.modify(hp=max_hp)
+        for _ in range(self.steps):
+            _step(ord("s"))
+        env.modify(gold=1000 * ctx.attempt)
+        setattr(env, CALL_ID_ATTR, base + self.calls_per_life)
+        target = ctx.archive_dir / f"c{100 + ctx.attempt}"
+        saved = checkpoint_save(env, target, name=f"attempt {ctx.attempt} state",
+                                note="stub", created_by="save")
+        assert saved["call"] == base + self.calls_per_life
+        if ctx.session_export_dir is not None and ctx.attempt not in self.skip_export:
+            hid = f"hdr-a{ctx.attempt}"
+            if ctx.session_seed is not None:
+                # A resumed session appends to the SEED's records (the seal
+                # gave it a fresh header id, kept here).
+                seed_lines = Path(ctx.session_seed).read_text().splitlines()
+                hid = json.loads(seed_lines[0])["id"]
+                new = _fake_session_lines(hid, self.calls_per_life + 1, start=base + 1)[2:]
+                # the new user turn comes first, as Prime Agent records it
+                user = {"type": "message", "id": "uR", "parentId": "x",
+                        "message": {"role": "user",
+                                    "content": [{"type": "text", "text": ctx.resume_prompt}]}}
+                lines = seed_lines + [json.dumps(user)] + new
+                (ctx.session_export_dir / "sessions").mkdir(parents=True, exist_ok=True)
+                (ctx.session_export_dir / "sessions" / "f.jsonl").write_text("\n".join(lines) + "\n")
+                a = ctx.session_export_dir / "session-artifacts" / hid
+                a.mkdir(parents=True, exist_ok=True)
+                (a / "kernel-state.dill").write_bytes(b"\x80")
+            else:
+                _write_export(ctx.session_export_dir, hid, self.calls_per_life + 1)
+        spec = self.outcomes[(ctx.attempt - 1) % len(self.outcomes)]
+        return E.PlayerResult(stop_condition="died", died=True, calls=spec.get("calls", 5),
+                              spend_usd=spec.get("spend", 0.5),
+                              max_dlvl=saved["dlvl"], max_xl=saved["xl"],
+                              summary="stub", lesson="", raw={"calls": []})
+
+
+def test_session_mode_dry_run_seals_every_checkpoint_and_resumes_the_conversation(tmp_path):
+    """A2 in session mode: attempt 1 is a fresh persisted session from the
+    root; every later attempt is `--resume` on the previous attempt's last
+    checkpoint, whose sealed conversation ends at that checkpoint's call, with
+    `BLIND_RESUME_PROMPT` as its only new user turn."""
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True,
+                  no_lessons=True, blind_resume=True, session_resume=True,
+                  budget_ceiling_usd=1000.0, max_attempts=3, stall_attempts=8,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    player = SessionStubPlayer([{"died": True}], calls_per_life=4)
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=3)
+
+    c1, c2, c3 = player.seen
+    assert c1.session_seed is None and c1.prefix_continuity == "fresh_root"
+    assert c1.resume_prompt == "" and c1.session_export_dir == c1.out_dir / "session"
+    # attempt 1 wrote c101 during its call 4; sealed at [call#4]
+    seal = json.loads((cfg.archive_dir / "c101" / "session" / "seal.json").read_text())
+    assert seal["ok"] and seal["call"] == 4 and seal["records_kept"] == 2 + 2 * 4
+    assert c2.checkpoint_id == "101"
+    assert c2.session_seed == cfg.archive_dir / "c101" / "session" / "session.jsonl"
+    assert c2.session_artifacts == cfg.archive_dir / "c101" / "session" / "artifacts"
+    assert c2.prefix_continuity == "session"
+    assert c2.resume_prompt == E.BLIND_RESUME_PROMPT
+    assert c2.ledger_text == ""                      # nothing quoted, nothing listed
+    # attempt 2 continued the numbering (calls 5..8), saved c102 at call 8;
+    # its seal keeps the whole c101 conversation plus the new user turn.
+    seal2 = json.loads((cfg.archive_dir / "c102" / "session" / "seal.json").read_text())
+    assert seal2["ok"] and seal2["call"] == 8
+    lines = (cfg.archive_dir / "c102" / "session" / "session.jsonl").read_text().splitlines()
+    roles = [(json.loads(l).get("message") or {}).get("role") for l in lines]
+    assert roles.count("user") == 2                  # task prompt + resume turn
+    assert json.loads(lines[-1])["message"]["role"] == "toolResult"
+    assert "[call#8]" in lines[-1] and "[call#9]" not in "\n".join(lines)
+    assert c3.checkpoint_id == "102" and c3.prefix_continuity == "session"
+    # The record and provenance say what mechanism ran.
+    recs = [json.loads(l) for l in cfg.attempts_path.read_text().splitlines()]
+    assert [r["prefix_continuity"] for r in recs] == ["fresh_root", "session", "session"]
+    assert all(s["ok"] for r in recs for s in r["session_seals"])
+    prov = json.loads(cfg.provenance_path.read_text())
+    assert prov["session_resume"] is True and prov["prefix_continuity"] == "session"
+    assert "recorded conversation" in prov["directive"]["player_first_observation"]
+    for ctx in (c2, c3):
+        assert (ctx.out_dir / "resume_prompt_served.txt").read_text() == E.BLIND_RESUME_PROMPT
+        assert (ctx.out_dir / "prefix_continuity.txt").read_text() == "session"
+
+
+def test_session_mode_full_arm_puts_banner_and_ledger_in_the_resume_turn(tmp_path):
+    cfg = cfg_for(tmp_path / "run", selector="scripted", no_directive=True,
+                  session_resume=True, budget_ceiling_usd=1000.0, max_attempts=2,
+                  stall_attempts=8, milestone_dlvl=99, milestone_dungeon=-1)
+    player = SessionStubPlayer([{"died": True}])
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=2)
+    c2 = player.seen[1]
+    assert c2.prefix_continuity == "session"
+    p = c2.resume_prompt
+    assert p.startswith("[RESUMED FROM CHECKPOINT ")
+    assert "CHECKPOINT ARCHIVE" in p and "ATTEMPT HISTORY" in p
+    assert "THE PLAN THAT WAS LIVE" not in p            # no quoted tail anymore
+    assert "ORCHESTRATOR DIRECTIVE" not in p            # control mode
+    assert c2.ledger_text and "THE PLAN THAT WAS LIVE" not in c2.ledger_text
+
+
+def test_pre_death_walks_past_a_checkpoint_whose_seal_failed(tmp_path):
+    """A player killed before its session was exported leaves checkpoints with
+    no conversation. In session mode they are not resumable: the fixed rule
+    walks up to the nearest sealed ancestor, and says so."""
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True,
+                  no_lessons=True, blind_resume=True, session_resume=True,
+                  budget_ceiling_usd=1000.0, max_attempts=3, stall_attempts=8,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    player = SessionStubPlayer([{"died": True}], skip_export=(2,))
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=3)
+    c1, c2, c3 = player.seen
+    assert c2.checkpoint_id == "101"
+    recs = [json.loads(l) for l in cfg.attempts_path.read_text().splitlines()]
+    assert recs[1]["session_seals"][0]["ok"] is False
+    assert not orch.resumable("102") and orch.resumable("101") and orch.resumable("1")
+    assert c3.checkpoint_id == "101" and c3.prefix_continuity == "session"
+    sels = [json.loads(l) for l in cfg.selection_path.read_text().splitlines()]
+    assert sels[2]["pre_death"]["reason"] == "parent_of_unresumable_checkpoint(x1)"
+
+
+def test_session_mode_subprocess_player_passes_harness_args(tmp_path, monkeypatch):
+    """The launcher hands the harness exactly: persist, export dir, and -- for
+    a resumed attempt -- the seed file, its artifacts and the resume prompt;
+    the env gets `session_resume` so it serves no first-observation blocks."""
+    captured = {}
+
+    class _P:
+        returncode = 0
+        def communicate(self, timeout=None):
+            return "", ""
+    def fake_popen(cmd, env=None, **kw):
+        captured["cmd"] = cmd; captured["env"] = env
+        return _P()
+    monkeypatch.setattr(E.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(E, "read_trace_result", lambda d: E.PlayerResult())
+    out = tmp_path / "a002"; out.mkdir()
+    seed = tmp_path / "c5" / "session" / "session.jsonl"
+    seed.parent.mkdir(parents=True); seed.write_text("{}\n")
+    ctx = E.PlayerContext(
+        attempt=2, checkpoint_dir=tmp_path / "c5", checkpoint_id="5",
+        archive_dir=tmp_path, wiki_dir=tmp_path, out_dir=out, ledger_text="",
+        fidelity_log=tmp_path / "f.jsonl", game_seed=3, tier="e16_gewiki_norb",
+        arm="prime_agent", resume_banner=False, session_seed=seed,
+        session_artifacts=seed.parent / "artifacts", resume_prompt="Continue playing.",
+        session_export_dir=out / "session", prefix_continuity="session")
+    E.SubprocessPlayer(repo=tmp_path, env={})(ctx)
+    e16 = json.loads(captured["env"]["E16_ARGS"])
+    assert e16["session_resume"] == "true" and e16["resume_banner"] is False
+    ha = json.loads(captured["env"]["HARNESS_ARGS"])
+    assert ha == {"persist_session": True, "session_export_dir": str(out / "session"),
+                  "resume_session": str(seed), "resume_prompt": "Continue playing.",
+                  "resume_artifacts": str(seed.parent / "artifacts")}
+    # A fresh attempt in session mode: persist + export only.
+    ctx.session_seed = None; ctx.session_artifacts = None; ctx.resume_prompt = ""
+    E.SubprocessPlayer(repo=tmp_path, env={})(ctx)
+    assert json.loads(captured["env"]["E16_ARGS"])["session_resume"] == "false"
+    assert json.loads(captured["env"]["HARNESS_ARGS"]) == {
+        "persist_session": True, "session_export_dir": str(out / "session")}
+    # Text mode: no HARNESS_ARGS at all.
+    ctx.session_export_dir = None
+    E.SubprocessPlayer(repo=tmp_path, env={})(ctx)
+    assert "HARNESS_ARGS" not in captured["env"]
+    assert "session_resume" not in json.loads(captured["env"]["E16_ARGS"])

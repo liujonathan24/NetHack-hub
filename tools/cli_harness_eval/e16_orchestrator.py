@@ -210,6 +210,218 @@ FIXED_PICK_NOTICE = ("The next player WILL resume checkpoint c{pick}. That is "
                      "saved), not your choice this round; set \"checkpoint\" to "
                      "\"{pick}\". Write it a DIRECTIVE:")
 
+# --------------------------------------------------------------------------- #
+# TRUE CONVERSATION RESUME (2026-09-21)
+# --------------------------------------------------------------------------- #
+# Every E16 run before this date "resumed" a checkpoint by starting a FRESH
+# `--no-session` player and quoting a text tail of the checkpoint's
+# `prefix.jsonl` (6 records x 300 chars, 1500 chars total; empty assistant
+# lines under GLM-5.2, whose turns are reasoning-only) into the first
+# observation -- `render_prefix`, `prefix_continuity: "text_only"`. The paper
+# sentence "we resume the conversation at the point of the checkpoint" was
+# therefore not what ran. With `OrchestratorConfig.session_resume` the player
+# is a persisted Prime Agent session (harness.persist_session), the attempt's
+# conversation is exported next to its trace, and every checkpoint the
+# attempt wrote gets that conversation TRUNCATED at the exchange the game
+# state belongs to (`seal_checkpoint_session`, keyed on the `[call#N]`
+# marker the env appends to each tool result and records as meta["call"]).
+# The next attempt from that checkpoint is `prime-agent --resume <that file>`
+# with ONE new user turn (`build_resume_prompt`): the directive block, the
+# RESUMED banner and the ledger for the arms that serve them, and a bare
+# continuation line for the blind arms. The env serves none of these in the
+# first observation in that mode (nethack.py `session_resume`).
+SESSION_DIRNAME = "session"
+SESSION_FILE = "session.jsonl"
+SESSION_ARTIFACTS = "artifacts"
+SESSION_SEAL = "seal.json"
+#: The blind arms' single new user turn. Nothing about checkpoints, attempts,
+#: archives or resumption: the model's context is its own earlier turns and
+#: this line.
+BLIND_RESUME_PROMPT = "Continue playing."
+#: Byte-identical to `nethack.py:DIRECTIVE_BLOCK_FORMAT`, so the audit's
+#: directive check reads the same block whether it was served in the first
+#: observation (fresh launch) or in the resume user turn (session resume).
+DIRECTIVE_BLOCK_FORMAT = "[ORCHESTRATOR DIRECTIVE for this attempt: {directive}]"
+_CALL_MARKER_RE = re.compile(r"\[call#(\d+)\]")
+
+
+def render_resume_banner(meta: dict) -> list:
+    """The RESUMED banner lines, byte-identical to the env's own rendering
+    (nethack.py, the `_ck_lines` block), so a session-resumed attempt is
+    served the same words a fresh-launch attempt was -- in a user turn
+    instead of the first observation."""
+    lines = [
+        f"RESUMED FROM CHECKPOINT {meta.get('id')} "
+        f"({meta.get('name') or 'unnamed'!r}) -- you are NOT starting "
+        f"fresh. Dlvl {meta.get('dlvl')}, XL {meta.get('xl')}, "
+        f"HP {meta.get('hp')}/{meta.get('max_hp')}, "
+        f"game turn {meta.get('gameturn')}. "
+        f"{int(meta.get('attempts_from') or 0)} previous attempt(s) "
+        f"started from this state.",
+    ]
+    if meta.get("note"):
+        lines.append(f"Why it was saved (author's own words): {meta['note']}")
+    return lines
+
+
+def build_resume_prompt(*, blind: bool, directive: str, meta: Optional[dict],
+                        ledger_text: str, banner: bool = True) -> str:
+    """The ONE new user turn a session-resumed player gets.
+
+    Blind arms (A1/A2): `BLIND_RESUME_PROMPT`, nothing else -- a directive
+    here would be a contradiction and raises. Other arms: the directive block
+    first (the thing that is about what to do next), then the RESUMED banner
+    and the ledger in one bracketed block, exactly the env's first-observation
+    layout (`_directive_notice` ahead of `_resume_notice`)."""
+    if blind:
+        if directive.strip():
+            raise ValueError("a blind resume cannot carry a directive")
+        return BLIND_RESUME_PROMPT
+    parts = []
+    if directive.strip():
+        parts.append(DIRECTIVE_BLOCK_FORMAT.format(directive=directive))
+    lines = render_resume_banner(meta or {}) if (banner and meta) else []
+    if ledger_text:
+        lines.append(ledger_text)
+    if lines:
+        parts.append("[" + "\n".join(lines) + "]")
+    return "\n".join(parts) if parts else BLIND_RESUME_PROMPT
+
+
+def checkpoint_session(ck_dir) -> Optional[dict]:
+    """``{"session", "artifacts", "seal"}`` if ``ck_dir`` carries a sealed
+    conversation, else None. The seal is trusted only if it says ``ok``."""
+    d = Path(ck_dir) / SESSION_DIRNAME
+    f = d / SESSION_FILE
+    seal_p = d / SESSION_SEAL
+    if not f.is_file() or not seal_p.is_file():
+        return None
+    try:
+        seal = json.loads(seal_p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not seal.get("ok"):
+        return None
+    arts = d / SESSION_ARTIFACTS
+    return {"session": f, "artifacts": arts if arts.is_dir() else None,
+            "seal": seal}
+
+
+def _session_export_file(export_dir) -> Optional[Path]:
+    """The one session file the harness exported for an attempt."""
+    d = Path(export_dir) / "sessions"
+    files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime) \
+        if d.is_dir() else []
+    return files[-1] if files else None
+
+
+def _record_texts(rec: dict) -> list:
+    m = rec.get("message") if isinstance(rec, dict) else None
+    if not isinstance(m, dict):
+        return []
+    c = m.get("content")
+    out = []
+    if isinstance(c, str):
+        out.append(c)
+    elif isinstance(c, list):
+        for part in c:
+            if isinstance(part, dict):
+                for k in ("text", "thinking"):
+                    if isinstance(part.get(k), str):
+                        out.append(part[k])
+    d = m.get("details")
+    if isinstance(d, dict) and isinstance(d.get("stdout"), str):
+        out.append(d["stdout"])
+    return out
+
+
+def seal_checkpoint_session(ck_dir, export_dir, *, call: Optional[int],
+                            new_header_id: Optional[str] = None) -> dict:
+    """Bundle the attempt's conversation, cut at ``[call#call]``, into ``ck_dir``.
+
+    Keeps every record up to and including the tool result that carries the
+    checkpoint's call marker; rewrites the header id (Prime Agent keys the
+    kernel snapshot by it, and two checkpoints must not share one); copies
+    the exported kernel snapshot alongside. Writes ``seal.json`` either way,
+    with ``ok: false`` and a reason when it could not -- a checkpoint without
+    a sealed session is NOT resumable in session mode and the selectors treat
+    it that way (see `Orchestrator.resumable`).
+    """
+    ck_dir = Path(ck_dir)
+    dest = ck_dir / SESSION_DIRNAME
+    seal = {"ok": False, "call": call, "source": None, "reason": "",
+            "records_total": 0, "records_kept": 0, "header_id": None,
+            "artifacts": False, "overshoot": False, "sealed_at": time.time()}
+
+    def _finish():
+        dest.mkdir(parents=True, exist_ok=True)
+        atomic_write(dest / SESSION_SEAL, json.dumps(seal, indent=2) + "\n")
+        try:
+            meta = checkpoint_meta(ck_dir)
+            meta["session"] = {"sealed": bool(seal["ok"]), "call": call,
+                               "records": seal["records_kept"],
+                               "reason": seal["reason"]}
+            atomic_write(ck_dir / META_JSON,
+                         json.dumps(meta, indent=2, sort_keys=True) + "\n")
+        except Exception:
+            pass
+        return seal
+
+    src = _session_export_file(export_dir)
+    if src is None:
+        seal["reason"] = f"no exported session under {export_dir}"
+        return _finish()
+    seal["source"] = str(src)
+    if call is None:
+        seal["reason"] = "checkpoint meta has no call id (written outside a call?)"
+        return _finish()
+    lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
+    seal["records_total"] = len(lines)
+    marker = f"[call#{int(call)}]"
+    next_marker = f"[call#{int(call) + 1}]"
+    cut = None
+    for i, line in enumerate(lines):
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("type") != "message":
+            continue
+        if (rec.get("message") or {}).get("role") != "toolResult":
+            continue
+        texts = _record_texts(rec)
+        if any(marker in t for t in texts):
+            cut = i
+            seal["overshoot"] = any(next_marker in t for t in texts)
+            break
+    if cut is None:
+        seal["reason"] = f"no tool result carrying {marker} in {src.name}"
+        return _finish()
+    kept = lines[:cut + 1]
+    try:
+        header = json.loads(kept[0])
+    except json.JSONDecodeError:
+        header = {}
+    if header.get("type") != "session":
+        seal["reason"] = "first record is not a session header"
+        return _finish()
+    old_id = str(header.get("id") or "")
+    header["id"] = new_header_id or str(__import__("uuid").uuid4())
+    kept[0] = json.dumps(header)
+    dest.mkdir(parents=True, exist_ok=True)
+    atomic_write(dest / SESSION_FILE, "\n".join(kept) + "\n")
+    arts_src = Path(export_dir) / "session-artifacts" / old_id
+    arts_dst = dest / SESSION_ARTIFACTS
+    if arts_src.is_dir():
+        if arts_dst.exists():
+            shutil.rmtree(arts_dst)
+        shutil.copytree(arts_src, arts_dst)
+        seal["artifacts"] = True
+    seal.update(ok=True, records_kept=len(kept), header_id=header["id"],
+                source_header_id=old_id)
+    return _finish()
+
+
 
 def iclr_arm_label(selector: str, no_directive: bool, blind_resume: bool) -> str:
     """The 2x2 cell (selection x guidance) a configuration lands in.
@@ -419,6 +631,11 @@ class OrchestratorConfig:
     #: transcript on resume. No directive, no "RESUMED" banner, no ledger, no
     #: lessons, no attempt history. Implies `no_lessons`.
     blind_resume: bool = False
+    #: TRUE CONVERSATION RESUME: players are persisted Prime Agent sessions,
+    #: checkpoints carry the conversation cut at their own call, and a resumed
+    #: attempt is `prime-agent --resume` with one new user turn. See the
+    #: SESSION_DIRNAME block. Off = the pre-2026-09-21 text-quotation resume.
+    session_resume: bool = False
     #: CONTROL MODE, PER DIRECTIVE KIND. Every directive the orchestrator issues
     #: is run TWICE from the SAME checkpoint: once with it (`treatment`) and
     #: once without (`control`). Each directive is then compared against its own
@@ -1861,6 +2078,17 @@ class PlayerContext:
     #: ``(core, disp)`` to reseed the engine's RNG with after restore, or None
     #: for the deterministic default. See `OrchestratorConfig.reseed_on_restore`.
     reseed: Optional[tuple] = None
+    #: Session resume (OrchestratorConfig.session_resume). `session_seed` is
+    #: the sealed conversation the player continues (None = fresh launch:
+    #: the archive root, or a checkpoint whose seal failed), `resume_prompt`
+    #: its one new user turn, `session_export_dir` where the harness copies
+    #: the conversation this attempt produces. `prefix_continuity` says which
+    #: of the three mechanisms this attempt actually got.
+    session_seed: Optional[Path] = None
+    session_artifacts: Optional[Path] = None
+    resume_prompt: str = ""
+    session_export_dir: Optional[Path] = None
+    prefix_continuity: str = "text_only"
 
 
 @dataclass
@@ -3754,6 +3982,16 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
                         if (cfg.no_lessons or cfg.blind_resume) else
                         "per-checkpoint lessons.md rendered on resume"),
             "player_first_observation": (
+                ("blind session resume: the player's context is its own "
+                 "recorded conversation up to the checkpoint's call, plus one "
+                 f"user turn {BLIND_RESUME_PROMPT!r}; the env serves no banner, "
+                 "no ledger, no lessons, no directive, no quoted transcript")
+                if (cfg.blind_resume and cfg.session_resume) else
+                ("session resume: the player's context is its own recorded "
+                 "conversation up to the checkpoint's call, plus one user turn "
+                 "carrying the directive block, the RESUMED banner, the ledger "
+                 "and lessons; the env serves none of these")
+                if cfg.session_resume else
                 "blind resume: the checkpoint's quoted transcript only, no "
                 "banner, no ledger, no lessons, no directive"
                 if cfg.blind_resume else
@@ -3822,7 +4060,8 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
         },
         # Honest statements about what this run is NOT.
         "comparable_to_single_life_balrog": False,
-        "prefix_continuity": "text_only",
+        "session_resume": bool(cfg.session_resume),
+        "prefix_continuity": "session" if cfg.session_resume else "text_only",
         # The distinction that decides whether H4 is testable, kept in the
         # record so nobody has to re-derive it. "text_only" is about the
         # MECHANISM, not about delivery: the replayed prefix was measured
@@ -3831,6 +4070,13 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
         # continuity of SESSION -- an inherited conversation and its prompt
         # cache -- not continuity of CONTENT.
         "prefix_continuity_detail": (
+            "the checkpoint carries its attempt's Prime Agent session cut at "
+            "the checkpoint's own call; the next player is `prime-agent "
+            "--resume` on that file with one new user turn (see "
+            "resume_prompt_served.txt per attempt). Attempts from a checkpoint "
+            "whose seal failed are recorded as prefix_continuity="
+            "'fresh_unsealed' in attempts.jsonl."
+            if cfg.session_resume else
             "the checkpoint's conversation is REPLAYED as quoted text in the "
             "first observation, and that text was verified present in the "
             "served bytes. H4 is therefore testable as 'lessons + prefix "
@@ -4220,7 +4466,7 @@ player result.
                        for a in self.attempts
                        if a.get("censored") and not (a.get("calls") or 0)}
         hops = 0
-        while cand in unresumable:
+        while cand in unresumable or not self.resumable(cand):
             parent = by_id[cand].parent if cand in by_id else None
             parent = str(parent) if parent else ""
             if not parent or parent not in ids:
@@ -4599,6 +4845,11 @@ player result.
         # true total rather than a stale one.
         self.budget.check()
 
+        # Session resume: the conversation itself is the context, so the
+        # quoted-transcript tail (`render_prefix`) is never served; the seal
+        # decides whether this attempt is a resumed session or a fresh launch.
+        sess = (checkpoint_session(ck_dir)
+                if (cfg.session_resume and ck_dir is not None) else None)
         if cfg.blind_resume:
             # A1/A2: the quoted transcript and NOTHING else. A directive here
             # would be the treatment leaking into the no-information arm.
@@ -4606,14 +4857,17 @@ player result.
                 raise RuntimeError(
                     f"attempt {n}: --blind-resume cannot carry a directive "
                     f"({directive[:80]!r}); the arm would no longer be blind")
-            ledger_text = (render_prefix(ck_dir, label=BLIND_PREFIX_LABEL)
-                           if ck_dir is not None else "")
+            if cfg.session_resume:
+                ledger_text = ""
+            else:
+                ledger_text = (render_prefix(ck_dir, label=BLIND_PREFIX_LABEL)
+                               if ck_dir is not None else "")
         else:
             ledger_text = render_ledger(rows, cfg, current_id=chosen_id,
                                         attempts=self.attempts,
                                         mark_lesson=not cfg.no_lessons)
             if ck_dir is not None:
-                extras = [render_prefix(ck_dir)]
+                extras = [] if cfg.session_resume else [render_prefix(ck_dir)]
                 if not cfg.no_lessons:
                     extras.insert(0, render_lessons(ck_dir, cfg.ledger_max_lessons))
                 for extra in extras:
@@ -4622,6 +4876,26 @@ player result.
 
         out_dir = cfg.run_dir / "attempts" / f"a{n:03d}"
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        resume_prompt = ""
+        prefix_continuity = "text_only"
+        session_export_dir = None
+        if cfg.session_resume:
+            session_export_dir = out_dir / SESSION_DIRNAME
+            if sess is not None:
+                prefix_continuity = "session"
+                resume_prompt = build_resume_prompt(
+                    blind=cfg.blind_resume, directive=directive,
+                    meta=checkpoint_meta(ck_dir), ledger_text=ledger_text)
+            elif ck_dir is not None and checkpoint_meta(ck_dir).get("parent") is None \
+                    and not (Path(ck_dir) / SESSION_DIRNAME).exists():
+                prefix_continuity = "fresh_root"   # the seed state has no past
+            else:
+                # A checkpoint whose seal failed. Launching fresh with the
+                # first-observation blocks is the pre-2026-09-21 mechanism
+                # minus the quoted tail; recorded loudly, never silently.
+                prefix_continuity = "fresh_unsealed"
+                self.unsealed_resumes = getattr(self, "unsealed_resumes", 0) + 1
         ctx = PlayerContext(
             attempt=n, checkpoint_dir=ck_dir, checkpoint_id=chosen_id,
             archive_dir=cfg.archive_dir, wiki_dir=cfg.wiki_dir,
@@ -4635,7 +4909,15 @@ player result.
                             if directive_kind_override is not None
                             else classify_directive_kind(directive)),
             reseed=self.reseed_for(chosen_id, n),
+            session_seed=(sess["session"] if sess else None),
+            session_artifacts=(sess["artifacts"] if sess else None),
+            resume_prompt=resume_prompt,
+            session_export_dir=session_export_dir,
+            prefix_continuity=prefix_continuity,
         )
+        if cfg.session_resume:
+            atomic_write(out_dir / "resume_prompt_served.txt", resume_prompt)
+            atomic_write(out_dir / "prefix_continuity.txt", prefix_continuity)
         if not directive and not cfg.no_directive and pair_role != ROLE_CONTROL \
                 and self.has_orchestrator():
             # THE LAST GATE, and it refuses rather than substitutes.
@@ -5163,6 +5445,7 @@ player result.
         # `new_checkpoints` list reads as the trajectory it was.
         for p, parent_id in chain:
             self._stamp_new_checkpoint(p, ctx, result, parent_id)
+        session_seals = self._seal_new_checkpoints(new_dirs, ctx)
 
         # attempts_from++ on the source checkpoint, atomically.
         #
@@ -5212,6 +5495,9 @@ player result.
         record = {
             "attempt": ctx.attempt,
             "from_checkpoint": ctx.checkpoint_id,
+            "prefix_continuity": ctx.prefix_continuity,
+            "resume_prompt_chars": len(ctx.resume_prompt or ""),
+            "session_seals": session_seals,
             "directive": ctx.directive,
             "directive_compliance": compliance,
             # PER-KIND PAIRING. `pair_id` joins a directive to its own control;
@@ -5306,6 +5592,40 @@ player result.
         self.close_attempt(record)
         self.write_summary()
         return record
+
+    def _seal_new_checkpoints(self, paths: list, ctx: PlayerContext) -> list:
+        """Session mode: bundle the attempt's conversation into each
+        checkpoint it wrote. Returns one ``{id, ok, reason, records}`` per
+        checkpoint; ``[]`` outside session mode. Never raises: a checkpoint
+        that could not be sealed is simply not resumable (see `resumable`)."""
+        if not self.cfg.session_resume or ctx.session_export_dir is None:
+            return []
+        out = []
+        for p in paths:
+            try:
+                call = checkpoint_meta(p).get("call")
+                seal = seal_checkpoint_session(p, ctx.session_export_dir, call=call)
+                out.append({"id": p.name.lstrip("c"), "ok": bool(seal["ok"]),
+                            "reason": seal.get("reason", ""),
+                            "records": seal.get("records_kept", 0),
+                            "overshoot": bool(seal.get("overshoot"))})
+            except Exception as exc:  # noqa: BLE001
+                out.append({"id": p.name.lstrip("c"), "ok": False,
+                            "reason": f"{type(exc).__name__}: {exc}", "records": 0})
+        return out
+
+    def resumable(self, ck_id) -> bool:
+        """Session mode: only the archive root (a fresh game) and checkpoints
+        with a sealed conversation can be resumed. Text mode: everything."""
+        if not self.cfg.session_resume:
+            return True
+        ck_dir = self.cfg.archive_dir / f"c{str(ck_id).lstrip('c')}"
+        if checkpoint_session(ck_dir) is not None:
+            return True
+        try:
+            return checkpoint_meta(ck_dir).get("parent") is None
+        except Exception:
+            return False
 
     def _stamp_new_checkpoint(self, path: Path, ctx: PlayerContext,
                               result: PlayerResult,
@@ -6168,6 +6488,25 @@ class SubprocessPlayer:
             "E16_ARGS": json.dumps(e16),
             "STALL_WATCHDOG": env.get("STALL_WATCHDOG", "1"),
         })
+        if ctx.session_export_dir is not None:
+            # Session mode. The player persists its conversation either way;
+            # it RESUMES one only when the checkpoint carries a sealed seed.
+            e16["session_resume"] = "true" if ctx.session_seed else "false"
+            env["E16_ARGS"] = json.dumps(e16)
+            ha = {"persist_session": True,
+                  "session_export_dir": str(ctx.session_export_dir)}
+            if ctx.session_seed is not None:
+                if not ctx.resume_prompt:
+                    raise RuntimeError(
+                        f"attempt {ctx.attempt}: session seed without a resume "
+                        f"prompt; the CLI would block on stdin")
+                ha["resume_session"] = str(ctx.session_seed)
+                ha["resume_prompt"] = ctx.resume_prompt
+                if ctx.session_artifacts is not None:
+                    ha["resume_artifacts"] = str(ctx.session_artifacts)
+            env["HARNESS_ARGS"] = json.dumps(ha)
+        else:
+            env.pop("HARNESS_ARGS", None)
         # arg 3 is launch_cell's MAX_CALLS; 0 means uncapped. It was hardcoded,
         # so no E16 run could ever bound an attempt by calls.
         cmd = [str(self.repo / "tools" / "cli_harness_eval" / "launch_cell.sh"),
@@ -6635,6 +6974,13 @@ def main(argv=None) -> int:
                     help="ICLR arms A1/A2: the player is served only its "
                          "checkpoint's quoted transcript on resume -- no "
                          "directive, no RESUMED banner, no ledger, no lessons.")
+    ap.add_argument("--session-resume", action="store_true",
+                    help="TRUE conversation resume: players are persisted "
+                         "Prime Agent sessions, each checkpoint carries its "
+                         "attempt's conversation cut at its own call, and a "
+                         "resumed attempt is `prime-agent --resume` on it with "
+                         "one new user turn. Without it, the pre-2026-09-21 "
+                         "quoted-text-tail mechanism runs.")
     ap.add_argument("--no-lessons", action="store_true",
                     help="Cut the lessons channel: no lessons.md writes, no "
                          "lessons rendered on resume, no ledger excerpts. Use "
@@ -6737,6 +7083,7 @@ def main(argv=None) -> int:
         inflight_spend_safety_factor=args.inflight_safety_factor,
         stall_attempts=args.stall_attempts, no_directive=args.no_directive,
         no_lessons=args.no_lessons, blind_resume=args.blind_resume,
+        session_resume=args.session_resume,
         **({"milestone_dlvl": args.milestone_dlvl}
            if args.milestone_dlvl is not None else {}),
         **({"milestone_dungeon": args.milestone_dungeon}
