@@ -611,7 +611,8 @@ if [ -n "${E16_ARGS:-}" ]; then
   if ! E16_ARGS="${E16_ARGS}" "$PY_BIN" - > "$_E16_OUT" <<'PYE16'
 import json, os, sys
 ALLOWED = {"resume_checkpoint", "checkpoint_archive", "wiki_dir",
-           "ledger_text", "fidelity_log", "directive", "reseed"}
+           "ledger_text", "fidelity_log", "directive", "reseed",
+           "resume_banner"}
 try:
     obj = json.loads(os.environ["E16_ARGS"])
 except Exception as exc:

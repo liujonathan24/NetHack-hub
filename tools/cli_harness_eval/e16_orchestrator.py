@@ -181,6 +181,49 @@ ARM_GO_EXPLORE = "go_explore"
 ARM_MATCHED_RESTART = "matched_restart"
 ARMS = (ARM_GO_EXPLORE, ARM_MATCHED_RESTART)
 
+#: Selector modes. ``llm`` is the method; ``scripted`` the softmax ablation;
+#: ``pre_death`` the FIXED-RULE ablation (ICLR arm A2): every attempt resumes
+#: the latest checkpoint the previous attempt saved before it ended, so the
+#: archive is used only as a save-scum and nothing chooses WHERE to branch.
+SELECTOR_LLM = "llm"
+SELECTOR_SCRIPTED = "scripted"
+SELECTOR_PRE_DEATH = "pre_death"
+SELECTORS = (SELECTOR_LLM, SELECTOR_SCRIPTED, SELECTOR_PRE_DEATH)
+
+#: The label a resumed player sees above its own quoted transcript under
+#: --blind-resume. Deliberately says nothing about checkpoints, attempts,
+#: resumes or an archive: the player is given the context that was live when
+#: the state was saved and nothing that would tell it the state was saved.
+BLIND_PREFIX_LABEL = ("TRANSCRIPT SO FAR (your own earlier turns in this game, "
+                      "most recent last):")
+#: The notice a fixed-selection orchestrator round (ICLR arm A3) gets in place
+#: of the choice instruction.
+FIXED_PICK_NOTICE = ("The next player WILL resume checkpoint c{pick}. That is "
+                     "fixed by rule (the latest checkpoint the previous attempt "
+                     "saved), not your choice this round; set \"checkpoint\" to "
+                     "\"{pick}\". Write it a DIRECTIVE:")
+
+
+def iclr_arm_label(selector: str, no_directive: bool, blind_resume: bool) -> str:
+    """The 2x2 cell (selection x guidance) a configuration lands in.
+
+    A1 = orchestrator selects, player gets nothing (blind).
+    A2 = fixed pre-death rule, player gets nothing (blind).
+    A3 = fixed pre-death rule, orchestrator writes the directive.
+    full = orchestrator selects and writes the directive.
+    Anything else is named for what it is, so a mislabelled run cannot pass
+    as one of the four.
+    """
+    if selector == SELECTOR_LLM and not no_directive and not blind_resume:
+        return "full"
+    if selector == SELECTOR_LLM and no_directive and blind_resume:
+        return "A1"
+    if selector == SELECTOR_PRE_DEATH and no_directive and blind_resume:
+        return "A2"
+    if selector == SELECTOR_PRE_DEATH and not no_directive and not blind_resume:
+        return "A3"
+    return f"other(selector={selector},no_directive={no_directive},blind={blind_resume})"
+
 #: An attempt's role inside a matched pair (``--paired-control``).
 ROLE_SOLO = "solo"
 ROLE_TREATMENT = "treatment"
@@ -358,6 +401,17 @@ class OrchestratorConfig:
     #: run-wide control hides that: the average says "directives do something"
     #: while half the directive kinds are untested.
     no_directive: bool = False
+    #: ICLR arm A1/A2: cut the SECOND orchestrator->player information channel.
+    #: With this on, no lesson is appended to a checkpoint's ``lessons.md``,
+    #: none is rendered on resume, and the per-row ``lesson:`` excerpt is left
+    #: out of the ledger the player is served. ``--no-directive`` alone still
+    #: lets an earlier player's account reach a later one through lessons.md,
+    #: which is information passing by another name.
+    no_lessons: bool = False
+    #: ICLR arms A1/A2: the player is served ONLY its checkpoint's quoted
+    #: transcript on resume. No directive, no "RESUMED" banner, no ledger, no
+    #: lessons, no attempt history. Implies `no_lessons`.
+    blind_resume: bool = False
     #: CONTROL MODE, PER DIRECTIVE KIND. Every directive the orchestrator issues
     #: is run TWICE from the SAME checkpoint: once with it (`treatment`) and
     #: once without (`control`). Each directive is then compared against its own
@@ -905,6 +959,7 @@ def selection_record(attempt: int, choice: dict, rows: list,
         "scripted_agreed": (None if (scripted_pick is None or chosen_id is None)
                             else scripted_pick == chosen_id),
         "scripted": scripted,
+        "pre_death": choice.get("pre_death"),
         "llm": choice.get("decision"),
     }
 
@@ -1189,7 +1244,8 @@ def _detail_priority(g: StateGroup, frontier: set, tried: dict) -> tuple:
 
 def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
                  current_id: Optional[str] = None,
-                 attempts: Optional[list] = None) -> tuple:
+                 attempts: Optional[list] = None,
+                 mark_lesson: bool = True) -> tuple:
     """``(ledger text, candidate records)`` -- the archive as the selector sees it.
 
     THE WHOLE ARCHIVE, NOT THE FRONTIER, and that is the point of this
@@ -1295,7 +1351,8 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
         for g in bgroups:
             if id(g) in detail:
                 lines.append(_state_line(g, current_id=current_id,
-                                         frontier=frontier, tried=tried))
+                                         frontier=frontier, tried=tried,
+                                         mark_lesson=mark_lesson))
             else:
                 overflow.append(g)
         if overflow:
@@ -1346,9 +1403,11 @@ def build_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
 
 def render_ledger(rows: list, cfg: Optional[OrchestratorConfig] = None,
                   current_id: Optional[str] = None,
-                  attempts: Optional[list] = None) -> str:
+                  attempts: Optional[list] = None,
+                  mark_lesson: bool = True) -> str:
     """The archive as text. See :func:`build_ledger` for what it contains."""
-    return build_ledger(rows, cfg, current_id, attempts)[0]
+    return build_ledger(rows, cfg, current_id, attempts,
+                        mark_lesson=mark_lesson)[0]
 
 
 def archive_tree(rows: list) -> dict:
@@ -1473,7 +1532,8 @@ def render_lessons(checkpoint_dir, limit: int = 8) -> str:
         ("## " + b if not b.startswith("#") else b) for b in tail)
 
 
-def render_prefix(checkpoint_dir, max_chars: int = 1500) -> str:
+def render_prefix(checkpoint_dir, max_chars: int = 1500,
+                  label: Optional[str] = None) -> str:
     """The checkpoint's own conversation prefix, as text, if it has one.
 
     LIMITATION, STATED RATHER THAN HIDDEN. The design asks for true prefix
@@ -1527,8 +1587,10 @@ def render_prefix(checkpoint_dir, max_chars: int = 1500) -> str:
             content = json.dumps(content)
         parts.append(f"({role}) {' '.join(str(content or '').split())[:300]}")
     body = "\n".join(parts)[:max_chars]
-    return ("THE PLAN THAT WAS LIVE WHEN THIS STATE WAS SAVED (quoted from that "
-            "session, not your own memory):\n" + body)
+    if label is None:
+        label = ("THE PLAN THAT WAS LIVE WHEN THIS STATE WAS SAVED (quoted from "
+                 "that session, not your own memory):")
+    return label + "\n" + body
 
 
 # --------------------------------------------------------------------------- #
@@ -1769,6 +1831,8 @@ class PlayerContext:
     tier: str
     #: The LAUNCHER's arm (which scaffold to run), not the experiment arm.
     arm: str
+    #: False under --blind-resume: nethack.py then renders no resume banner.
+    resume_banner: bool = True
     #: Hard cap on this attempt's LM calls; 0 = uncapped. Reaches
     #: `launch_cell.sh` as its MAX_CALLS argument. Defaulted, so it must sit
     #: with the other defaulted fields -- a dataclass rejects a non-default
@@ -3613,6 +3677,11 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
         # one name for both is how an arm gets misreported.
         "arm": cfg.arm,
         "experiment_arm": cfg.arm,
+        "iclr_arm": iclr_arm_label(cfg.selector, cfg.no_directive, cfg.blind_resume),
+        "iclr_arm_meaning": ("2x2 over checkpoint selection (fixed pre-death rule "
+                             "vs orchestrator) and guidance (none vs orchestrator): "
+                             "A1 = orchestrator/none, A2 = fixed/none, "
+                             "A3 = fixed/orchestrator, full = orchestrator/orchestrator"),
         "player_arm": cfg.player_arm,
         "experiment_arm_meaning": (
             "matched_restart = THE NULL: N independent attempts from one fixed "
@@ -3654,6 +3723,8 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
             "mode": cfg.selector,
             "kind": ("llm_persistent_session (scripted softmax is the fallback "
                      "and the ablation)" if cfg.selector == "llm"
+                     else "fixed_rule_latest_checkpoint_of_previous_attempt"
+                     if cfg.selector == SELECTOR_PRE_DEATH
                      else "scripted_softmax_over_pareto_frontier"),
             "rng_seed": cfg.rng_seed,
             "weights": {"balrog_min": cfg.w_balrog, "novelty": cfg.w_novelty,
@@ -3670,6 +3741,15 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
         "directive": {
             "mode": ("none (run-wide control)" if cfg.no_directive
                      else "per-attempt"),
+            "lessons": ("none (--no-lessons: nothing appended to lessons.md, "
+                        "nothing rendered on resume, no ledger excerpt)"
+                        if (cfg.no_lessons or cfg.blind_resume) else
+                        "per-checkpoint lessons.md rendered on resume"),
+            "player_first_observation": (
+                "blind resume: the checkpoint's quoted transcript only, no "
+                "banner, no ledger, no lessons, no directive"
+                if cfg.blind_resume else
+                "directive block, RESUMED banner, ledger, lessons, quoted transcript"),
             "paired_control": cfg.paired_control,
             "paired_control_meaning": (
                 "every directive is ALSO run from the same checkpoint without "
@@ -4080,6 +4160,43 @@ player result.
         atomic_write(raw_dir / f"{label}.reply.txt", getattr(res, "text", "") or "")
         return path
 
+    def has_orchestrator(self) -> bool:
+        """Whether an LM session sits in the loop at all.
+
+        ``llm`` selection always; ``pre_death`` selection only when it still
+        writes directives (arm A3). A2 and the null arm have none.
+        """
+        if self.cfg.selector == SELECTOR_LLM:
+            return True
+        return self.cfg.selector == SELECTOR_PRE_DEATH and not self.cfg.no_directive
+
+    def pre_death_pick(self, rows: list) -> tuple:
+        """The fixed rule of the ``pre_death`` selector: ``(id, reason)``.
+
+        Resume the LATEST checkpoint the previous attempt saved (its last
+        state before it died or was censored). If it saved nothing, resume the
+        checkpoint it started from; before any attempt, the archive's root.
+        Every choice is a checkpoint id validated against ``rows``, so the
+        restore path, the ledger and the provenance are untouched -- only the
+        question "where do we branch from" is answered by a rule instead of a
+        model. Checkpoints are written every 20 LM calls and at every Dlvl or
+        XL change, so "latest" is at most ~20 calls behind the death.
+        """
+        ids = {r.id for r in rows}
+        roots = [r for r in rows if not r.parent]
+        root = min(roots or rows, key=lambda r: _id_key(r.id)).id
+        prev = self.attempts[-1] if self.attempts else None
+        if prev is None:
+            return root, "first_attempt_archive_root"
+        new = [str(c).lstrip("c") for c in (prev.get("new_checkpoints") or [])]
+        new = [i for i in new if i in ids]
+        if new:
+            return max(new, key=_id_key), "latest_checkpoint_of_previous_attempt"
+        frm = str(prev.get("from_checkpoint") or "")
+        if frm in ids:
+            return frm, "previous_attempt_saved_nothing_so_its_start_state"
+        return root, "fallback_archive_root"
+
     def decide(self, rows: list) -> dict:
         """Who goes next and what they are told. Validated, then recorded.
 
@@ -4097,7 +4214,18 @@ player result.
         out = {"checkpoint_id": sel.chosen_id, "directive": "",
                "source": "scripted", "selection": sel.to_json(),
                "candidates_shown": None, "decision": None}
-        if self.cfg.selector != "llm" or self.session is None:
+        fixed_pick = None
+        if self.cfg.selector == SELECTOR_PRE_DEATH:
+            pick, why = self.pre_death_pick(rows)
+            out["checkpoint_id"] = pick
+            out["source"] = SELECTOR_PRE_DEATH
+            out["pre_death"] = {"reason": why,
+                                "scripted_would_pick": sel.chosen_id}
+            if self.cfg.no_directive or self.session is None:
+                return out
+            # A3: the checkpoint is decided; the round only writes the directive.
+            fixed_pick = pick
+        elif self.cfg.selector != "llm" or self.session is None:
             return out
 
         # The orchestrator is shown the LAST TREATMENT, not the last attempt.
@@ -4166,6 +4294,17 @@ player result.
             last_block=last_block,
             ledger=ledger_text,
         )
+        if fixed_pick is not None:
+            notice = FIXED_PICK_NOTICE.format(pick=fixed_pick)
+            assert "Choose the checkpoint the next player resumes from, and write it a DIRECTIVE:" in prompt
+            prompt = prompt.replace(
+                "Choose the checkpoint the next player resumes from, and write "
+                "it a DIRECTIVE:", notice)
+            prompt = prompt.replace(
+                "Any checkpoint id in the archive above is a legal choice.",
+                f"The checkpoint for this round is c{fixed_pick} and is not "
+                f"yours to change.")
+            out["pre_death"]["fixed_pick_notice_served"] = True
         from e16_session import parse_decision
         # EVERY id in the archive, and the prompt now says so. `parse_decision`
         # has always validated against this set rather than against the
@@ -4230,9 +4369,18 @@ player result.
             "attempts": tries,
         }
         if dec.valid and (dec.directive.strip() or self.cfg.no_directive):
-            out["checkpoint_id"] = dec.checkpoint_id
-            out["directive"] = dec.directive
-            out["source"] = "llm"
+            if fixed_pick is not None:
+                # A3: record what the model named, then enforce the rule.
+                out["pre_death"]["orchestrator_named"] = dec.checkpoint_id
+                out["pre_death"]["orchestrator_agreed"] = (
+                    dec.checkpoint_id == fixed_pick)
+                out["checkpoint_id"] = fixed_pick
+                out["directive"] = dec.directive
+                out["source"] = "pre_death+llm_directive"
+            else:
+                out["checkpoint_id"] = dec.checkpoint_id
+                out["directive"] = dec.directive
+                out["source"] = "llm"
         elif self.cfg.no_directive:
             # The one legal empty directive is the explicit run-wide control,
             # and it is handled above. Reaching here in that mode means the
@@ -4406,13 +4554,26 @@ player result.
         # true total rather than a stale one.
         self.budget.check()
 
-        ledger_text = render_ledger(rows, cfg, current_id=chosen_id,
-                                    attempts=self.attempts)
-        if ck_dir is not None:
-            for extra in (render_lessons(ck_dir, cfg.ledger_max_lessons),
-                          render_prefix(ck_dir)):
-                if extra:
-                    ledger_text += "\n\n" + extra
+        if cfg.blind_resume:
+            # A1/A2: the quoted transcript and NOTHING else. A directive here
+            # would be the treatment leaking into the no-information arm.
+            if directive.strip():
+                raise RuntimeError(
+                    f"attempt {n}: --blind-resume cannot carry a directive "
+                    f"({directive[:80]!r}); the arm would no longer be blind")
+            ledger_text = (render_prefix(ck_dir, label=BLIND_PREFIX_LABEL)
+                           if ck_dir is not None else "")
+        else:
+            ledger_text = render_ledger(rows, cfg, current_id=chosen_id,
+                                        attempts=self.attempts,
+                                        mark_lesson=not cfg.no_lessons)
+            if ck_dir is not None:
+                extras = [render_prefix(ck_dir)]
+                if not cfg.no_lessons:
+                    extras.insert(0, render_lessons(ck_dir, cfg.ledger_max_lessons))
+                for extra in extras:
+                    if extra:
+                        ledger_text += "\n\n" + extra
 
         out_dir = cfg.run_dir / "attempts" / f"a{n:03d}"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -4423,6 +4584,7 @@ player result.
             fidelity_log=cfg.fidelity_path, game_seed=cfg.game_seed,
             tier=cfg.tier, max_calls=cfg.player_max_calls,
             arm=cfg.player_arm, directive=directive,
+            resume_banner=not cfg.blind_resume,
             experiment_arm=cfg.arm, pair_id=pair_id, pair_role=pair_role,
             directive_kind=(directive_kind_override
                             if directive_kind_override is not None
@@ -4430,7 +4592,7 @@ player result.
             reseed=self.reseed_for(chosen_id, n),
         )
         if not directive and not cfg.no_directive and pair_role != ROLE_CONTROL \
-                and cfg.selector == "llm":
+                and self.has_orchestrator():
             # THE LAST GATE, and it refuses rather than substitutes.
             #
             # This used to serve "(orchestrator produced no directive for this
@@ -4968,7 +5130,8 @@ player result.
         if ctx.checkpoint_dir is not None:
             self._bump_attempts_from(ctx.checkpoint_dir)
         if ctx.checkpoint_dir is not None \
-                and ctx.experiment_arm != ARM_MATCHED_RESTART:
+                and ctx.experiment_arm != ARM_MATCHED_RESTART \
+                and not self.cfg.no_lessons and not self.cfg.blind_resume:
             heading = (f"attempt {ctx.attempt} ({outcome}"
                        + (f":{censor_reason}" if censor_reason else "") + ")")
             body = (f"DIRECTIVE GIVEN: {ctx.directive or '(none)'}\n"
@@ -5294,6 +5457,8 @@ player result.
             "synthetic": bool(self.decide_only),
             "synthetic_note": SYNTHETIC_NOTE if self.decide_only else "",
             "experiment_arm": self.cfg.arm,
+            "iclr_arm": iclr_arm_label(self.cfg.selector, self.cfg.no_directive,
+                                       self.cfg.blind_resume),
             "player_arm": self.cfg.player_arm,
             "reseed_on_restore": self.cfg.reseed_on_restore,
             "attempts": len(self.attempts),
@@ -5940,6 +6105,8 @@ class SubprocessPlayer:
             # Part of the launch contract, not an extra: nethack.py renders it
             # into the FIRST served observation using DIRECTIVE_BLOCK_FORMAT.
             "directive": ctx.directive,
+            # Bool travels as the string "true"/"false"; nethack.py parses it.
+            "resume_banner": ctx.resume_banner,
         }
         if ctx.checkpoint_dir is not None:
             e16["resume_checkpoint"] = str(ctx.checkpoint_dir)
@@ -6414,9 +6581,19 @@ def main(argv=None) -> int:
                     help="Stop once the archive holds a state in this dungeon "
                          "branch (4 = Sokoban). -1 disables it.")
     ap.add_argument("--stall-attempts", type=int, default=8)
-    ap.add_argument("--selector", choices=("llm", "scripted"), default="llm",
+    ap.add_argument("--selector", choices=SELECTORS, default="llm",
                     help="llm = a persistent Prime Agent session decides "
-                         "(primary); scripted = the softmax selector (ablation).")
+                         "(primary); scripted = the softmax selector (ablation); "
+                         "pre_death = fixed rule, resume the latest checkpoint "
+                         "of the previous attempt (ICLR arm A2).")
+    ap.add_argument("--blind-resume", action="store_true",
+                    help="ICLR arms A1/A2: the player is served only its "
+                         "checkpoint's quoted transcript on resume -- no "
+                         "directive, no RESUMED banner, no ledger, no lessons.")
+    ap.add_argument("--no-lessons", action="store_true",
+                    help="Cut the lessons channel: no lessons.md writes, no "
+                         "lessons rendered on resume, no ledger excerpts. Use "
+                         "with --no-directive for a no-information arm.")
     ap.add_argument("--no-directive", action="store_true",
                     help="RUN-WIDE CONTROL: launch every player with no "
                          "directive. Same archive, same selection, no "
@@ -6514,6 +6691,7 @@ def main(argv=None) -> int:
         inflight_spend_prior_usd_per_hour=args.inflight_rate,
         inflight_spend_safety_factor=args.inflight_safety_factor,
         stall_attempts=args.stall_attempts, no_directive=args.no_directive,
+        no_lessons=args.no_lessons, blind_resume=args.blind_resume,
         **({"milestone_dlvl": args.milestone_dlvl}
            if args.milestone_dlvl is not None else {}),
         **({"milestone_dungeon": args.milestone_dungeon}
@@ -6575,7 +6753,9 @@ def main(argv=None) -> int:
                     "session_resume_verified")
         except Exception:
             pass
-    session = build_session(cfg) if cfg.selector == "llm" else None
+    _needs_session = (cfg.selector == SELECTOR_LLM
+                      or (cfg.selector == SELECTOR_PRE_DEATH and not cfg.no_directive))
+    session = build_session(cfg) if _needs_session else None
 
     def _no_player(ctx):
         raise RuntimeError("--decide-only launches no players; reaching the "

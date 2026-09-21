@@ -58,7 +58,19 @@
 #                       model PATTERN: it matched openrouter's catalog entry
 #                       first and died with "No API key found for openrouter"
 #                       even though settings.json names prime-inference.
-#   E16_SELECTOR        llm (default, the design) | scripted (the ablation).
+#   E16_SELECTOR        llm (default, the design) | scripted (the softmax
+#                       ablation) | pre_death (ICLR arm A2: fixed rule, resume
+#                       the latest checkpoint of the previous attempt; no
+#                       orchestrator session at all).
+#   E16_NO_LESSONS=1    cut the lessons channel (no lessons.md writes, none
+#                       rendered on resume, no ledger excerpt).
+#   E16_BLIND_RESUME=1  the player is served ONLY its checkpoint's quoted
+#                       transcript on resume: no directive block, no RESUMED
+#                       banner, no ledger, no lessons. The ICLR 2x2:
+#                         A1   SELECTOR=llm       NO_DIRECTIVE=1 BLIND_RESUME=1
+#                         A2   SELECTOR=pre_death NO_DIRECTIVE=1 BLIND_RESUME=1
+#                         A3   SELECTOR=pre_death (directives on, banner on)
+#                         full SELECTOR=llm       (the paper's runs)
 #   E16_BUDGET          USD ceiling for this run. Hard: checked before every
 #                       launch. Default 385 (the design's ~55% of $700).
 #   E16_NO_DIRECTIVE=1  run-wide control: same archive, same selection, no
@@ -177,6 +189,8 @@ ARGS=(
 [ -n "${E16_ORCH_TMPDIR:-}" ] && ARGS+=(--orch-tmpdir "$E16_ORCH_TMPDIR")
 [ -n "${E16_START_CHECKPOINT:-}" ] && ARGS+=(--start-checkpoint "$E16_START_CHECKPOINT")
 [ "${E16_NO_DIRECTIVE:-0}" = "1" ] && ARGS+=(--no-directive)
+[ "${E16_NO_LESSONS:-0}" = "1" ] && ARGS+=(--no-lessons)
+[ "${E16_BLIND_RESUME:-0}" = "1" ] && ARGS+=(--blind-resume)
 # E16_NO_INFLIGHT_BUDGET=1 disables the mid-attempt budget guard. The guard
 # charges wall clock at DEFAULT_SPEND_RATE_USD_PER_HOUR ($90/hr) x a 2.0 safety
 # factor and there is NO in-flight usage source for prime_agent rollouts
@@ -243,7 +257,10 @@ case "$CMD" in
     # scripted arm needs no session and is exempt.
     # matched_restart has NO orchestrator session by construction (the null arm
     # is not "an LM told to sit still"), so the resume probe does not apply.
-    if [ "${E16_SELECTOR:-llm}" = "llm" ] \
+    NEEDS_SESSION=0
+    if [ "${E16_SELECTOR:-llm}" = "llm" ]; then NEEDS_SESSION=1; fi
+    if [ "${E16_SELECTOR:-llm}" = "pre_death" ] && [ "${E16_NO_DIRECTIVE:-0}" != "1" ]; then NEEDS_SESSION=1; fi
+    if [ "$NEEDS_SESSION" = 1 ] \
        && [ "${E16_EXP_ARM:-go_explore}" != "matched_restart" ] \
        && [ "${E16_SKIP_PROBE:-0}" != "1" ]; then
       VERIFIED="$("$PY_BIN" - "$RUN_DIR" <<'PYV'

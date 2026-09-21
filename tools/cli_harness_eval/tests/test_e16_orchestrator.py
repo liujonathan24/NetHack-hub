@@ -1207,7 +1207,8 @@ def test_e16_tier_differs_from_base_only_in_the_skill_set():
 
 #: The E16 family. Every tier here publishes the archive + knowledge-base
 #: tools by design; every tier NOT here must leave its served bytes alone.
-E16_TIERS = {"e16_gewiki", "e16_gewiki_norb", "e16_gewiki_norb_c50"}
+E16_TIERS = {"e16_gewiki", "e16_gewiki_norb", "e16_gewiki_norb_c50",
+             "e16_gewiki_norb_fog", "e16_gewiki_norb_astra"}
 
 
 def test_no_other_tier_publishes_save_or_wiki():
@@ -3047,3 +3048,189 @@ def test_disabled_milestones_do_not_fire_on_every_row():
     orch.cfg = E.OrchestratorConfig(run_dir=Path("."), milestone_dlvl=20,
                                     milestone_dungeon=4)
     assert orch.milestone_row(rows) is not None
+
+
+# --------------------------------------------------------------------------- #
+# ICLR ablation arms: A2 (pre_death selector) and A1 (no directive, no lessons)
+# --------------------------------------------------------------------------- #
+
+def test_pre_death_selector_resumes_the_previous_attempts_last_checkpoint(tmp_path):
+    """A2: the archive is a save-scum, nothing chooses WHERE to branch.
+
+    Attempt 1 starts at the root. Every later attempt resumes the newest
+    checkpoint the previous attempt wrote, whatever the frontier says.
+    """
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True,
+                  no_lessons=True, budget_ceiling_usd=1000.0, max_attempts=4,
+                  stall_attempts=8, milestone_dlvl=99, milestone_dungeon=-1)
+    player = StubPlayer([{"died": True, "spend": 0.5}])
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=4)
+
+    assert [c.attempt for c in player.seen] == [1, 2, 3, 4]
+    # attempt k (k>1) resumed c(100+k-1), the checkpoint attempt k-1 saved
+    assert [c.checkpoint_id for c in player.seen][1:] == ["101", "102", "103"]
+    sels = [json.loads(l) for l in cfg.selection_path.read_text().splitlines()]
+    assert all(s["source"] == "pre_death" for s in sels)
+    assert sels[0]["pre_death"]["reason"] == "first_attempt_archive_root"
+    assert all(s["pre_death"]["reason"]
+               == "latest_checkpoint_of_previous_attempt" for s in sels[1:])
+    # what the softmax would have done is still recorded beside it
+    assert all("scripted_would_pick" in s["pre_death"] for s in sels)
+    assert all(a["directive"] == "" for a in orch.attempts)
+    prov = json.loads(cfg.provenance_path.read_text())
+    assert prov["selector"]["mode"] == "pre_death"
+    assert prov["directive"]["lessons"].startswith("none")
+
+
+def test_pre_death_falls_back_to_the_start_state_when_nothing_was_saved(tmp_path):
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True)
+    orch = E.Orchestrator(cfg, StubPlayer([{"died": True}]))
+    orch.prepare()
+    E.seed_archive(cfg)
+    rows = orch.rows()
+    root = rows[0].id
+    assert orch.pre_death_pick(rows) == (root, "first_attempt_archive_root")
+    orch.attempts.append({"attempt": 1, "from_checkpoint": root,
+                          "new_checkpoints": []})
+    assert orch.pre_death_pick(rows) == (
+        root, "previous_attempt_saved_nothing_so_its_start_state")
+    orch.attempts.append({"attempt": 2, "from_checkpoint": "nope",
+                          "new_checkpoints": ["c999"]})
+    assert orch.pre_death_pick(rows) == (root, "fallback_archive_root")
+
+
+def test_no_lessons_cuts_every_path_from_one_player_to_the_next(tmp_path):
+    """A1: with --no-directive alone, lessons.md still carries the previous
+    player's account into the next player's first observation."""
+    def run(no_lessons):
+        cfg = cfg_for(tmp_path / f"run_{int(no_lessons)}", selector="scripted",
+                      no_directive=True, no_lessons=no_lessons,
+                      budget_ceiling_usd=1000.0, milestone_dlvl=99,
+                      milestone_dungeon=-1)
+        player = StubPlayer([{"died": True, "spend": 0.5,
+                              "lesson": "SENTINEL-LESSON avoid the fountain"}])
+        orch = E.Orchestrator(cfg, player)
+        orch.prepare()
+        E.seed_archive(cfg)
+        orch.run(max_attempts=3)
+        return cfg, player, orch
+    cfg_on, p_on, _ = run(False)
+    cfg_off, p_off, orch_off = run(True)
+    # control: the default arm does pass the lesson along
+    assert any("SENTINEL-LESSON" in c.ledger_text for c in p_on.seen[1:])
+    # treatment: nothing model-written from an earlier attempt reaches a later one
+    assert all("SENTINEL-LESSON" not in c.ledger_text for c in p_off.seen)
+    assert all("lesson:" not in c.ledger_text for c in p_off.seen)
+    assert all(c.directive == "" for c in p_off.seen)
+    for d in cfg_off.archive_dir.iterdir():
+        if d.is_dir():
+            assert E.read_lessons(d).strip() == ""
+    # the lesson is still on the record for the analyst, just never served
+    assert all("SENTINEL-LESSON" in (a["model_text"]["lesson"] or "")
+               for a in orch_off.attempts)
+
+
+# --------------------------------------------------------------------------- #
+# ICLR 2x2: blind resume (A1/A2) and fixed selection with directives (A3)
+# --------------------------------------------------------------------------- #
+
+BLIND_FORBIDDEN = ("RESUMED", "BRANCH", "LEDGER", "lesson", "attempt",
+                   "checkpoint", "ORCHESTRATOR", "archive")
+
+
+def test_iclr_arm_labels_cover_the_2x2_and_nothing_else():
+    assert E.iclr_arm_label("llm", False, False) == "full"
+    assert E.iclr_arm_label("llm", True, True) == "A1"
+    assert E.iclr_arm_label("pre_death", True, True) == "A2"
+    assert E.iclr_arm_label("pre_death", False, False) == "A3"
+    assert E.iclr_arm_label("llm", True, False).startswith("other(")
+    assert E.iclr_arm_label("scripted", True, True).startswith("other(")
+
+
+def test_blind_resume_serves_only_the_quoted_transcript(tmp_path):
+    """A2: the player cannot tell it is resumed. No banner, no ledger, no
+    lessons, no directive; only its own transcript under a neutral label."""
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", no_directive=True,
+                  blind_resume=True, budget_ceiling_usd=1000.0,
+                  milestone_dlvl=99, milestone_dungeon=-1)
+    player = StubPlayer([{"died": True, "spend": 0.5,
+                          "lesson": "SENTINEL-LESSON never go east"}])
+    orch = E.Orchestrator(cfg, player)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=3)
+    assert [c.attempt for c in player.seen] == [1, 2, 3]
+    for c in player.seen:
+        assert c.resume_banner is False
+        assert c.directive == ""
+        assert c.ledger_text == "" or c.ledger_text.startswith(E.BLIND_PREFIX_LABEL)
+        body = c.ledger_text.replace(E.BLIND_PREFIX_LABEL, "")
+        for word in BLIND_FORBIDDEN:
+            assert word not in body, (word, body[:200])
+        assert "SENTINEL-LESSON" not in c.ledger_text
+    for d in cfg.archive_dir.iterdir():
+        if d.is_dir():
+            assert E.read_lessons(d).strip() == ""
+    prov = json.loads(cfg.provenance_path.read_text())
+    assert prov["iclr_arm"] == "A2"
+    assert prov["directive"]["player_first_observation"].startswith("blind resume")
+    # the non-blind arm, same everything else, DOES serve the banner flag
+    cfg2 = cfg_for(tmp_path / "run2", selector="pre_death", no_directive=True,
+                   budget_ceiling_usd=1000.0, milestone_dlvl=99, milestone_dungeon=-1)
+    p2 = StubPlayer([{"died": True, "spend": 0.5}])
+    o2 = E.Orchestrator(cfg2, p2); o2.prepare(); E.seed_archive(cfg2); o2.run(max_attempts=2)
+    assert all(c.resume_banner is True for c in p2.seen)
+    assert json.loads(cfg2.provenance_path.read_text())["iclr_arm"].startswith("other(")
+
+
+def test_a3_fixed_selection_takes_only_the_directive_from_the_orchestrator(tmp_path):
+    """A3: the orchestrator sees the ledger and writes the directive, but the
+    checkpoint is the pre-death rule's pick whatever the model names."""
+    cfg = cfg_for(tmp_path / "run", selector="pre_death", budget_ceiling_usd=1000.0,
+                  max_attempts=3, milestone_dlvl=99, milestone_dungeon=-1)
+    cfg.orchestrator_dir.mkdir(parents=True, exist_ok=True)
+    directives = iter(["search the north wall", "descend now", "rest to full first"])
+    calls = {"n": 0}
+
+    def runner(argv, env, cwd, timeout_s):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            body = _STUB_PLAN
+        else:
+            body = ('Always the seed, I insist.\n'
+                    + json.dumps({"checkpoint": "1", "directive": next(directives),
+                                  "rationale": "seed"}))
+        return _stub_stdout(argv, cwd, body,
+                            usage={"prompt_tokens": 4000, "completion_tokens": 300,
+                                   "cached_input_tokens": 2000}), "", 0
+
+    session = S.PrimeAgentSession(
+        work_dir=cfg.orchestrator_dir, agent_dir=cfg.orchestrator_dir / "agent",
+        log_path=cfg.orchestrator_log, runner=runner)
+    player = StubPlayer([{"died": True, "spend": 1.0}])
+    orch = E.Orchestrator(cfg, player, session=session)
+    orch.prepare()
+    E.seed_archive(cfg)
+    orch.run(max_attempts=3)
+
+    assert [c.checkpoint_id for c in player.seen] == ["1", "101", "102"]
+    assert [c.directive for c in player.seen] == [
+        "search the north wall", "descend now", "rest to full first"]
+    assert all(c.resume_banner is True for c in player.seen)
+    sels = [json.loads(l) for l in cfg.selection_path.read_text().splitlines()]
+    assert [s["source"] for s in sels] == ["pre_death+llm_directive"] * 3
+    assert [s["chosen_id"] for s in sels] == ["1", "101", "102"]
+    assert [s["pre_death"]["orchestrator_named"] for s in sels] == ["1", "1", "1"]
+    assert [s["pre_death"]["orchestrator_agreed"] for s in sels] == [True, False, False]
+    assert all(s["pre_death"]["fixed_pick_notice_served"] for s in sels)
+    rounds = [json.loads(l) for l in cfg.orchestrator_log.read_text().splitlines()]
+    decide_rounds = [r for r in rounds if str(r.get("kind", "")).startswith("round")]
+    assert len(decide_rounds) == 3
+    assert "WILL resume checkpoint c101" in decide_rounds[1]["prompt"]
+    assert "Choose the checkpoint the next player" not in decide_rounds[1]["prompt"]
+    prov = json.loads(cfg.provenance_path.read_text())
+    assert prov["iclr_arm"] == "A3"
+    assert orch.budget.orchestrator_usd > 0

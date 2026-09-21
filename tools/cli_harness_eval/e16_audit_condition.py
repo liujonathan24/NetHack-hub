@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Audit that an E16 run's SERVED BYTES match its ICLR arm (A1/A2/A3/full).
+
+Reads what the players and the orchestrator were actually sent -- the trace
+files, the served directive and ledger files, the selection and round logs --
+and checks each against the arm's contract. A check that cannot be evaluated
+is reported as such, never as a pass.
+
+    python e16_audit_condition.py RUN_DIR --arm A2 [--json OUT]
+
+Exit 0 when every check passes, 1 otherwise.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+BANNER = "[RESUMED FROM CHECKPOINT"
+DIRECTIVE = "[ORCHESTRATOR DIRECTIVE for this attempt:"
+BLIND_LABEL = "TRANSCRIPT SO FAR (your own earlier turns in this game"
+FULL_PREFIX_LABEL = "THE PLAN THAT WAS LIVE WHEN THIS STATE WAS SAVED"
+LEDGER_MARKERS = ("BRANCH ", "EQUALLY CHOOSABLE", "previous attempt(s) started",
+                  "lesson:", "LESSON", "ATTEMPT HISTORY", "attempt ")
+FIXED_NOTICE = "WILL resume checkpoint c"
+CHOICE_TEXT = "Choose the checkpoint the next player resumes from"
+
+ARMS = {
+    "A1": dict(selector="llm", directive=False, blind=True, rounds=True),
+    "A2": dict(selector="pre_death", directive=False, blind=True, rounds=False),
+    "A3": dict(selector="pre_death", directive=True, blind=False, rounds=True),
+    "full": dict(selector="llm", directive=True, blind=False, rounds=True),
+}
+SOURCE_FOR = {"A1": "llm", "A2": "pre_death", "A3": "pre_death+llm_directive",
+              "full": "llm"}
+
+
+def _texts(msg) -> list:
+    """Every text fragment in one trace message, whatever its shape."""
+    out = []
+    if isinstance(msg, str):
+        return [msg]
+    if isinstance(msg, dict):
+        for k in ("content", "reasoning_content", "text"):
+            v = msg.get(k)
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, list):
+                for part in v:
+                    out.extend(_texts(part))
+        for tc in msg.get("tool_calls") or []:
+            out.extend(_texts(tc))
+        if "function" in msg and isinstance(msg["function"], dict):
+            out.append(json.dumps(msg["function"]))
+    return out
+
+
+def served_texts(traces_path: Path) -> list:
+    """All (role, text) the player was SENT (system/user/tool roles)."""
+    out = []
+    if not traces_path.is_file():
+        return out
+    for line in traces_path.read_text(errors="replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for node in rec.get("nodes") or []:
+            m = node.get("message")
+            if isinstance(m, str):
+                try:
+                    m = json.loads(m)
+                except Exception:
+                    m = {"role": "?", "content": m}
+            role = (m or {}).get("role", "?") if isinstance(m, dict) else "?"
+            if role in ("system", "user", "tool"):
+                for t in _texts(m):
+                    out.append((role, t))
+    return out
+
+
+def pre_death_expected(attempts: list, k: int) -> tuple:
+    """What the fixed rule should have picked for attempt k (1-based)."""
+    if k == 1:
+        return None, "first"
+    prev = attempts[k - 2]
+    new = [str(c).lstrip("c") for c in (prev.get("new_checkpoints") or [])]
+    if new:
+        return max(new, key=lambda i: (0, int(i)) if i.isdigit() else (1, i)), "latest_of_prev"
+    return str(prev.get("from_checkpoint")), "prev_start"
+
+
+def audit(run_dir: Path, arm: str) -> dict:
+    spec = ARMS[arm]
+    checks = []
+
+    def add(name, ok, detail="", scope="run"):
+        checks.append({"check": name, "ok": ok, "scope": scope, "detail": detail})
+
+    prov = json.loads((run_dir / "provenance.json").read_text()) if (run_dir / "provenance.json").is_file() else {}
+    add("provenance.iclr_arm", prov.get("iclr_arm") == arm,
+        f"provenance says {prov.get('iclr_arm')!r}")
+    add("provenance.selector", (prov.get("selector") or {}).get("mode") == spec["selector"],
+        f"selector mode {(prov.get('selector') or {}).get('mode')!r}")
+
+    att_path = run_dir / "attempts.jsonl"
+    attempts = [json.loads(l) for l in att_path.read_text().splitlines()] if att_path.is_file() else []
+    add("attempts.present", bool(attempts), f"{len(attempts)} attempt rows")
+    sel_path = run_dir / "selection.jsonl"
+    sels = {}
+    if sel_path.is_file():
+        for l in sel_path.read_text().splitlines():
+            r = json.loads(l)
+            sels[int(r["attempt"])] = r
+
+    for a in attempts:
+        k = int(a["attempt"])
+        scope = f"a{k:03d}"
+        adir = Path(a.get("out_dir") or (run_dir / "attempts" / scope))
+        if not adir.is_dir():
+            adir = run_dir / "attempts" / scope
+        dsv = (adir / "directive_served.txt").read_text() if (adir / "directive_served.txt").is_file() else None
+        lsv = (adir / "ledger_served.txt").read_text() if (adir / "ledger_served.txt").is_file() else None
+        resumed_from_seed = str(a.get("from_checkpoint")) in ("1", "None", "")
+        # -- what the launcher wrote down as served ----------------------------
+        if spec["directive"]:
+            add("directive_served.nonempty", bool(dsv and dsv.strip()), f"{(dsv or '')[:60]!r}", scope)
+        else:
+            add("directive_served.empty", not (dsv or "").strip(), f"{(dsv or '')[:60]!r}", scope)
+        if spec["blind"]:
+            body = (lsv or "")
+            ok = body == "" or body.startswith(BLIND_LABEL)
+            leaks = [m for m in (BANNER, FULL_PREFIX_LABEL) + LEDGER_MARKERS
+                     if m in body.replace(BLIND_LABEL, "")]
+            add("ledger_served.blind", ok and not leaks,
+                f"len={len(body)} leaks={leaks}", scope)
+        else:
+            if k >= 2 and not resumed_from_seed:
+                add("ledger_served.has_ledger", bool(lsv) and ("BRANCH" in lsv or "checkpoint" in lsv),
+                    f"len={len(lsv or '')}", scope)
+        # -- what the model was actually sent ----------------------------------
+        texts = served_texts(adir / "traces.jsonl")
+        if not texts:
+            add("traces.readable", False, "no served messages found (empty traces.jsonl?)", scope)
+            continue
+        joined = "\n".join(t for _, t in texts)
+        n_banner = joined.count(BANNER)
+        n_dir = joined.count(DIRECTIVE)
+        n_blind = joined.count(BLIND_LABEL)
+        n_fullpre = joined.count(FULL_PREFIX_LABEL)
+        if spec["blind"]:
+            leaks = {m: joined.count(m) for m in (BANNER, DIRECTIVE, FULL_PREFIX_LABEL, "EQUALLY CHOOSABLE",
+                                                   "previous attempt(s) started", "lesson:", "LESSON:")
+                     if m in joined}
+            add("traces.no_banner_no_directive_no_ledger", not leaks, f"leaks={leaks}", scope)
+            if lsv:
+                add("traces.transcript_label_once", n_blind == 1, f"label count {n_blind}", scope)
+            else:
+                add("traces.no_transcript_when_none_served", n_blind == 0, f"label count {n_blind}", scope)
+        else:
+            if k >= 2 or not resumed_from_seed:
+                add("traces.banner_once", n_banner == 1, f"banner count {n_banner}", scope)
+            if spec["directive"]:
+                add("traces.directive_once_and_matches", n_dir == 1 and (dsv or "").strip() in joined,
+                    f"directive block count {n_dir}", scope)
+            else:
+                add("traces.no_directive_block", n_dir == 0, f"directive block count {n_dir}", scope)
+        # -- selection source and the fixed rule -------------------------------
+        s = sels.get(k)
+        if s is None:
+            add("selection.record", False, "no selection record", scope)
+        else:
+            add("selection.source", s.get("source") == SOURCE_FOR[arm],
+                f"source {s.get('source')!r}", scope)
+            if spec["selector"] == "pre_death":
+                exp, why = pre_death_expected(attempts, k)
+                if exp is not None:
+                    add("selection.pre_death_rule", str(s.get("chosen_id")) == exp,
+                        f"chosen {s.get('chosen_id')} expected {exp} ({why})", scope)
+                if arm == "A3":
+                    add("selection.fixed_notice_served", bool((s.get("pre_death") or {}).get("fixed_pick_notice_served")),
+                        "", scope)
+            if arm == "A1":
+                add("selection.directive_empty", not (s.get("directive") or "").strip(), "", scope)
+
+    # -- orchestrator side ------------------------------------------------------
+    rlog = run_dir / "orchestrator_rounds.jsonl"
+    rounds = [json.loads(l) for l in rlog.read_text().splitlines()] if rlog.is_file() else []
+    import re as _re
+    # first-try decision rounds only; retries carry the retry prompt by design
+    decide = [r for r in rounds if _re.fullmatch(r"round\d+", str(r.get("kind", "")))]
+    raw = sorted((run_dir / "orchestrator" / "raw").glob("decide_*")) if (run_dir / "orchestrator" / "raw").is_dir() else []
+    if not spec["rounds"]:
+        add("orchestrator.no_rounds", not decide and not raw,
+            f"{len(decide)} decide rounds, {len(raw)} raw decide files")
+        add("orchestrator.no_spend", float((prov.get("budget") or {}).get("orchestrator_usd", 0) or 0) == 0
+            and not (run_dir / "orchestrator" / "opening_plan.txt").is_file(), "")
+    else:
+        add("orchestrator.rounds_present", len(decide) >= len(attempts),
+            f"{len(decide)} decide rounds for {len(attempts)} attempts")
+        for r in decide:
+            p = r.get("prompt") or ""
+            scope = f"round{r.get('round')}"
+            if arm == "A3":
+                add("orchestrator.prompt_fixed_notice", FIXED_NOTICE in p and CHOICE_TEXT not in p, "", scope)
+            else:
+                add("orchestrator.prompt_offers_choice", CHOICE_TEXT in p, "", scope)
+            add("orchestrator.prompt_has_ledger", "BRANCH" in p or "checkpoint" in p.lower(), "", scope)
+
+    ok = all(c["ok"] for c in checks)
+    return {"run_dir": str(run_dir), "arm": arm, "ok": ok, "n_checks": len(checks),
+            "n_failed": sum(1 for c in checks if not c["ok"]), "checks": checks}
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("run_dir")
+    ap.add_argument("--arm", required=True, choices=sorted(ARMS))
+    ap.add_argument("--json", default=None)
+    args = ap.parse_args(argv)
+    rep = audit(Path(args.run_dir), args.arm)
+    for c in rep["checks"]:
+        print(f"[{'PASS' if c['ok'] else 'FAIL'}] {c['scope']:>9s}  {c['check']:<45s} {c['detail']}")
+    print(f"\n{'OK' if rep['ok'] else 'FAILED'}: {rep['n_failed']} of {rep['n_checks']} checks failed  arm={rep['arm']}")
+    if args.json:
+        Path(args.json).write_text(json.dumps(rep, indent=2))
+    return 0 if rep["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

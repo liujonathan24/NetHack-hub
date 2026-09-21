@@ -637,6 +637,13 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # is about what to do next. Text only, like everything the orchestrator
         # writes: it never contributes to any metric.
         directive: Optional[str] = None,
+        # E16 blind resume (ICLR arms A1/A2): when false, a resumed rollout gets
+        # NO "RESUMED FROM CHECKPOINT" banner. `ledger_text`, if any, is served
+        # on its own (the orchestrator then passes only the quoted transcript,
+        # under a label that does not mention checkpoints or attempts), so the
+        # player cannot tell it is a resumed attempt. env_args arrive as
+        # strings, hence the explicit parse below.
+        resume_banner=True,
         # Where the restore-fidelity audit records are appended (JSONL).
         fidelity_log: Optional[str] = None,
         # `[core, disp]` to reseed the gameplay RNG with AFTER the restore, or
@@ -692,6 +699,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         self._wiki_dir = wiki_dir or None
         self._ledger_text = ledger_text or None
         self._directive = directive or None
+        self._resume_banner = str(resume_banner).strip().lower() not in (
+            "0", "false", "no", "off", "")
         self._fidelity_log = fidelity_log or None
         self._reseed = _parse_reseed(reseed)
         # env_args arrive as dotted-scalar STRINGS through the eval CLI, and
@@ -923,7 +932,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             # the existing `_resume_notice` hook (env_response). The numbers in
             # it come from the checkpoint's harness-computed meta, never from
             # the model's own note -- the note is quoted as text and labelled.
-            _ck_lines = [
+            _ck_lines = [] if not self._resume_banner else [
                 f"RESUMED FROM CHECKPOINT {ck_meta.get('id')} "
                 f"({ck_meta.get('name') or 'unnamed'!r}) -- you are NOT starting "
                 f"fresh. Dlvl {ck_meta.get('dlvl')}, XL {ck_meta.get('xl')}, "
@@ -932,12 +941,14 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 f"{int(ck_meta.get('attempts_from') or 0)} previous attempt(s) "
                 f"started from this state.",
             ]
-            if ck_meta.get("note"):
+            if ck_meta.get("note") and self._resume_banner:
                 _ck_lines.append(
                     f"Why it was saved (author's own words): {ck_meta['note']}")
             if self._ledger_text:
                 _ck_lines.append(self._ledger_text)
-            state["_resume_notice"] = "\n".join(_ck_lines)
+            state["resume_banner_served"] = bool(self._resume_banner)
+            if _ck_lines:
+                state["_resume_notice"] = "\n".join(_ck_lines)
         elif self._ledger_text:
             state["_resume_notice"] = self._ledger_text
         # One-shot, and its OWN block rather than a line inside the resume
