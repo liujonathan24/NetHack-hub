@@ -410,13 +410,26 @@ def seal_checkpoint_session(ck_dir, export_dir, *, call: Optional[int],
     kept[0] = json.dumps(header)
     dest.mkdir(parents=True, exist_ok=True)
     atomic_write(dest / SESSION_FILE, "\n".join(kept) + "\n")
+    # Only the kernel snapshot travels with the checkpoint. Prime Agent's
+    # "harness" memory store (session-artifacts/<id>/harness/) is a
+    # cross-turn information channel that no paper-era rollout had; it is
+    # disabled at the source (harness settings autoRefine.enabled=false) and
+    # excluded here so a stray entry can never ride into a descendant.
     arts_src = Path(export_dir) / "session-artifacts" / old_id
     arts_dst = dest / SESSION_ARTIFACTS
     if arts_src.is_dir():
         if arts_dst.exists():
             shutil.rmtree(arts_dst)
-        shutil.copytree(arts_src, arts_dst)
-        seal["artifacts"] = True
+        arts_dst.mkdir(parents=True)
+        copied = []
+        for f in sorted(arts_src.iterdir()):
+            if f.is_file() and f.name.startswith("kernel-state"):
+                shutil.copy2(f, arts_dst / f.name)
+                copied.append(f.name)
+        seal["artifacts"] = bool(copied)
+        seal["artifact_files"] = copied
+        seal["artifacts_excluded"] = sorted(
+            x.name for x in arts_src.iterdir() if x.name not in copied)
     seal.update(ok=True, records_kept=len(kept), header_id=header["id"],
                 source_header_id=old_id)
     return _finish()

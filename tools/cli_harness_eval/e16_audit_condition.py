@@ -222,13 +222,13 @@ def audit(run_dir: Path, arm: str) -> dict:
         resumed_from_seed = str(a.get("from_checkpoint")) in ("1", "None", "")
         mode = ((adir / "prefix_continuity.txt").read_text().strip()
                 if (adir / "prefix_continuity.txt").is_file() else "text_only")
+        rp = ((adir / "resume_prompt_served.txt").read_text()
+              if (adir / "resume_prompt_served.txt").is_file() else "")
         if prov.get("session_resume"):
             add("session.mode_recorded", mode == a.get("prefix_continuity"),
                 f"file {mode!r} record {a.get('prefix_continuity')!r}", scope)
             add("session.no_unsealed_fallback", mode != "fresh_unsealed", mode, scope)
             if mode == "session":
-                rp = ((adir / "resume_prompt_served.txt").read_text()
-                      if (adir / "resume_prompt_served.txt").is_file() else "")
                 audit_session_attempt(add, spec, adir,
                                       run_dir / "archive" / f"c{str(a.get('from_checkpoint')).lstrip('c')}",
                                       scope, rp, k)
@@ -255,16 +255,37 @@ def audit(run_dir: Path, arm: str) -> dict:
         if not texts:
             add("traces.readable", False, "no served messages found (empty traces.jsonl?)", scope)
             continue
-        joined = "\n".join(t for _, t in texts)
+        # Blocks are counted in what the ENV served (tool-role results). The
+        # user-role nodes of a resumed trace carry the resume turn itself and,
+        # if Prime Agent's auto-refine were on, its review prompts -- both
+        # would double-count. Auto-refine traffic is a failure on its own.
+        joined = "\n".join(t for role, t in texts if role == "tool")
+        user_joined = "\n".join(t for role, t in texts if role == "user")
+        refine = sum(user_joined.count(m) for m in ("<trigger>", "<current_harness_state>", "auto-refine review"))
+        add("traces.no_auto_refine_traffic", refine == 0, f"{refine} auto-refine marker(s) in user-role nodes", scope)
         n_banner = joined.count(BANNER)
         n_dir = joined.count(DIRECTIVE)
         n_blind = joined.count(BLIND_LABEL)
         n_fullpre = joined.count(FULL_PREFIX_LABEL)
         if mode == "session":
-            # The env served none of the blocks: they are the resume turn.
-            leaks = {m: joined.count(m) for m in (BANNER, DIRECTIVE, BLIND_LABEL, FULL_PREFIX_LABEL)
-                     if m in joined}
-            add("traces.env_served_no_blocks_in_session_mode", not leaks, f"leaks={leaks}", scope)
+            # The env served none of the blocks in THIS attempt's own results.
+            # The resumed trace also replays the ancestor's results (which may
+            # legitimately carry attempt 1's first-observation blocks), so
+            # only tool results after the resume turn count.
+            tool_after = []
+            seen_resume = False
+            for role, t in texts:
+                if role == "user" and t.strip() == rp.strip() and rp.strip():
+                    seen_resume = True
+                    continue
+                if seen_resume and role == "tool":
+                    tool_after.append(t)
+            after = "\n".join(tool_after)
+            add("traces.resume_turn_found", seen_resume, "", scope)
+            leaks = {m: after.count(m) for m in (BANNER, DIRECTIVE, BLIND_LABEL, FULL_PREFIX_LABEL)
+                     if m in after}
+            add("traces.env_served_no_blocks_in_session_mode", not leaks and seen_resume,
+                f"leaks={leaks} in {len(tool_after)} post-resume tool results", scope)
         elif spec["blind"]:
             leaks = {m: joined.count(m) for m in (BANNER, DIRECTIVE, FULL_PREFIX_LABEL, "EQUALLY CHOOSABLE",
                                                    "previous attempt(s) started", "lesson:", "LESSON:")

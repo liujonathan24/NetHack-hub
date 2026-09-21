@@ -657,6 +657,15 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
                 for name, url in mcp_urls.items()
             },
         }
+        if self.config.persist_session or self.config.resume_session:
+            # AUTO-REFINE IS ON BY DEFAULT and only dormant without a session
+            # (`getAutoRefineSettings`: `enabled ?? true`, every 25 assistant
+            # turns). Measured 2026-09-21 on the first persisted-session smoke:
+            # extra review model calls through the intercept, a "harness" memory
+            # store written under session-artifacts and appended to later
+            # prompts -- an information channel no session-less rollout ever
+            # had. Off, explicitly, whenever a session is persisted.
+            settings["autoRefine"] = {"enabled": False, "compact": False}
         await runtime.write(f"{agent_dir}/models.json", json.dumps(models, indent=2).encode())
         await runtime.write(f"{agent_dir}/settings.json", json.dumps(settings, indent=2).encode())
         # A missing auth.json is fine, but an empty one keeps the host from ever

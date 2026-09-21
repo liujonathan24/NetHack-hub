@@ -723,3 +723,20 @@ def test_a_relaunch_of_a_resumed_session_keeps_resuming_it(tmp_path):
         assert argv[argv.index("--resume") + 1] == dest
     assert runtime.programs[1][0][-1].startswith("Your previous session ended")
     assert trace.metrics["prime_agent_session_resumed"] == 1.0
+
+
+def test_auto_refine_is_off_whenever_a_session_is_persisted(tmp_path):
+    """Prime Agent's auto-refine defaults ON and only lies dormant without a
+    session; a persisted player would otherwise get review calls every 25
+    turns and a harness memory store. Session-less arms keep their settings
+    byte-identical (no key at all)."""
+    runtime = _launch()
+    settings = json.loads(runtime.files["/tmp/vf-prime-agent/agent-trace-abc/settings.json"])
+    assert "autoRefine" not in settings
+    runtime = _launch(persist_session=True)
+    settings = json.loads(runtime.files["/tmp/vf-prime-agent/agent-trace-abc/settings.json"])
+    assert settings["autoRefine"] == {"enabled": False, "compact": False}
+    seed, _ = _seed_session(tmp_path)
+    runtime = _launch(resume_session=str(seed), resume_prompt="Continue playing.")
+    settings = json.loads(runtime.files["/tmp/vf-prime-agent/agent-trace-abc/settings.json"])
+    assert settings["autoRefine"] == {"enabled": False, "compact": False}

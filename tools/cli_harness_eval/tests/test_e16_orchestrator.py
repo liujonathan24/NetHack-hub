@@ -3439,12 +3439,29 @@ def test_seal_cuts_the_conversation_at_the_checkpoints_call(tmp_path):
     assert "[call#3]" in json.dumps(last)
     assert "[call#4]" not in "\n".join(lines)
     assert (ck / "session" / "artifacts" / "kernel-state.dill").is_file()
+    assert seal["artifact_files"] == ["kernel-state.dill"]
+
+
     # The checkpoint now advertises its conversation, and meta says so.
     got = E.checkpoint_session(ck)
     assert got and got["session"] == ck / "session" / "session.jsonl"
     assert got["artifacts"] == ck / "session" / "artifacts"
     assert checkpoint_meta(ck)["session"] == {
         "sealed": True, "call": 3, "records": 8, "reason": ""}
+
+
+def test_the_seal_never_carries_the_harness_memory_store(tmp_path):
+    export = _write_export(tmp_path / "a001" / "session", "hdr-1", calls=3)
+    h = export / "session-artifacts" / "hdr-1" / "harness"
+    h.mkdir()
+    (h / "harness_state.json").write_text('{"entries": {"prompt": {"x": 1}}}')
+    (export / "session-artifacts" / "hdr-1" / "kernel-state.json").write_text("{}")
+    ck = _bare_checkpoint(tmp_path / "archive", 9, call=2)
+    seal = E.seal_checkpoint_session(ck, export, call=2)
+    assert seal["ok"] and seal["artifacts"]
+    assert seal["artifact_files"] == ["kernel-state.dill", "kernel-state.json"]
+    assert seal["artifacts_excluded"] == ["harness"]
+    assert not (ck / "session" / "artifacts" / "harness").exists()
 
 
 def test_a_seal_that_cannot_find_its_call_is_recorded_and_not_resumable(tmp_path):
