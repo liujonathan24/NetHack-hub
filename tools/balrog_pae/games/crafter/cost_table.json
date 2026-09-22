@@ -1,0 +1,61 @@
+{
+  "params": {
+    "in_tok_per_step_base": 1712,
+    "out_tok_per_step_base": 266,
+    "in_tok_per_step_pae": 1389,
+    "out_tok_per_step_pae": 214,
+    "base_steps": 278,
+    "resume_steps_mean": 9,
+    "billed_ratio": 0.4121,
+    "orch_overhead": 0.05,
+    "seeds": 10,
+    "attempts": 10,
+    "cap": 400,
+    "price_in": 1.54,
+    "price_out": 4.84
+  },
+  "rows": [
+    {
+      "arm": "base (unchanged BALROG)",
+      "runs": 10,
+      "llm_calls_per_run": 278,
+      "note": "1 episode/seed, dies at ~278 steps (BALROG cap 2000 never binds)",
+      "list_usd": 10.9084976,
+      "billed_usd": 4.495391860960001
+    },
+    {
+      "arm": "PAE N=10, cap 400 - measured (resumes died after ~9 steps)",
+      "runs": 10,
+      "llm_calls_per_run": 359,
+      "note": "attempt 1 = base episode; 9 resumes x 9 steps, +5% orchestrator",
+      "list_usd": 11.96748399,
+      "billed_usd": 4.931800152279
+    },
+    {
+      "arm": "PAE N=10, cap 400 - pessimistic (resume plays ~base length)",
+      "runs": 10,
+      "llm_calls_per_run": 2780,
+      "note": "attempt 1 = base episode; 9 resumes x 278 steps, +5% orchestrator",
+      "list_usd": 92.67299580000001,
+      "billed_usd": 38.190541569180006
+    },
+    {
+      "arm": "PAE N=10, cap 400 - worst case (every resume runs to the cap)",
+      "runs": 10,
+      "llm_calls_per_run": 3878,
+      "note": "attempt 1 = base episode; 9 resumes x 400 steps, +5% orchestrator",
+      "list_usd": 129.27549557999998,
+      "billed_usd": 53.274431728517996
+    },
+    {
+      "arm": "PAE N=10, UNCAPPED (BALROG 2000)",
+      "runs": 10,
+      "llm_calls_per_run": 18278,
+      "note": "what happens if --max-steps is not passed: the budget risk",
+      "list_usd": 609.3082795799999,
+      "billed_usd": 251.09594201491797
+    }
+  ],
+  "panel_total_list_usd": 22.875981590000002,
+  "panel_total_billed_usd": 9.427192013239
+}
