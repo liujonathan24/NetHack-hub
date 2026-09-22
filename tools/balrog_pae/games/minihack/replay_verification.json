@@ -1,5 +1,5 @@
 {
-  "generated": "2026-09-22T07:22:37",
+  "generated": "2026-09-22T09:22:44",
   "tasks": {
     "MiniHack-Quest-Easy-v0|scripted": {
       "task": "MiniHack-Quest-Easy-v0",
@@ -62,8 +62,8 @@
             "long_term_context": "7035c078d64c6f2f",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 2.5,
-          "ms_per_replayed_step": 0.631
+          "restore_ms": 2.6,
+          "ms_per_replayed_step": 0.638
         },
         {
           "checkpoint_step": 80,
@@ -113,8 +113,8 @@
             "long_term_context": "c827a82581bf90c1",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 21.3,
-          "ms_per_replayed_step": 0.267
+          "restore_ms": 21.7,
+          "ms_per_replayed_step": 0.271
         },
         {
           "checkpoint_step": 90,
@@ -164,8 +164,8 @@
             "long_term_context": "5287e92fafb524cd",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 23.5,
-          "ms_per_replayed_step": 0.261
+          "restore_ms": 23.7,
+          "ms_per_replayed_step": 0.264
         }
       ],
       "all_identical": true,
@@ -247,7 +247,7 @@
             "short_term_context": "b7f979bda1e6b0c2"
           },
           "restore_ms": 2.2,
-          "ms_per_replayed_step": 0.555
+          "ms_per_replayed_step": 0.549
         },
         {
           "checkpoint_step": 50,
@@ -297,8 +297,8 @@
             "long_term_context": "23f90bb876a701ea",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 16.5,
-          "ms_per_replayed_step": 0.329
+          "restore_ms": 13.4,
+          "ms_per_replayed_step": 0.268
         },
         {
           "checkpoint_step": 60,
@@ -348,8 +348,8 @@
             "long_term_context": "1e14f112a28b8098",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 15.7,
-          "ms_per_replayed_step": 0.261
+          "restore_ms": 15.8,
+          "ms_per_replayed_step": 0.263
         }
       ],
       "all_identical": true,
@@ -430,8 +430,8 @@
             "long_term_context": "e1c6c6cbaee91dec",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 2.4,
-          "ms_per_replayed_step": 0.599
+          "restore_ms": 2.0,
+          "ms_per_replayed_step": 0.512
         },
         {
           "checkpoint_step": 70,
@@ -481,8 +481,8 @@
             "long_term_context": "153eca2c4a843d4f",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 17.9,
-          "ms_per_replayed_step": 0.256
+          "restore_ms": 18.1,
+          "ms_per_replayed_step": 0.259
         },
         {
           "checkpoint_step": 80,
@@ -532,8 +532,8 @@
             "long_term_context": "b4e94880f2d31ae5",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 20.3,
-          "ms_per_replayed_step": 0.254
+          "restore_ms": 20.5,
+          "ms_per_replayed_step": 0.256
         }
       ],
       "all_identical": true,
@@ -614,8 +614,8 @@
             "long_term_context": "dc74ceec50cea2a0",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 7.2,
-          "ms_per_replayed_step": 1.791
+          "restore_ms": 7.4,
+          "ms_per_replayed_step": 1.854
         },
         {
           "checkpoint_step": 80,
@@ -665,8 +665,8 @@
             "long_term_context": "c56630e8b8c3cac0",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 41.2,
-          "ms_per_replayed_step": 0.515
+          "restore_ms": 39.3,
+          "ms_per_replayed_step": 0.492
         },
         {
           "checkpoint_step": 90,
@@ -716,8 +716,8 @@
             "long_term_context": "c19cf1af5b2aab44",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 37.4,
-          "ms_per_replayed_step": 0.415
+          "restore_ms": 37.0,
+          "ms_per_replayed_step": 0.412
         }
       ],
       "all_identical": true,
@@ -798,8 +798,8 @@
             "long_term_context": "0e9cab670deabf13",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 7.1,
-          "ms_per_replayed_step": 1.783
+          "restore_ms": 6.7,
+          "ms_per_replayed_step": 1.677
         },
         {
           "checkpoint_step": 80,
@@ -849,8 +849,8 @@
             "long_term_context": "d9ba4f93098556eb",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 32.8,
-          "ms_per_replayed_step": 0.411
+          "restore_ms": 32.3,
+          "ms_per_replayed_step": 0.403
         },
         {
           "checkpoint_step": 90,
@@ -900,8 +900,8 @@
             "long_term_context": "ca4d4b27d4f64833",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 35.8,
-          "ms_per_replayed_step": 0.397
+          "restore_ms": 35.1,
+          "ms_per_replayed_step": 0.39
         }
       ],
       "all_identical": true,
@@ -977,8 +977,8 @@
             "long_term_context": "29ca7735818e89a4",
             "short_term_context": "3389f984d73e2142"
           },
-          "restore_ms": 2.1,
-          "ms_per_replayed_step": 0.686
+          "restore_ms": 2.2,
+          "ms_per_replayed_step": 0.729
         },
         {
           "checkpoint_step": 6,
@@ -1103,7 +1103,7 @@
             "short_term_context": "b7f979bda1e6b0c2"
           },
           "restore_ms": 13.7,
-          "ms_per_replayed_step": 0.273
+          "ms_per_replayed_step": 0.274
         },
         {
           "checkpoint_step": 60,
@@ -1150,8 +1150,8 @@
             "long_term_context": "fe981b44082b9ee8",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 16.0,
-          "ms_per_replayed_step": 0.267
+          "restore_ms": 16.2,
+          "ms_per_replayed_step": 0.27
         },
         {
           "checkpoint_step": 70,
@@ -1198,8 +1198,8 @@
             "long_term_context": "06db8a80d9aca282",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 18.7,
-          "ms_per_replayed_step": 0.268
+          "restore_ms": 18.3,
+          "ms_per_replayed_step": 0.261
         }
       ],
       "all_identical": true,
@@ -1275,8 +1275,8 @@
             "long_term_context": "bdd43f695e7486f5",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 9.3,
-          "ms_per_replayed_step": 0.465
+          "restore_ms": 6.2,
+          "ms_per_replayed_step": 0.309
         },
         {
           "checkpoint_step": 30,
@@ -1323,8 +1323,8 @@
             "long_term_context": "ca8b980d07960658",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 13.6,
-          "ms_per_replayed_step": 0.452
+          "restore_ms": 8.9,
+          "ms_per_replayed_step": 0.296
         },
         {
           "checkpoint_step": 40,
@@ -1371,8 +1371,8 @@
             "long_term_context": "e2ebfa0093ee8abd",
             "short_term_context": "b7f979bda1e6b0c2"
           },
-          "restore_ms": 17.5,
-          "ms_per_replayed_step": 0.438
+          "restore_ms": 11.0,
+          "ms_per_replayed_step": 0.275
         }
       ],
       "all_identical": true,
