@@ -44,7 +44,7 @@ def load(run_dir: Path):
     return s, rows
 
 
-def per_task(runs: Path, task: str, N: int, resume_steps_override=None):
+def per_task(runs: Path, task: str, N: int, resume_model: str = "fixed_rule"):
     base_dir, pae_dir = runs / f"{task}_s0_base", runs / f"{task}_s0_pae"
     bs, brows = load(base_dir)
     a1 = brows[0]
@@ -73,8 +73,21 @@ def per_task(runs: Path, task: str, N: int, resume_steps_override=None):
         S_res = max(1, CAP - ckpt)
         in_res, out_res = in_base * 1.25, out_base
         orch_in = orch_out = 0.0
-    if resume_steps_override:
-        S_res = resume_steps_override
+    # How long a resumed attempt runs in the REAL panel (the calibration PAE
+    # smokes are deliberately short, so their attempt length is not the number
+    # to project with; their tokens/call is).
+    ckpt = (max(0, S_base - 1) // 10) * 10
+    if resume_model == "fixed_rule":
+        # the fixed rule resumes the latest resumable checkpoint of the
+        # previous attempt, i.e. the last periodic one before it ended
+        S_res = max(1, CAP - ckpt)
+    elif resume_model == "worst":
+        # an orchestrator that branches at the very start: a full episode
+        S_res = CAP
+    elif resume_model == "measured":
+        pass          # whatever the calibration run actually played
+    else:
+        raise ValueError(resume_model)
 
     base = {"calls": S_base, "in": S_base * in_base, "out": S_base * out_base}
     pae_calls = S_base + (N - 1) * S_res
@@ -113,6 +126,11 @@ def main():
     ap.add_argument("-N", "--attempts", type=int, default=10)
     ap.add_argument("--seeds", type=int, default=5)
     ap.add_argument("--ratio", type=float, default=None, help="override the measured billed ratio")
+    ap.add_argument("--resume-model", default="fixed_rule", choices=["fixed_rule", "worst", "measured"],
+                    help="how many steps a resumed attempt plays in the real panel: "
+                         "fixed_rule = cap - last periodic checkpoint of a base-length episode; "
+                         "worst = the full cap (orchestrator branches at the start); "
+                         "measured = whatever the short calibration run played")
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
 
@@ -121,9 +139,11 @@ def main():
     if a.ratio:
         ratio = a.ratio
 
-    rows = [per_task(runs, t, a.attempts) for t in TASKS if (runs / f"{t}_s0_base" / "summary.json").exists()]
+    rows = [per_task(runs, t, a.attempts, a.resume_model)
+            for t in TASKS if (runs / f"{t}_s0_base" / "summary.json").exists()]
 
-    print(f"Calibration source: {runs}   seeds/task: {a.seeds}   PAE attempts N={a.attempts}")
+    print(f"Calibration source: {runs}   seeds/task: {a.seeds}   PAE attempts N={a.attempts}"
+          f"   resume model: {a.resume_model}")
     print(f"List price: ${PRICE_IN}/M in, ${PRICE_OUT}/M out. "
           f"Measured billed ratio: {ratio:.3f}  (list ${lst:.2f} -> billed ${bil:.2f} over the calibration runs)\n")
 
@@ -158,7 +178,7 @@ def main():
         Path(a.json).write_text(json.dumps(
             {"price_in": PRICE_IN, "price_out": PRICE_OUT, "billed_ratio": ratio,
              "calibration_list_usd": lst, "calibration_billed_usd": bil,
-             "seeds": a.seeds, "attempts": a.attempts, "tasks": out_rows,
+             "seeds": a.seeds, "attempts": a.attempts, "resume_model": a.resume_model, "tasks": out_rows,
              "total_base_usd_list": tb, "total_pae_usd_list": tp,
              "total_usd_list": tb + tp, "total_usd_billed": (tb + tp) * ratio},
             indent=2, default=str))

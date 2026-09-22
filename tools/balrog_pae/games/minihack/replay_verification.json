@@ -870,6 +870,450 @@
         "short_term_context"
       ],
       "wall_s": 0.2
+    },
+    "MiniHack-Quest-Easy-v0|trace": {
+      "task": "MiniHack-Quest-Easy-v0",
+      "seed": 0,
+      "source": "trace",
+      "run_dir": "/root/nld/gen_runs/minihack/MiniHack-Quest-Easy-v0_s0_base",
+      "episode_steps_played": 9,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 3,
+      "checkpoints_taken": 3,
+      "invalid_action_steps": [],
+      "replays": [
+        {
+          "checkpoint_step": 3,
+          "n_replayed_actions": 3,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "c29658ba8bd43adc",
+            "tty_chars": "b869d57ccb309d23",
+            "tty_colors": "4edaee1b95ff5749",
+            "blstats": "a7d4c1eddeda8257",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "658c311991d7a77d",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "29ca7735818e89a4",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "c29658ba8bd43adc",
+            "tty_chars": "b869d57ccb309d23",
+            "tty_colors": "4edaee1b95ff5749",
+            "blstats": "a7d4c1eddeda8257",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "658c311991d7a77d",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "29ca7735818e89a4",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 2.2,
+          "ms_per_replayed_step": 0.733
+        },
+        {
+          "checkpoint_step": 6,
+          "n_replayed_actions": 6,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "29fdbcd01eceda1d",
+            "tty_chars": "db8a48569c68ff6b",
+            "tty_colors": "49c1b88a25ed578e",
+            "blstats": "dd6be58115dc07c7",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "bfeebd963a7d176c",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "a331f4345b97037b",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "29fdbcd01eceda1d",
+            "tty_chars": "db8a48569c68ff6b",
+            "tty_colors": "49c1b88a25ed578e",
+            "blstats": "dd6be58115dc07c7",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "bfeebd963a7d176c",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "a331f4345b97037b",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 3.0,
+          "ms_per_replayed_step": 0.5
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": false,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.7
+    },
+    "MiniHack-Quest-Medium-v0|trace": {
+      "task": "MiniHack-Quest-Medium-v0",
+      "seed": 0,
+      "source": "trace",
+      "run_dir": "/root/nld/gen_runs/minihack/MiniHack-Quest-Medium-v0_s0_base",
+      "episode_steps_played": 79,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 8,
+      "invalid_action_steps": [],
+      "replays": [
+        {
+          "checkpoint_step": 50,
+          "n_replayed_actions": 50,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "3ce3e354eebe2392",
+            "tty_chars": "41046fbddbba7f6f",
+            "tty_colors": "8333b8f95f3cc6dc",
+            "blstats": "bbde3cb084979dc6",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f48d1fe51ec34b95",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "edf66d513bd11428",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "3ce3e354eebe2392",
+            "tty_chars": "41046fbddbba7f6f",
+            "tty_colors": "8333b8f95f3cc6dc",
+            "blstats": "bbde3cb084979dc6",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f48d1fe51ec34b95",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "edf66d513bd11428",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 13.5,
+          "ms_per_replayed_step": 0.271
+        },
+        {
+          "checkpoint_step": 60,
+          "n_replayed_actions": 60,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "4d78530c5bbea0dd",
+            "tty_chars": "38717e0f1d67cb35",
+            "tty_colors": "b5f5cdbd64b0bbf0",
+            "blstats": "c594e429c2b959cf",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e71d680b0ae91228",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "fe981b44082b9ee8",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "4d78530c5bbea0dd",
+            "tty_chars": "38717e0f1d67cb35",
+            "tty_colors": "b5f5cdbd64b0bbf0",
+            "blstats": "c594e429c2b959cf",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e71d680b0ae91228",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "fe981b44082b9ee8",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 16.0,
+          "ms_per_replayed_step": 0.267
+        },
+        {
+          "checkpoint_step": 70,
+          "n_replayed_actions": 70,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "09daed7221503e8c",
+            "tty_chars": "43df2c7209fb753e",
+            "tty_colors": "c8e72dd10caee2f7",
+            "blstats": "04f1cc849dfe5ee3",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b81c39ae0e7440a9",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "06db8a80d9aca282",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "09daed7221503e8c",
+            "tty_chars": "43df2c7209fb753e",
+            "tty_colors": "c8e72dd10caee2f7",
+            "blstats": "04f1cc849dfe5ee3",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b81c39ae0e7440a9",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "06db8a80d9aca282",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 18.2,
+          "ms_per_replayed_step": 0.26
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": false,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.8
+    },
+    "MiniHack-CorridorBattle-Dark-v0|trace": {
+      "task": "MiniHack-CorridorBattle-Dark-v0",
+      "seed": 0,
+      "source": "trace",
+      "run_dir": "/root/nld/gen_runs/minihack/MiniHack-CorridorBattle-Dark-v0_s0_base",
+      "episode_steps_played": 46,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 5,
+      "invalid_action_steps": [],
+      "replays": [
+        {
+          "checkpoint_step": 20,
+          "n_replayed_actions": 20,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "f40360a4ccf6bcb0",
+            "tty_chars": "55261b0da1c74f9d",
+            "tty_colors": "7752ea11c99900d3",
+            "blstats": "cc154f121a60a120",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f5862534469d4df8",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "bdd43f695e7486f5",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "f40360a4ccf6bcb0",
+            "tty_chars": "55261b0da1c74f9d",
+            "tty_colors": "7752ea11c99900d3",
+            "blstats": "cc154f121a60a120",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f5862534469d4df8",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "bdd43f695e7486f5",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 6.2,
+          "ms_per_replayed_step": 0.311
+        },
+        {
+          "checkpoint_step": 30,
+          "n_replayed_actions": 30,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "ef97a3490a85c22b",
+            "tty_chars": "db756ef2d936948f",
+            "tty_colors": "c06550ff134f6549",
+            "blstats": "af6d4cce42d6616e",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e7720e2d022b7cf8",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "ca8b980d07960658",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "ef97a3490a85c22b",
+            "tty_chars": "db756ef2d936948f",
+            "tty_colors": "c06550ff134f6549",
+            "blstats": "af6d4cce42d6616e",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e7720e2d022b7cf8",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "ca8b980d07960658",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 8.9,
+          "ms_per_replayed_step": 0.296
+        },
+        {
+          "checkpoint_step": 40,
+          "n_replayed_actions": 40,
+          "prefix_contains_invalid_action": false,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "8c80b7bc46e77a2a",
+            "tty_chars": "0f874d73a5348b82",
+            "tty_colors": "a1e863251b039397",
+            "blstats": "4e3aa85934ff964d",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b25a3fcf180982ed",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "e2ebfa0093ee8abd",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "8c80b7bc46e77a2a",
+            "tty_chars": "0f874d73a5348b82",
+            "tty_colors": "a1e863251b039397",
+            "blstats": "4e3aa85934ff964d",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b25a3fcf180982ed",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "e2ebfa0093ee8abd",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 10.9,
+          "ms_per_replayed_step": 0.274
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": false,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.8
     }
   },
   "summary": {
@@ -881,6 +1325,6 @@
       "MiniHack-Quest-Easy-v0",
       "MiniHack-Quest-Medium-v0"
     ],
-    "n_task_source_pairs": 5
+    "n_task_source_pairs": 8
   }
 }

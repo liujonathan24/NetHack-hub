@@ -64,7 +64,7 @@ wallet_usd() {
 }
 
 BATCH="$OUT_ROOT/batch_$(date +%Y%m%d_%H%M%S)${TAG}"
-mkdir -p "$BATCH"
+[[ $DRY -eq 0 ]] && mkdir -p "$BATCH"
 echo "batch dir : $BATCH"
 echo "tasks     : $TASKS"
 echo "seeds     : $SEEDS"

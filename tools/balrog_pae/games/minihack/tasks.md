@@ -137,6 +137,13 @@ evaluator's `"Your previous output did not contain a valid action. Defaulted to
 action: …"` rewrite is inside the compared text. Result: 15/15 replays across
 the five tasks, all 10 fields byte-identical, at 0.26–0.95 ms per replayed step.
 
+The five GLM-5.2 base episodes emitted **zero** invalid actions between them,
+so the invalid-action case had to be forced: `--source scripted` injects
+non-action completions at fixed steps. `--source trace` re-runs the same
+verification over the action sequence an actual base episode produced
+(Quest-Easy 2 replays over 9 steps, Quest-Medium 3 over 79, CorridorBattle-Dark
+3 over 46 — all identical), which is the weaker but more realistic check.
+
 One trap found while writing the verifier and worth repeating: **NLE hands back
 aliases of its internal `last_observation` buffers.** A checkpoint that keeps
 `obs["obs"]` by reference silently tracks the live env and every later
