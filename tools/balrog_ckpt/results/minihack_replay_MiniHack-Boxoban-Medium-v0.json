@@ -1,0 +1,50 @@
+{
+  "env": "minihack",
+  "task": "MiniHack-Boxoban-Medium-v0",
+  "seed": 7,
+  "observation_keys": [
+    "text",
+    "image",
+    "obs"
+  ],
+  "observation_keys_nested": {
+    "text": [
+      "long_term_context",
+      "short_term_context"
+    ],
+    "image": "NoneType",
+    "obs": [
+      "blstats",
+      "glyphs",
+      "inv_letters",
+      "inv_strs",
+      "text_message",
+      "tty_chars",
+      "tty_colors",
+      "tty_cursor"
+    ]
+  },
+  "effective_seeds": [
+    7,
+    4457770387270507234,
+    false
+  ],
+  "ok": true,
+  "identical_replays": true,
+  "n_replays": 3,
+  "prefix_len": 30,
+  "branch_len": 50,
+  "episode_ended_in_prefix": false,
+  "episode_ended_in_branch": false,
+  "reset_ms": 5.430535413324833,
+  "step_ms_mean": 0.2965057356050238,
+  "restore_by_replay_ms": 13.097668066620827,
+  "restore_by_replay_ms_per_step": 0.43658893555402756,
+  "balrog_reset_seed_only_identical": true,
+  "actions_used": [
+    "north",
+    "east",
+    "south",
+    "west"
+  ]
+}

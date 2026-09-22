@@ -1,0 +1,109 @@
+{
+  "env": "textworld",
+  "tasks": {
+    "treasure_hunter": {
+      "task": "treasure_hunter",
+      "seed": 3,
+      "backend": "GitGlulxEnv",
+      "chain": [
+        "Filter",
+        "Limit",
+        "GenericEnvironment",
+        "TWInform7",
+        "StateTracking",
+        "Inform7Data",
+        "GameData",
+        "GitGlulxEnv"
+      ],
+      "observation_keys": [
+        "text",
+        "image"
+      ],
+      "gamefile": "/tmp/claude-0/-root-NetHack-hub/5557e37f-5844-469d-83a8-5ac4ec77b191/scratchpad/balrog_ckpt/BALROG/tw_games/treasure_hunter/seed_10915.ulx",
+      "replay_identical": true,
+      "n_replays": 3,
+      "prefix_len": 20,
+      "branch_len": 50,
+      "reset_ms": 50.189790005485214,
+      "step_ms": 0.675752315492857,
+      "restore_by_replay_ms": 63.704836315342355,
+      "chain_copy": "NotImplementedError: ",
+      "base_copy": "NotImplementedError: ",
+      "native": {
+        "ok": false,
+        "error": "NotImplementedError: GitGlulxEnv has no state export (Environment.copy() -> NotImplementedError)"
+      }
+    },
+    "the_cooking_game": {
+      "task": "the_cooking_game",
+      "seed": 3,
+      "backend": "JerichoEnv",
+      "chain": [
+        "Filter",
+        "Limit",
+        "GenericEnvironment",
+        "TWInform7",
+        "StateTracking",
+        "Inform7Data",
+        "GameData",
+        "JerichoEnv"
+      ],
+      "observation_keys": [
+        "text",
+        "image"
+      ],
+      "gamefile": "/tmp/claude-0/-root-NetHack-hub/5557e37f-5844-469d-83a8-5ac4ec77b191/scratchpad/balrog_ckpt/BALROG/tw_games/the_cooking_game/cooking_item5_seed_11996.z8",
+      "replay_identical": true,
+      "n_replays": 3,
+      "prefix_len": 20,
+      "branch_len": 50,
+      "reset_ms": 95.98926268517971,
+      "step_ms": 1.8071821535981838,
+      "restore_by_replay_ms": 132.1329057571434,
+      "chain_copy": "NotImplementedError: ",
+      "base_copy": "ok",
+      "native": {
+        "ok": true,
+        "identical_branches": true,
+        "saved_state_unchanged_after_branch_mutation": true,
+        "matches_replay_branch": true,
+        "snapshot_ms": 26.37549862265587,
+        "restore_ms": 44.74354690561692,
+        "snapshot_bytes": 844156
+      }
+    },
+    "coin_collector": {
+      "task": "coin_collector",
+      "seed": 3,
+      "backend": "GitGlulxEnv",
+      "chain": [
+        "Filter",
+        "Limit",
+        "GenericEnvironment",
+        "TWInform7",
+        "StateTracking",
+        "Inform7Data",
+        "GameData",
+        "GitGlulxEnv"
+      ],
+      "observation_keys": [
+        "text",
+        "image"
+      ],
+      "gamefile": "/tmp/claude-0/-root-NetHack-hub/5557e37f-5844-469d-83a8-5ac4ec77b191/scratchpad/balrog_ckpt/BALROG/tw_games/coin_collector/level_220_seed_1171.ulx",
+      "replay_identical": true,
+      "n_replays": 3,
+      "prefix_len": 20,
+      "branch_len": 50,
+      "reset_ms": 16.719063743948936,
+      "step_ms": 0.5366209362234388,
+      "restore_by_replay_ms": 27.451482468417712,
+      "chain_copy": "NotImplementedError: ",
+      "base_copy": "NotImplementedError: ",
+      "native": {
+        "ok": false,
+        "error": "NotImplementedError: GitGlulxEnv has no state export (Environment.copy() -> NotImplementedError)"
+      }
+    }
+  }
+}
