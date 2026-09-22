@@ -740,3 +740,32 @@ def test_auto_refine_is_off_whenever_a_session_is_persisted(tmp_path):
     runtime = _launch(resume_session=str(seed), resume_prompt="Continue playing.")
     settings = json.loads(runtime.files["/tmp/vf-prime-agent/agent-trace-abc/settings.json"])
     assert settings["autoRefine"] == {"enabled": False, "compact": False}
+
+
+def test_the_session_is_exported_even_when_the_rollout_is_cancelled():
+    """verifiers cancels `launch` on the rollout timeout. A 447-call life hit
+    it (2026-09-22); without this the export never ran and every checkpoint
+    of that life was unresumable."""
+    import asyncio
+
+    class _CancellingRuntime(_RecordingRuntime):
+        async def run_program(self, argv, env):
+            self.programs.append((argv, env))
+            raise asyncio.CancelledError()
+
+    import types
+    from nethack_prime_agent import PrimeAgentHarness, PrimeAgentHarnessConfig
+
+    harness = PrimeAgentHarness(PrimeAgentHarnessConfig(
+        id="nethack-prime-agent", persist_session=True,
+        session_export_dir="/out/a001/session"))
+    ctx = types.SimpleNamespace(model="z-ai/glm-5.2",
+                                sampling=types.SimpleNamespace(reasoning_effort=None))
+    runtime = _CancellingRuntime()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(harness.launch(ctx, _build_trace(), runtime,
+                                   "http://127.0.0.1:9999/v1", "vf-secret",
+                                   {"nethack": "http://127.0.0.1:41449"}))
+    scripts = [a[-1] for a, _ in runtime.commands if a[:2] == ["sh", "-c"]]
+    assert any("cp -a /tmp/vf-prime-agent/agent-trace-abc/sessions /out/a001/session/" in s
+               for s in scripts), scripts

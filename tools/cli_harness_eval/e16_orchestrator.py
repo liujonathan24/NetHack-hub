@@ -307,12 +307,60 @@ def checkpoint_session(ck_dir) -> Optional[dict]:
             "seal": seal}
 
 
+PRIME_AGENT_INSTALL_DIR = "/tmp/vf-prime-agent"
+
+
+def _agent_dirs_for_attempt(out_dir) -> list:
+    """The harness's per-rollout agent dirs for an attempt, from the trace ids
+    in its traces.jsonl (one per rollout; a retried attempt has two)."""
+    out = []
+    p = Path(out_dir) / "traces.jsonl"
+    if not p.is_file():
+        return out
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            tid = json.loads(line).get("id")
+        except json.JSONDecodeError:
+            continue
+        if tid:
+            d = Path(PRIME_AGENT_INSTALL_DIR) / f"agent-{tid}"
+            if d.is_dir():
+                out.append(d)
+    return out
+
+
 def _session_export_file(export_dir) -> Optional[Path]:
-    """The one session file the harness exported for an attempt."""
-    d = Path(export_dir) / "sessions"
+    """The one session file the harness exported for an attempt.
+
+    FALLBACK: when the harness was cancelled before it could export (the
+    rollout timeout; measured 2026-09-22, ablate_full_s0_sr2 a001, 447
+    calls), the session file is still on disk in the rollout's agent dir --
+    Prime Agent appends records as it goes. It is copied into the export
+    layout first, so the seal's source path is always under the attempt.
+    """
+    export_dir = Path(export_dir)
+    d = export_dir / "sessions"
     files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime) \
         if d.is_dir() else []
-    return files[-1] if files else None
+    if files:
+        return files[-1]
+    for agent_dir in _agent_dirs_for_attempt(export_dir.parent):
+        src = sorted((agent_dir / "sessions").glob("*.jsonl"),
+                     key=lambda p: p.stat().st_mtime) \
+            if (agent_dir / "sessions").is_dir() else []
+        if not src:
+            continue
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src[-1], d / src[-1].name)
+        arts = agent_dir / "session-artifacts"
+        if arts.is_dir():
+            dst = export_dir / "session-artifacts"
+            if not dst.exists():
+                shutil.copytree(arts, dst)
+        (export_dir / "recovered_from_agent_dir.txt").write_text(
+            f"{agent_dir}\n", encoding="utf-8")
+        return d / src[-1].name
+    return None
 
 
 def _record_texts(rec: dict) -> list:

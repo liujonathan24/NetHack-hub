@@ -760,6 +760,26 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
         # The directory is small and carries no secret (models.json holds an env
         # var NAME, auth.json is empty, settings.json holds localhost URLs), so it
         # is left in `install_dir` for the operator to clear between runs.
+        # EXPORT ON EVERY EXIT PATH. verifiers cancels this coroutine on the
+        # rollout timeout (7200 s); a 447-call life measured 2026-09-22
+        # (ablate_full_s0_sr2 a001) hit it, the export below never ran, and
+        # all 30 of that life's checkpoints sealed as failed -- the next
+        # attempt then launched as a fresh text-only rollout. The `finally`
+        # copies whatever Prime Agent has flushed (it appends records as it
+        # goes) before the cancellation propagates.
+        try:
+            result = await self._run_launch_loop(runtime, trace, argv, env, agent_dir,
+                                                 persist, session_file)
+        finally:
+            if persist and self.config.session_export_dir:
+                try:
+                    await self._export_session(runtime, agent_dir)
+                except BaseException as exc:  # noqa: BLE001
+                    logger.warning("session export after launch failed: %r", exc)
+        return result
+
+    async def _run_launch_loop(self, runtime, trace, argv, env, agent_dir,
+                               persist: bool, session_file: str) -> ProgramResult:
         result = await self._run_once(runtime, argv, env, agent_dir, attempt=0)
 
         # Auto-resume: a clean exit only means `--print` mode ran out of tool
@@ -803,8 +823,6 @@ class PrimeAgentHarness(Harness[PrimeAgentHarnessConfig]):
             trace.record_metric("prime_agent_relaunches", float(relaunches))
             trace.record_metric("prime_agent_session_resumed",
                                 1.0 if self.config.resume_session else 0.0)
-        if persist and self.config.session_export_dir:
-            await self._export_session(runtime, agent_dir)
         return result
 
     # -- persistent sessions --------------------------------------------------
