@@ -1,0 +1,58 @@
+{
+  "env": "minihack",
+  "task": "MiniHack-Quest-Easy-v0",
+  "seed": 7,
+  "observation_keys": [
+    "text",
+    "image",
+    "obs"
+  ],
+  "observation_keys_nested": {
+    "text": [
+      "long_term_context",
+      "short_term_context"
+    ],
+    "image": "NoneType",
+    "obs": [
+      "blstats",
+      "glyphs",
+      "inv_letters",
+      "inv_strs",
+      "text_message",
+      "tty_chars",
+      "tty_colors",
+      "tty_cursor"
+    ]
+  },
+  "effective_seeds": [
+    7,
+    5911998014773052763,
+    false
+  ],
+  "ok": true,
+  "identical_replays": true,
+  "n_replays": 3,
+  "prefix_len": 13,
+  "branch_len": 0,
+  "episode_ended_in_prefix": true,
+  "episode_ended_in_branch": false,
+  "reset_ms": 1.4233579859137535,
+  "step_ms_mean": 0.24974082883160847,
+  "restore_by_replay_ms": 4.280450753867626,
+  "restore_by_replay_ms_per_step": 0.329265442605202,
+  "balrog_reset_seed_only_identical": true,
+  "actions_used": [
+    "north",
+    "east",
+    "south",
+    "west",
+    "northeast",
+    "southeast",
+    "southwest",
+    "northwest",
+    "wait",
+    "kick",
+    "pickup",
+    "search"
+  ]
+}

@@ -1,0 +1,45 @@
+==============================================================================
+MiniHack on NetHack-engine fork: task=MiniHack-Quest-Easy-v0 seed=7 redraw=True workdir=/tmp/claude-0/-root-NetHack-hub/5557e37f-5844-469d-83a8-5ac4ec77b191/scratchpad/balrog_ckpt/mh_engine_MiniHack-Quest-Easy-v0
+==============================================================================
+NetHack exit with status 1833410192
+NetHack exit with status 1833410192
+double free or corruption (out)
+=== NLE SENTINEL: SIGABRT ===
+pid=3645573 tid=140384362129216
+FAULTING ENV: id=0 seed=0x7 step=82 action=104 dlvl=0
+--- all envs (id seed step heartbeat dlvl) ---
+0 0x7 82 82 0
+--- backtrace ---
+/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so(+0x16bc33)[0x7fad11c67c33]
+/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so(+0x16bea5)[0x7fad11c67ea5]
+/lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x7fadc80db520]
+/lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x12c)[0x7fadc812f9bc]
+/lib/x86_64-linux-gnu/libc.so.6(raise+0x16)[0x7fadc80db476]
+/lib/x86_64-linux-gnu/libc.so.6(abort+0xd3)[0x7fadc80c17f3]
+/lib/x86_64-linux-gnu/libc.so.6(+0x89637)[0x7fadc8122637]
+/lib/x86_64-linux-gnu/libc.so.6(+0xa0cbc)[0x7fadc8139cbc]
+/lib/x86_64-linux-gnu/libc.so.6(+0xa2e30)[0x7fadc813be30]
+/lib/x86_64-linux-gnu/libc.so.6(free+0x73)[0x7fadc813e413]
+/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so(_ZN10nethack_rl9NetHackRL11load_mirrorEPKv+0x1c4)[0x7fad11d53994]
+/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so(nle_fr_restore+0xc7)[0x7fad11c66b87]
+.venv/bin/python[0x84f052]
+.venv/bin/python[0x84d9d6]
+.venv/bin/python[0x84d660]
+.venv/bin/python[0x764d26]
+.venv/bin/python[0x7633e5]
+.venv/bin/python(_PyEval_EvalFrameDefault+0x311c)[0x1818d1c]
+.venv/bin/python(PyEval_EvalCode+0xde)[0x1892c20]
+.venv/bin/python[0x18afc09]
+.venv/bin/python[0x1a34d85]
+.venv/bin/python(_PyRun_SimpleFileObject+0x106)[0x1a347c8]
+.venv/bin/python(_PyRun_AnyFileObject+0x4a)[0x19f0ade]
+.venv/bin/python[0x19f0a54]
+.venv/bin/python[0x19f0961]
+.venv/bin/python[0x1ad73e3]
+.venv/bin/python[0x1949e5f]
+.venv/bin/python[0x1949c6c]
+/lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x7fadc80c2d90]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x7fadc80c2e40]
+.venv/bin/python(_start+0x29)[0x19a7169]
+=== END SENTINEL ===
+timeout: the monitored command dumped core
