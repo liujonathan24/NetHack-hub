@@ -39,6 +39,7 @@ Inference requires gets sent.
 | `aggregate.py` | base mean vs PAE mean-of-best across seeds, per game/task |
 | `archive_tree.py` | rebuild + validate the checkpoint tree from `archive/*/meta.json` |
 | `test_replay_invalid_action.py` | replay parity across an invalid action (free) |
+| `test_client_retry_exhausted.py` | a client that gives up must not truncate the episode (free) |
 | `../balrog_ckpt/` | the earlier checkpoint-feasibility work this reuses (see its REPORT.md) |
 
 ## Ablation switches (the three used on NetHack)
@@ -265,6 +266,7 @@ for g in "minihack:MiniHack-Quest-Easy-v0" "crafter:default" "textworld:the_cook
 done
 # replay parity across an invalid action
 .venv-balrog/bin/python -m tools.balrog_pae.test_replay_invalid_action
+.venv-balrog/bin/python -m tools.balrog_pae.test_client_retry_exhausted
 # rebuild the checkpoint tree from meta.json alone
 .venv-balrog/bin/python tools/balrog_pae/archive_tree.py runs/crafter_s0_pae
 ```
@@ -284,3 +286,28 @@ cd /root/nld/gen-pae
 The venv is `/root/nld/gen-pae/.venv-balrog` (BALROG `b7afe79` installed editable
 from `/root/nld/gen-pae/BALROG`, Boxoban levels and `tw_games` in place). Neither
 is tracked by git (see `.git/worktrees/gen-pae/info/exclude`).
+
+## Client failures are recorded, not fatal
+
+BALROG's `execute_with_retries` raises after `max_retries` (5). `OpenAIWrapper`,
+`ClaudeWrapper` and `AWSBedrockWrapper` let that exception escape `generate()`;
+only `GoogleGenerativeAIWrapper` caught it and returned an empty completion.
+Since the panel runs `PrimeOpenAIWrapper(OpenAIWrapper)`, a provider blip - or a
+GLM completion that burns all of `max_tokens` on reasoning and returns
+`finish_reason="length"` with `content=None` - killed the whole episode at a
+random step. That truncation is not arm-neutral: it costs whichever arm plays
+more steps, i.e. PAE, so it would bias the very comparison the panel makes.
+
+All four wrappers now return `LLMResponse(completion="",
+stop_reason="error_max_retries")` instead (`balrog.client.RETRY_EXHAUSTED_STOP_REASON`).
+The loop treats such a step as an invalid action - the env advances on the
+default action and the player gets the usual feedback banner, so replay parity
+is unaffected - and counts it apart:
+
+* `summary.json` → `client_retry_exhausted` (harness fault) and `invalid_actions`
+  (genuine parse failures by the agent), never mixed;
+* `trace.jsonl` → per-step `client_retry_exhausted` flag next to `valid`;
+* `client_failures.jsonl` → one row per occurrence (attempt, step, reason).
+
+Report `client_retry_exhausted` alongside any result: a run with a non-zero
+count had steps the model did not really get to play.

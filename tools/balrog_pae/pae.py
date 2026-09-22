@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from balrog.client import RETRY_EXHAUSTED_STOP_REASON
 from omegaconf import OmegaConf
 
 from .adapters import make_adapter, obs_digest
@@ -194,6 +195,7 @@ class Run:
         outcome, step = "step_cap", step0
         last_prog = self.adapter.progression()
         in_tok = out_tok = calls = 0
+        invalid_actions = client_retry_exhausted = 0
         first_call_checked = ckpt_id is not None
 
         for step in range(step0, max_steps):
@@ -218,12 +220,29 @@ class Run:
                     raise RuntimeError(f"resumed history != checkpoint history for {ckpt_id}")
                 first_call_checked = False
 
+            # A client that exhausted its retries returns an empty completion
+            # with a machine-readable stop_reason instead of raising. Treat the
+            # step as an invalid action - the env still advances on the default
+            # action, the player still gets the feedback banner - but count it
+            # under its own name, because it is a harness failure and not the
+            # agent choosing badly. Letting it kill the episode would bias
+            # whichever arm plays more steps, i.e. PAE.
+            client_failed = response.stop_reason == RETRY_EXHAUSTED_STOP_REASON
+            if client_failed:
+                client_retry_exhausted += 1
+                _jsonl(self.dir / "client_failures.jsonl", {
+                    "attempt": attempt, "step": step, "reason": RETRY_EXHAUSTED_STOP_REASON,
+                })
+
             action = self.adapter.env.check_action_validity(response.completion)
+            valid = (action == response.completion) and not client_failed
+            if not valid and not client_failed:
+                invalid_actions += 1
             if hasattr(self.adapter, "record"):
                 self.adapter.record(action, response.completion)
             obs, reward, terminated, truncated, info = self.adapter.step(action)
             done = terminated or truncated
-            if (action != response.completion) and self.bcfg.eval.feedback_on_invalid_action:
+            if (not valid) and self.bcfg.eval.feedback_on_invalid_action:
                 obs["text"]["long_term_context"] = (
                     f"\n\nYour previous output did not contain a valid action. Defaulted to action: {action}"
                     f"\n\nObservation:\n" + obs["text"]["long_term_context"]
@@ -233,7 +252,8 @@ class Run:
             prog, aux = self.adapter.progression(), self.adapter.aux_progress()
             _jsonl(adir / "trace.jsonl", {
                 "step": step, "completion": response.completion, "action": action,
-                "valid": action == response.completion, "reward": float(reward), "done": bool(done),
+                "valid": valid, "client_retry_exhausted": client_failed,
+                "reward": float(reward), "done": bool(done),
                 "progression": prog, "aux": aux,
                 "input_tokens": response.input_tokens, "output_tokens": response.output_tokens,
                 "obs": obs["text"]["long_term_context"][:4000],
@@ -280,6 +300,8 @@ class Run:
             "outcome": outcome,
             "end_status": str(info.get("end_status", "")) if isinstance(info, dict) else "",
             "calls": calls,
+            "invalid_actions": invalid_actions,
+            "client_retry_exhausted": client_retry_exhausted,
             "input_tokens": in_tok,
             "output_tokens": out_tok,
             "cost_usd": round(in_tok / 1e6 * 1.54 + out_tok / 1e6 * 4.84, 6),
@@ -378,6 +400,11 @@ class Run:
             "total_env_steps": self.adapter.total_env_steps,
             "step_cap": self.step_cap,
             "llm_steps": sum(a["calls"] for a in self.attempts),
+            # genuine parse failures by the agent ...
+            "invalid_actions": sum(a.get("invalid_actions", 0) for a in self.attempts),
+            # ... kept apart from steps lost to the client giving up after its
+            # retries, which are a harness fault and must not read as agent error.
+            "client_retry_exhausted": sum(a.get("client_retry_exhausted", 0) for a in self.attempts),
             "env_patches": list(self.adapter.env_patches),
             "stop_reason": stop_reason,
             "orchestrator": {
