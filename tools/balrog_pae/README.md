@@ -50,6 +50,21 @@ Inference requires gets sent.
 Stop rules: `--attempts N` (default 10) and `--plateau P` attempts with no
 frontier advance.
 
+## Directive discipline
+
+Directives are strategy, never keystrokes — the rule the NetHack orchestrator
+runs under. The system prompt says so, and `orchestrator.validate_directive`
+enforces it: at most 2 sentences, at most 300 characters, and no literal
+key/action tokens (`press`, `key`, `action:`, `ctrl-x`, single-quoted
+characters, `<esc>`, "type the letter", …). A violation buys exactly one re-ask
+with the reasons quoted back; a second failure keeps the checkpoint choice and
+drops the directive. Every rejection is logged in `orchestrator_rounds.jsonl`
+under `directive_rejections`, and counted in `summary.json`.
+
+The ledger names each checkpoint's parent and states that the parentless one is
+a full restart, to be chosen only with a reason. `chosen_is_root` is logged per
+round and per selection, and `summary.json` counts `root_picks`.
+
 ## Outputs (run dir)
 
 `attempts.jsonl`, `archive/cN/{meta.json,checkpoint.pkl}`, `summary.json`,

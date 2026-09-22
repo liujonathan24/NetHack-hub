@@ -315,9 +315,11 @@ class Run:
             directive = NEUTRAL_DIRECTIVE
         if cfg.directive == "off" and not cfg.blind:
             directive = None
+        root_ids = {c["id"] for c in self.archive if not c.get("parent")}
         _jsonl(self.dir / "selection.jsonl", {
             "attempt": len(self.attempts) + 1, "checkpoint": cid,
-            "source": self._sel_source, "directive": directive or ""})
+            "source": self._sel_source, "chosen_is_root": cid in root_ids,
+            "n_candidates": len(self.resumable()), "directive": directive or ""})
         return cid, directive
 
     # -- driver -----------------------------------------------------------
@@ -373,6 +375,11 @@ class Run:
             "llm_steps": sum(a["calls"] for a in self.attempts),
             "env_patches": list(self.adapter.env_patches),
             "stop_reason": stop_reason,
+            "orchestrator": {
+                "rounds": len(self.orch.rounds) if self.orch else 0,
+                "directive_rejections": self.orch.rejections if self.orch else 0,
+                "root_picks": sum(1 for r in (self.orch.rounds if self.orch else []) if r.get("chosen_is_root")),
+            },
             "best": self.best,
             "tokens": self.acct.snapshot(),
             "wall_s": round(time.time() - self.t0, 1),
