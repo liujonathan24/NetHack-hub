@@ -4117,8 +4117,14 @@ def build_provenance(cfg: OrchestratorConfig, wiki_hashes: dict,
                 "--no-directive average cannot separate a directive that "
                 "changed behaviour from one that prohibited something the "
                 "player was not going to do anyway."),
-            "served_as": "first observation, "
-                         "[ORCHESTRATOR DIRECTIVE for this attempt: ...]",
+            "served_as": (
+                "none: this arm serves no directive"
+                if cfg.no_directive else
+                "resumed attempts: line 0 of the resume user turn, "
+                "[ORCHESTRATOR DIRECTIVE for this attempt: ...]; the fresh root "
+                "attempt: the same block at the top of its first observation"
+                if cfg.session_resume else
+                "first observation, [ORCHESTRATOR DIRECTIVE for this attempt: ...]"),
             "compliance_rubric": RUBRIC_NAME,
             "compliance_rubric_detail": (
                 f"clauses split into prohibition/goal; each scored "
