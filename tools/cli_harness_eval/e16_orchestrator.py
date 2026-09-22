@@ -4790,6 +4790,10 @@ player result.
                               "empty")
                 ask_text = self.DIRECTIVE_RETRY_PROMPT.format(
                     reason=reason, ids=", ".join(ids))
+                if fixed_pick is not None:
+                    # A retry must not become a free choice (A3): restate the
+                    # rule. Measured 2026-09-22, ablate_A3_s0_sr2 round18_retry1.
+                    ask_text += "\n" + FIXED_PICK_NOTICE.format(pick=fixed_pick)
             res = self.session.ask(ask_text, kind=kind)
             self.budget.add_orchestrator(res.spend_usd)
             self._record_raw(f"decide_a{n}_attempt{i + 1}", res)
@@ -6795,6 +6799,15 @@ def _unreported_result(out_dir: Path, error: str, billed: dict) -> PlayerResult:
     )
 
 
+def _resume_prompt_of(out_dir) -> str:
+    """The resume user turn served to this attempt, or '' for a fresh one."""
+    p = Path(out_dir) / "resume_prompt_served.txt"
+    try:
+        return p.read_text(encoding="utf-8") if p.is_file() else ""
+    except OSError:
+        return ""
+
+
 def read_trace_result(out_dir) -> PlayerResult:
     """Read one rollout's `traces.jsonl` into a :class:`PlayerResult`.
 
@@ -6870,7 +6883,7 @@ def read_trace_result(out_dir) -> PlayerResult:
         max_dlvl=max_dlvl,
         max_xl=max(int(metrics.get("max_xp_level") or 1),
                    int(_max_xl_from_turns(out_dir) or 1)),
-        summary=_final_text(trace),
+        summary=_final_text(trace, after_user_text=_resume_prompt_of(out_dir)),
         rollouts_paid=int(billed["rollouts_paid"]),
         retry_errors=list(billed["retry_errors"]),
         raw={"metrics": metrics, "depth_disagreement": depth_disagreement,
@@ -6941,7 +6954,8 @@ def _max_dlvl_from_turns(out_dir) -> Optional[int]:
     return best
 
 
-def _final_text(trace: dict, limit: int = 4000) -> str:
+def _final_text(trace: dict, limit: int = 4000,
+                after_user_text: Optional[str] = None) -> str:
     """The player's last assistant message -- its own account of the game.
 
     THE DEFECT THIS FIXES, and it cost an entire run. This looked for
@@ -6974,10 +6988,27 @@ def _final_text(trace: dict, limit: int = 4000) -> str:
             return inner.get("role"), inner.get("content")
         return item.get("role"), item.get("content")
 
+    # SESSION RESUME: the trace replays the inherited conversation, so the
+    # last assistant text can belong to an ANCESTOR when this life emitted
+    # only tool calls. Measured 2026-09-22 (ablate_A3_s0_sr2 a016/a019/a021:
+    # the lesson fell back to a009's words and the orchestrator reasoned
+    # about them). Only text after the resume user turn is this attempt's.
+    marker = (after_user_text or "").strip()
     for key in ("completion", "messages", "nodes"):
         node = trace.get(key)
         if isinstance(node, list) and node:
-            for item in reversed(node):
+            items = list(node)
+            if marker:
+                start = None
+                for i, item in enumerate(items):
+                    role, content = _role_of(item)
+                    if role == "user" and isinstance(content, str) \
+                            and content.strip() == marker:
+                        start = i
+                if start is None:
+                    return ""      # the resume turn is not in this trace: no account
+                items = items[start + 1:]
+            for item in reversed(items):
                 role, content = _role_of(item)
                 if role == "assistant" and isinstance(content, str) and content.strip():
                     return content[:limit]

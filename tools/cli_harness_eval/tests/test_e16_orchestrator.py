@@ -3795,3 +3795,26 @@ def test_session_mode_subprocess_player_passes_harness_args(tmp_path, monkeypatc
     E.SubprocessPlayer(repo=tmp_path, env={})(ctx)
     assert "HARNESS_ARGS" not in captured["env"]
     assert "session_resume" not in json.loads(captured["env"]["E16_ARGS"])
+
+
+def test_the_players_account_is_only_text_after_the_resume_turn():
+    """A resumed trace replays the ancestor's conversation; when this life
+    emits only tool calls, the account must be empty, not the ancestor's."""
+    tr = {"nodes": [
+        {"message": {"role": "user", "content": "Task"}},
+        {"message": {"role": "assistant", "content": "ANCESTOR: I am fine."}},
+        {"message": {"role": "user", "content": "Continue playing."}},
+        {"message": {"role": "assistant", "content": ""}},
+    ]}
+    assert E._final_text(tr) == "ANCESTOR: I am fine."
+    assert E._final_text(tr, after_user_text="Continue playing.") == ""
+    tr["nodes"].append({"message": {"role": "assistant", "content": "ME: starving."}})
+    assert E._final_text(tr, after_user_text="Continue playing.") == "ME: starving."
+    # a chained lineage: the LAST occurrence of the resume turn is this attempt's
+    tr2 = {"nodes": [
+        {"message": {"role": "user", "content": "Continue playing."}},
+        {"message": {"role": "assistant", "content": "older life"}},
+        {"message": {"role": "user", "content": "Continue playing."}},
+        {"message": {"role": "assistant", "content": ""}},
+    ]}
+    assert E._final_text(tr2, after_user_text="Continue playing.") == ""
