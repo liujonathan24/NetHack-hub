@@ -44,10 +44,39 @@ def load(run_dir: Path):
     return s, rows
 
 
+def attempt_from_trace(run_dir: Path, n: int = 1):
+    """Rebuild one attempt's totals from its step trace.
+
+    A run that crashed (Boxoban does, see games/minihack/tasks.md) never wrote
+    summary.json or attempts.jsonl, but attempts/aNNN/trace.jsonl is complete up
+    to the crash and carries per-step input/output tokens - which is all the
+    projection needs. Rows built this way are marked ``partial``.
+    """
+    f = run_dir / "attempts" / f"a{n:03d}" / "trace.jsonl"
+    if not f.exists():
+        return None
+    rows = [json.loads(x) for x in f.read_text().splitlines() if x.strip()]
+    if not rows:
+        return None
+    return {
+        "calls": len(rows),
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+        "partial": True,
+    }
+
+
 def per_task(runs: Path, task: str, N: int, resume_model: str = "fixed_rule"):
     base_dir, pae_dir = runs / f"{task}_s0_base", runs / f"{task}_s0_pae"
-    bs, brows = load(base_dir)
-    a1 = brows[0]
+    partial = False
+    if (base_dir / "summary.json").exists():
+        bs, brows = load(base_dir)
+        a1 = brows[0]
+    else:
+        bs, a1 = {}, attempt_from_trace(base_dir)
+        if a1 is None:
+            return None
+        partial = True
     S_base = a1["calls"]
     in_base = a1["input_tokens"] / max(1, S_base)
     out_base = a1["output_tokens"] / max(1, S_base)
@@ -58,11 +87,16 @@ def per_task(runs: Path, task: str, N: int, resume_model: str = "fixed_rule"):
         res = [r for r in prows if r["from_checkpoint"]]
     else:
         ps, res = None, []
+        a2 = attempt_from_trace(pae_dir, 2)
+        if a2:
+            res = [a2]
+            ps = {"tokens": {}}
+            partial = True
     if res:
         S_res = sum(r["calls"] for r in res) / len(res)
         in_res = sum(r["input_tokens"] for r in res) / max(1, sum(r["calls"] for r in res))
         out_res = sum(r["output_tokens"] for r in res) / max(1, sum(r["calls"] for r in res))
-        orch = ps["tokens"].get("orchestrator", {"input_tokens": 0, "output_tokens": 0, "calls": 0})
+        orch = (ps.get("tokens") or {}).get("orchestrator", {"input_tokens": 0, "output_tokens": 0, "calls": 0})
         rounds = max(1, len(res))
         orch_in, orch_out = orch["input_tokens"] / rounds, orch["output_tokens"] / rounds
     else:
@@ -100,7 +134,7 @@ def per_task(runs: Path, task: str, N: int, resume_model: str = "fixed_rule"):
         "task": task, "S_base": S_base, "in_per_step_base": in_base, "out_per_step_base": out_base,
         "S_resume": S_res, "in_per_step_resume": in_res, "out_per_step_resume": out_res,
         "orch_in_per_round": orch_in, "orch_out_per_round": orch_out,
-        "resume_source": src_resume, "base": base, "pae": pae,
+        "resume_source": src_resume, "base": base, "pae": pae, "partial": partial,
         "base_progression": bs.get("attempt1_progression"),
     }
 
@@ -139,8 +173,8 @@ def main():
     if a.ratio:
         ratio = a.ratio
 
-    rows = [per_task(runs, t, a.attempts, a.resume_model)
-            for t in TASKS if (runs / f"{t}_s0_base" / "summary.json").exists()]
+    rows = [per_task(runs, t, a.attempts, a.resume_model) for t in TASKS]
+    rows = [r for r in rows if r is not None]
 
     print(f"Calibration source: {runs}   seeds/task: {a.seeds}   PAE attempts N={a.attempts}"
           f"   resume model: {a.resume_model}")
@@ -160,7 +194,8 @@ def main():
         tp += p
         print(f"{r['task']:<32}{r['S_base']:>7}{r['in_per_step_base']:>7.0f}{r['out_per_step_base']:>7.0f}"
               f"{r['S_resume']:>7.1f}{r['in_per_step_resume']:>7.0f}"
-              f"{b:>9.2f}{p:>9.2f}{b + p:>9.2f}{(b + p) * ratio:>10.2f}")
+              f"{b:>9.2f}{p:>9.2f}{b + p:>9.2f}{(b + p) * ratio:>10.2f}"
+              f"{'  partial' if r['partial'] else ''}")
         out_rows.append(dict(r, base_usd_list=b, pae_usd_list=p, both_usd_list=b + p,
                              both_usd_billed=(b + p) * ratio, seeds=a.seeds, N=a.attempts))
     print("-" * len(h))
@@ -173,6 +208,13 @@ def main():
     mod = [r["task"] for r in rows if r["resume_source"] == "modelled"]
     if mod:
         print("  modelled:", ", ".join(mod))
+    par = [r["task"] for r in rows if r["partial"]]
+    if par:
+        print("  partial (run crashed; tokens/step taken from the step trace):", ", ".join(par))
+    missing = [t for t in TASKS if t not in {r["task"] for r in rows}]
+    if missing:
+        print("  NO CALIBRATION DATA (excluded from the totals):", ", ".join(missing))
+        print("  -> for a panel estimate, assume each behaves like Boxoban-Medium.")
 
     if a.json:
         Path(a.json).write_text(json.dumps(

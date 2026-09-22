@@ -226,3 +226,39 @@ episode; cap the model's thinking budget
 `null`); or drop Boxoban-Hard from the GLM-5.2 panel. Leaving it as is means
 episodes die at essentially random points for a harness reason, which biases
 whichever arm plays more steps — i.e. the PAE arm.
+
+### Measured (GLM-5.2, seed 0, 2026-09-22)
+
+| task | arm | steps | LLM calls | in/call | out/call | list $ | billed $ | progression | aux |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| Quest-Easy | base | 9 | 9 | 1,611 | 344 | 0.037 | 0.011 | 0.0 | 8 cells |
+| Quest-Easy | pae (2 att) | 9 | 13 | 1,833 | 223 | 0.051 | 0.012 | 0.0 | 6 cells |
+| Quest-Medium | base | 79 | 79 | 3,404 | 321 | 0.537 | 0.206 | 0.0 | 31 cells |
+| Quest-Medium | pae (2 att) | 51 | 55 | 3,705 | 308 | 0.396 | 0.147 | 0.0 | 18 cells |
+| CorridorBattle-Dark | base | 46 | 46 | 2,816 | 218 | 0.248 | 0.095 | **1.0 (solved)** | 37 cells |
+| CorridorBattle-Dark | pae (2 att) | 30 | 32 | 2,590 | 231 | 0.163 | 0.058 | 0.0 | 18 cells |
+| Boxoban-Medium | base | 27 (crashed) | 27 | 4,303 | 2,871 | — | — | 0.0 at crash | 0 boxes |
+| Boxoban-Medium | pae (2 att) | 20+8 (crashed) | 28 | 4,348 | 5,369 | — | — | 0.0 at crash | 1 box |
+| Boxoban-Hard | either | 0–2 | 2 total over 6 launches | — | — | — | — | blocked | — |
+
+Billed/list ratio over the runs that completed: **0.369** (Prime's own
+`usage.cost` vs the `model_prices.json` table). Input per call rises ~235/step
+until the 16-observation window saturates around 4.5K; output per call is
+200–350 on Quest/Corridor and 2.9–5.4K on Boxoban.
+
+Resume confirmed on four of the five tasks — restore byte-identical and the
+resumed message list equal to the checkpoint's stored next prompt plus exactly
+the one directive turn:
+
+| task | checkpoint | steps replayed | obs identical | prompt history matches | messages |
+|---|---|--:|:-:|:-:|---|
+| Quest-Easy | c2 (step 5) | 5 | yes | yes | 12 → 13 |
+| Quest-Medium | c4 (step 30) | 30 | yes | yes | 33 → 34 |
+| CorridorBattle-Dark | c3 (step 20) | 20 | yes | yes | 33 → 34 |
+| Boxoban-Medium | c2 (step 10) | 10 | yes | yes | 22 → 23 |
+| Boxoban-Hard | — | — | — | — | blocked (see above) |
+
+Boxoban-Medium's directive also shows the new aux reaching the orchestrator:
+*"Keep the boulder already on a fountain in place and focus on pushing the
+others…"* — a branch decision that the all-zero `progression` column could not
+have supported.
