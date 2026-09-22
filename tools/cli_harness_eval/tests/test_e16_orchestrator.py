@@ -3447,7 +3447,9 @@ def test_seal_cuts_the_conversation_at_the_checkpoints_call(tmp_path):
     assert got and got["session"] == ck / "session" / "session.jsonl"
     assert got["artifacts"] == ck / "session" / "artifacts"
     assert checkpoint_meta(ck)["session"] == {
-        "sealed": True, "call": 3, "records": 8, "reason": ""}
+        "sealed": True, "call": 3, "records": 8, "reason": "",
+        "cut": {"method": "marker", "position": "after_call",
+                "transcript_end_call": 3, "lag_calls": 0}}
 
 
 def test_the_seal_never_carries_the_harness_memory_store(tmp_path):
@@ -3481,21 +3483,90 @@ def test_a_seal_that_cannot_find_its_call_is_recorded_and_not_resumable(tmp_path
     assert not seal3["ok"] and "no exported session" in seal3["reason"]
 
 
-def test_a_batched_tool_result_is_flagged_as_overshoot(tmp_path):
-    """Two markers in one tool result means the game is one call past the
-    checkpoint when the model reads the transcript. Recorded, not hidden."""
+def test_a_checkpoint_saved_mid_batch_is_cut_before_the_batch(tmp_path):
+    """One cell ran calls 3 and 4 and the checkpoint was written at call 3:
+    cutting after the cell would show the model an action the restored game
+    never took, so the cut lands after call 2's result, with the lag recorded."""
     export = tmp_path / "s"
     (export / "sessions").mkdir(parents=True)
-    lines = _fake_session_lines("h", 2)
-    # records: header, prompt, a1, r1, a2, r2, session_state -> r1 is lines[3]
-    rec = json.loads(lines[3])
-    assert rec["message"]["role"] == "toolResult"
-    rec["message"]["content"][0]["text"] = "[call#1]\n[call#2]\n"
-    lines[3] = json.dumps(rec)
+    lines = _fake_session_lines("h", 4)
+    # records: header, prompt, (a1,r1), (a2,r2), (a3,r3), (a4,r4), state
+    r3 = json.loads(lines[7]); assert r3["message"]["role"] == "toolResult"
+    r3["message"]["content"][0]["text"] = "[call#3]\n[call#4]\n"
+    lines[7] = json.dumps(r3)
+    del lines[8:10]                                    # drop (a4, r4)
     (export / "sessions" / "f.jsonl").write_text("\n".join(lines) + "\n")
-    ck = _bare_checkpoint(tmp_path / "archive", 9, call=1)
-    seal = E.seal_checkpoint_session(ck, export, call=1)
-    assert seal["ok"] and seal["overshoot"] is True
+    ck = _bare_checkpoint(tmp_path / "archive", 9, call=3)
+    seal = E.seal_checkpoint_session(ck, export, call=3)
+    assert seal["ok"] and seal["overshoot"] is False
+    assert seal["cut"] == {"method": "marker", "position": "before_batch",
+                           "transcript_end_call": 2, "lag_calls": 1}
+    kept = (ck / "session" / "session.jsonl").read_text().splitlines()
+    assert "[call#2]" in kept[-1] and "[call#3]" not in "\n".join(kept)
+    assert checkpoint_meta(ck)["session"]["cut"]["lag_calls"] == 1
+
+
+def _stamp_times(lines, t0=1000.0, step=10.0):
+    """Give every message record an epoch-ms timestamp, results after calls."""
+    out = []
+    k = 0
+    for l in lines:
+        r = json.loads(l)
+        if r.get("type") == "message":
+            r["message"]["timestamp"] = int((t0 + k * step) * 1000)
+            k += 1
+        out.append(json.dumps(r))
+    return out
+
+
+def test_a_cell_that_printed_no_marker_is_cut_by_time(tmp_path):
+    """The model's code printed its own summary (no [call#N]); the env's turn
+    trace says when each call finished, so the cut is the first result after
+    the checkpoint's call -- or before the cell when the cell ran past it."""
+    export = tmp_path / "s"
+    (export / "sessions").mkdir(parents=True)
+    lines = _stamp_times(_fake_session_lines("h", 3))
+    # strip every marker from the results
+    for i, l in enumerate(lines):
+        r = json.loads(l)
+        if r.get("type") == "message" and r["message"]["role"] == "toolResult":
+            r["message"]["content"][0]["text"] = "Moved. HP fine."
+            r["message"]["details"] = {}
+            lines[i] = json.dumps(r)
+    (export / "sessions" / "f.jsonl").write_text("\n".join(lines) + "\n")
+    # message order: prompt(t=1000), a1(1010), r1(1020), a2(1030), r2(1040), a3(1050), r3(1060)
+    # cell 2 ran calls 2 and 3 (both finished before r2 at 1040); cell 3 ran call 4.
+    times = {1: 1015.0, 2: 1033.0, 3: 1036.0, 4: 1055.0}
+    # no times at all -> unresumable, with a reason that says so
+    ck0 = _bare_checkpoint(tmp_path / "archive", 8, call=2)
+    s0 = E.seal_checkpoint_session(ck0, export, call=2)
+    assert not s0["ok"] and "[call#2]" in s0["reason"]
+    # call 3 ends cell 2 -> cut after r2
+    ck = _bare_checkpoint(tmp_path / "archive", 9, call=3)
+    s1 = E.seal_checkpoint_session(ck, export, call=3, call_times=times)
+    assert s1["ok"] and s1["cut"] == {"method": "timestamp", "position": "after_call",
+                                      "transcript_end_call": 3, "lag_calls": 0}
+    assert s1["records_kept"] == 2 + 2 * 2
+    # call 2 is mid-cell -> cut before cell 2 (after r1); transcript ends at call 1
+    ck2 = _bare_checkpoint(tmp_path / "archive", 10, call=2)
+    s2 = E.seal_checkpoint_session(ck2, export, call=2, call_times=times)
+    assert s2["ok"] and s2["cut"] == {"method": "timestamp", "position": "before_batch",
+                                      "transcript_end_call": 1, "lag_calls": 1}
+    assert s2["records_kept"] == 2 + 2 * 1
+    # call 4 ends cell 3 -> after r3
+    ck3 = _bare_checkpoint(tmp_path / "archive", 11, call=4)
+    s3 = E.seal_checkpoint_session(ck3, export, call=4, call_times=times)
+    assert s3["ok"] and s3["cut"]["position"] == "after_call" and s3["records_kept"] == 2 + 2 * 3
+
+
+def test_call_times_come_from_the_turn_trace(tmp_path):
+    turns = tmp_path / "turns"; turns.mkdir()
+    (turns / "3_1_1.ndjson").write_text("\n".join(json.dumps(x) for x in [
+        {"lm_turn": 1, "t_wall": 100.5, "tool_results": [{"call_id": 261}]},
+        {"lm_turn": 2, "t_wall": 101.5, "tool_results": [{"call_id": 262}]},
+        {"lm_turn": 3, "t_wall": 102.5, "tool_results": []},
+    ]) + "\n")
+    assert E.call_times_from_turns(tmp_path) == {261: 100.5, 262: 101.5}
 
 
 def test_build_resume_prompt_blind_versus_full():

@@ -335,23 +335,80 @@ def _record_texts(rec: dict) -> list:
     return out
 
 
-def seal_checkpoint_session(ck_dir, export_dir, *, call: Optional[int],
-                            new_header_id: Optional[str] = None) -> dict:
-    """Bundle the attempt's conversation, cut at ``[call#call]``, into ``ck_dir``.
+def _record_ts(rec: dict) -> Optional[float]:
+    """A session record's wall-clock time in epoch seconds (message.timestamp
+    is epoch ms; the record-level timestamp is ISO-8601 with a Z)."""
+    m = rec.get("message") if isinstance(rec, dict) else None
+    if isinstance(m, dict) and isinstance(m.get("timestamp"), (int, float)):
+        return float(m["timestamp"]) / 1000.0
+    ts = rec.get("timestamp") if isinstance(rec, dict) else None
+    if isinstance(ts, str):
+        try:
+            import datetime as _dt
+            return _dt.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%fZ").replace(
+                tzinfo=_dt.timezone.utc).timestamp()
+        except ValueError:
+            return None
+    return None
 
-    Keeps every record up to and including the tool result that carries the
-    checkpoint's call marker; rewrites the header id (Prime Agent keys the
-    kernel snapshot by it, and two checkpoints must not share one); copies
-    the exported kernel snapshot alongside. Writes ``seal.json`` either way,
-    with ``ok: false`` and a reason when it could not -- a checkpoint without
-    a sealed session is NOT resumable in session mode and the selectors treat
-    it that way (see `Orchestrator.resumable`).
+
+def call_times_from_turns(out_dir) -> dict:
+    """``{call_id: t_wall}`` for every game call an attempt executed, from the
+    env's turn trace (``turns/*.ndjson``; ``tool_results[].call_id`` is the
+    same id the env appends as ``[call#N]``)."""
+    out = {}
+    d = Path(out_dir) / "turns"
+    for f in sorted(d.glob("*.ndjson")) if d.is_dir() else []:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = rec.get("t_wall")
+            for tr in rec.get("tool_results") or []:
+                cid = tr.get("call_id") if isinstance(tr, dict) else None
+                if cid is not None and isinstance(t, (int, float)):
+                    out[int(cid)] = float(t)
+    return out
+
+
+def seal_checkpoint_session(ck_dir, export_dir, *, call: Optional[int],
+                            new_header_id: Optional[str] = None,
+                            call_times: Optional[dict] = None) -> dict:
+    """Bundle the attempt's conversation, cut at the checkpoint's call, into ``ck_dir``.
+
+    THE CUT. A checkpoint is written during game call K (meta["call"]). The
+    player's transcript is a sequence of ipython cells; each cell's tool
+    result is whatever the model's code PRINTED, and one cell may execute
+    several game calls (a loop of moves). So the exchange the game state
+    belongs to is located two ways, in order:
+
+    1. the first tool result whose text carries the env's ``[call#K]``
+       marker (present whenever the model printed the observation);
+    2. otherwise, by time: the first tool result recorded after call K
+       finished (``call_times`` from the env's turn trace).
+
+    Either way, if that same cell also ran call K+1, cutting AFTER it would
+    hand the resumed model a transcript of actions that have not happened in
+    the restored game. The cut is then made BEFORE the cell (after the
+    previous tool result): the model's transcript lags the game by the calls
+    the cell ran before the save, recorded as ``cut.lag_calls``, and the first
+    observation it requests shows the true state. Measured 2026-09-21
+    (ablate_A2_s0_sr1 c11): a 10-move loop in one cell hid the marker and the
+    checkpoint was unresumable; the fixed rule fell back 20 calls.
+
+    Rewrites the header id (Prime Agent keys the kernel snapshot by it; two
+    checkpoints must not share one); copies the kernel snapshot alongside.
+    Writes ``seal.json`` either way, with ``ok: false`` and a reason when it
+    could not -- a checkpoint without a sealed session is NOT resumable in
+    session mode and the selectors treat it that way (see `Orchestrator.resumable`).
     """
     ck_dir = Path(ck_dir)
     dest = ck_dir / SESSION_DIRNAME
     seal = {"ok": False, "call": call, "source": None, "reason": "",
             "records_total": 0, "records_kept": 0, "header_id": None,
-            "artifacts": False, "overshoot": False, "sealed_at": time.time()}
+            "artifacts": False, "overshoot": False, "sealed_at": time.time(),
+            "cut": None}
 
     def _finish():
         dest.mkdir(parents=True, exist_ok=True)
@@ -360,7 +417,8 @@ def seal_checkpoint_session(ck_dir, export_dir, *, call: Optional[int],
             meta = checkpoint_meta(ck_dir)
             meta["session"] = {"sealed": bool(seal["ok"]), "call": call,
                                "records": seal["records_kept"],
-                               "reason": seal["reason"]}
+                               "reason": seal["reason"],
+                               "cut": seal.get("cut")}
             atomic_write(ck_dir / META_JSON,
                          json.dumps(meta, indent=2, sort_keys=True) + "\n")
         except Exception:
@@ -375,28 +433,71 @@ def seal_checkpoint_session(ck_dir, export_dir, *, call: Optional[int],
     if call is None:
         seal["reason"] = "checkpoint meta has no call id (written outside a call?)"
         return _finish()
+    call = int(call)
     lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
     seal["records_total"] = len(lines)
-    marker = f"[call#{int(call)}]"
-    next_marker = f"[call#{int(call) + 1}]"
-    cut = None
+    recs = []
     for i, line in enumerate(lines):
         try:
-            rec = json.loads(line)
+            recs.append((i, json.loads(line)))
         except json.JSONDecodeError:
-            continue
-        if rec.get("type") != "message":
-            continue
-        if (rec.get("message") or {}).get("role") != "toolResult":
-            continue
-        texts = _record_texts(rec)
+            recs.append((i, None))
+    results = [(i, r) for i, r in recs
+               if isinstance(r, dict) and r.get("type") == "message"
+               and (r.get("message") or {}).get("role") == "toolResult"]
+    marker = f"[call#{call}]"
+    next_marker = f"[call#{call + 1}]"
+    times = call_times or {}
+    t_k, t_next = times.get(call), times.get(call + 1)
+
+    hit = None          # index (into results) of the cell that ran call K
+    method = None
+    spans_next = False
+    for j, (i, r) in enumerate(results):
+        texts = _record_texts(r)
         if any(marker in t for t in texts):
-            cut = i
-            seal["overshoot"] = any(next_marker in t for t in texts)
+            hit, method = j, "marker"
+            spans_next = any(next_marker in t for t in texts)
+            if not spans_next and t_next is not None:
+                ts = _record_ts(r)
+                spans_next = ts is not None and ts >= t_next
             break
-    if cut is None:
-        seal["reason"] = f"no tool result carrying {marker} in {src.name}"
+    if hit is None and t_k is not None:
+        for j, (i, r) in enumerate(results):
+            ts = _record_ts(r)
+            if ts is not None and ts >= t_k:
+                hit, method = j, "timestamp"
+                spans_next = t_next is not None and ts >= t_next
+                break
+    if hit is None:
+        seal["reason"] = (f"no tool result carrying {marker} in {src.name}"
+                          + ("" if t_k is None else
+                             f" and none recorded after call {call} (t={t_k:.3f})"))
         return _finish()
+
+    if spans_next:
+        # The cell ran past the save: cut before it, after the previous result.
+        if hit == 0:
+            seal["reason"] = (f"call {call} was the first cell's batch and the "
+                              f"cell ran past it; no earlier exchange to cut at")
+            return _finish()
+        cut_i, cut_rec = results[hit - 1]
+        # How far the transcript lags the game: the last call whose wall time
+        # precedes that previous result (by marker when printed).
+        prev_marks = [int(x) for t in _record_texts(cut_rec)
+                      for x in _CALL_MARKER_RE.findall(t)]
+        ts_prev = _record_ts(cut_rec)
+        by_time = [c for c, t in times.items() if ts_prev is not None and t <= ts_prev]
+        end_call = max(prev_marks) if prev_marks else (max(by_time) if by_time else None)
+        seal["overshoot"] = False
+        seal["cut"] = {"method": method, "position": "before_batch",
+                       "transcript_end_call": end_call,
+                       "lag_calls": (call - end_call) if end_call is not None else None}
+    else:
+        cut_i, _ = results[hit]
+        seal["cut"] = {"method": method, "position": "after_call",
+                       "transcript_end_call": call, "lag_calls": 0}
+    cut = cut_i
     kept = lines[:cut + 1]
     try:
         header = json.loads(kept[0])
@@ -5614,14 +5715,17 @@ player result.
         if not self.cfg.session_resume or ctx.session_export_dir is None:
             return []
         out = []
+        times = call_times_from_turns(ctx.out_dir)
         for p in paths:
             try:
                 call = checkpoint_meta(p).get("call")
-                seal = seal_checkpoint_session(p, ctx.session_export_dir, call=call)
+                seal = seal_checkpoint_session(p, ctx.session_export_dir, call=call,
+                                               call_times=times)
                 out.append({"id": p.name.lstrip("c"), "ok": bool(seal["ok"]),
                             "reason": seal.get("reason", ""),
                             "records": seal.get("records_kept", 0),
-                            "overshoot": bool(seal.get("overshoot"))})
+                            "overshoot": bool(seal.get("overshoot")),
+                            "cut": seal.get("cut")})
             except Exception as exc:  # noqa: BLE001
                 out.append({"id": p.name.lstrip("c"), "ok": False,
                             "reason": f"{type(exc).__name__}: {exc}", "records": 0})

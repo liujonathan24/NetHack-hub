@@ -163,18 +163,33 @@ def audit_session_attempt(add, spec, adir: Path, from_ck_dir: Path, scope: str,
                 f"directive block count {text.count(DIRECTIVE)}", scope)
         else:
             add("session.no_directive_in_resume_turn", DIRECTIVE not in text, "", scope)
-    # Continuity of the call counter: the seed's last marker and the first
-    # new tool result's marker must be consecutive.
+    # Continuity of the call counter: the env continues from the checkpoint's
+    # own call (seal.json "call"), so the first new marker must be call+1. The
+    # seed's last result need not carry a marker (a batched cell prints what
+    # the model's code printed); when the seal cut BEFORE such a cell, the
+    # transcript legitimately lags the game by cut.lag_calls.
     import re as _re
+    seal_p = from_ck_dir / "session" / "seal.json"
+    seal = json.loads(seal_p.read_text()) if seal_p.is_file() else {}
+    base = seal.get("call")
+    cut = seal.get("cut") or {}
     seed_marks = [int(x) for x in _re.findall(r"\[call#(\d+)\]", _message_text(last_seed))]
     first_res = next((r for r in new if (r.get("message") or {}).get("role") == "toolResult"), None)
     new_marks = [int(x) for x in _re.findall(r"\[call#(\d+)\]", _message_text(first_res or {}))]
-    if seed_marks and new_marks:
+    if base is not None and new_marks:
+        add("session.call_counter_continues", new_marks[0] == int(base) + 1,
+            f"checkpoint call {base} (transcript ends at call {cut.get('transcript_end_call')}, "
+            f"lag {cut.get('lag_calls')}, cut {cut.get('method')}/{cut.get('position')}), "
+            f"resumed starts at [call#{new_marks[0]}]", scope)
+    elif seed_marks and new_marks:
         add("session.call_counter_continues", new_marks[0] == max(seed_marks) + 1,
             f"seed ends at [call#{max(seed_marks)}], resumed starts at [call#{new_marks[0]}]", scope)
     else:
         add("session.call_counter_continues", False,
-            f"markers not found (seed {seed_marks}, new {new_marks})", scope)
+            f"markers not found (seal call {base}, seed {seed_marks}, new {new_marks})", scope)
+    if cut.get("position") == "before_batch":
+        add("session.transcript_lag_recorded", isinstance(cut.get("lag_calls"), int) and cut["lag_calls"] >= 1,
+            f"lag {cut.get('lag_calls')} call(s): the checkpoint was saved mid-batch", scope)
 
 
 def pre_death_expected(attempts: list, k: int) -> tuple:
