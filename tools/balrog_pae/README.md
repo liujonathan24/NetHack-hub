@@ -85,14 +85,22 @@ alone. Both arms get it so base and PAE play the same game; the paper states it.
 ## Progress accounting
 
 The reported metric is always **BALROG's own** `env.get_stats()["progression"]`.
-On MiniHack that is binary (1.0 only if the task is solved), which is far too
-sparse to choose a checkpoint from, so each adapter also exposes an
-`aux_progress` used **only** to trigger checkpoints and to fill the
-orchestrator's ledger — never reported:
+Checkpoints are written every K steps and on any increase of **that** metric;
+the plateau guard reads **that** metric only (with MiniHack's binary
+progression it therefore never resets, and the attempt cap N is what bounds
+compute — intended). `summary.json` reports both `attempt1_progression` (the
+base-comparable single-episode number, since attempt 1 is a stock BALROG
+episode) and `pae_best_progression` (the run-level best over attempts).
+
+Each adapter additionally exposes a dense **`aux`** signal. It drives nothing:
+not checkpointing, not stopping, not the reported metric. It appears as a
+labelled measured field in the orchestrator's ledger (an LLM cannot choose a
+branch point from an all-zero column) and in `summary.json` only under
+`aux_label` / `aux_max_measured`:
 
 * MiniHack: number of distinct `(dlvl, x, y)` cells seen
 * Crafter: achievements unlocked (`score_tracker`; BALROG's progression is this / 22)
-* TextWorld: `score / max_score` (same as progression)
+* TextWorld: `score / max_score` (identical to progression)
 
 Step accounting under the caps (tasks.md §3.5 open question) is reported both
 ways: `committed_steps` (steps of the committed trajectory, i.e. the BALROG
