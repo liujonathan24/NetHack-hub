@@ -47,17 +47,46 @@ TASKS = [
 DEFAULTS = dict(step_mult=4.0, prompt_mult=1.25, billed_ratio=0.36, orch=0.05)
 
 
-def measure(run_root: str) -> dict:
-    """Derive the multipliers and the billed ratio from actual runs."""
+def measure(run_root: str, attempts: int = 10) -> dict:
+    """Derive the multipliers and the billed ratio from actual runs.
+
+    step_mult is NORMALISED to the panel's N and measured WITHIN each PAE run:
+
+        step_mult(N) = (a1_calls + (N-1) * mean_resume_calls) / a1_calls
+
+    The denominator is the run's OWN attempt 1, which is a stock BALROG episode
+    under the same protocol as the base arm. Dividing by a separate base run
+    instead makes the number swing wildly on small samples - a base episode that
+    happens to die at step 7 against a PAE attempt 1 that survives to step 13 is
+    sampling noise on one seed, not a real 2x. The base-run ratio is reported
+    alongside as a cross-check, never used.
+
+    On a one-seed smoke this is a planning estimate, not a measurement.
+    """
     base, pae = [], []
     for f in sorted(Path(run_root).rglob("summary.json")):
         s = json.loads(f.read_text())
+        s["_dir"] = f.parent
         (base if s.get("arm") == "base" else pae).append(s)
     out = {}
     if base and pae:
-        bs = sum(s["llm_steps"] for s in base) / len(base)
-        ps = sum(s["llm_steps"] for s in pae) / len(pae)
-        out["step_mult"] = ps / bs if bs else None
+        base_calls = sum(s["llm_steps"] for s in base) / len(base)
+        projected = []
+        for s in pae:
+            try:
+                rows = [json.loads(l) for l in (s["_dir"] / "attempts.jsonl").open()]
+            except Exception:  # noqa: BLE001
+                continue
+            if len(rows) < 2:
+                continue
+            a1 = rows[0]["calls"]
+            resume = sum(r["calls"] for r in rows[1:]) / (len(rows) - 1)
+            projected.append((a1 + (attempts - 1) * resume, a1))
+        if projected:
+            out["step_mult"] = sum(p / a for p, a in projected) / len(projected)
+            if base_calls:
+                out["_step_mult_vs_base_run"] = (
+                    sum(p for p, _ in projected) / len(projected) / base_calls)
         bp = sum(s["tokens_per_llm_step"]["input"] for s in base) / len(base)
         pp = sum(s["tokens_per_llm_step"]["input"] for s in pae) / len(pae)
         out["prompt_mult"] = pp / bp if bp else None
@@ -80,8 +109,10 @@ def main():
 
     d = dict(DEFAULTS)
     src = {k: "assumed: default" for k in d}
+    xcheck = None
     if a.measure:
-        m = measure(a.measure)
+        m = measure(a.measure, attempts=a.attempts)
+        xcheck = m.pop("_step_mult_vs_base_run", None)
         for k, v in m.items():
             if v:
                 d[k], src[k] = v, f"measured: {a.measure}"
@@ -96,6 +127,9 @@ def main():
     print(f"       prompt_mult = {d['prompt_mult']:.2f}   [{src['prompt_mult']}]  (input only)")
     print(f"       orchestrator overhead {d['orch']:.0%} on the PAE arm only")
     print(f"       billed ratio = {d['billed_ratio']:.2f} of list [{src['billed_ratio']}]")
+    if a.measure and xcheck:
+        print(f"       (cross-check: dividing by the separate base run instead gives "
+              f"step_mult {xcheck:.1f} - noisy on one seed, not used)")
     print()
     hdr = (f"{'game':<10}{'task':<22}{'eps':>4}{'steps':>7}{'in/step':>9}{'out/step':>9}"
            f"{'base $':>9}{'PAE $':>9}{'both $':>9}")

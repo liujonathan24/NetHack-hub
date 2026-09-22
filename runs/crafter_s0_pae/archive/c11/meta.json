@@ -1,0 +1,13 @@
+{
+  "id": "c11",
+  "parent": "c10",
+  "attempt": 1,
+  "step": 50,
+  "reason": "periodic",
+  "progression": 0.2727272727272727,
+  "aux_progress": 6.0,
+  "summary": "step 50, achievements 6: collect_coal, collect_drink, collect_stone, collect_wood, make_wood_pickaxe, place_table",
+  "prev_action": "Do",
+  "obs_digest": "85871eb92d781dc5",
+  "state_digest": "6037a11fecbac2f9"
+}

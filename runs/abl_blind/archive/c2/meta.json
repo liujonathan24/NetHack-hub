@@ -1,0 +1,13 @@
+{
+  "id": "c2",
+  "parent": "c1",
+  "attempt": 1,
+  "step": 10,
+  "reason": "periodic",
+  "progression": 0.0,
+  "aux_progress": 5.0,
+  "summary": "pos=(29,8) dlvl=1 hp=13/13 time=10 cells_seen=5",
+  "prev_action": "east",
+  "obs_digest": "b850169275feefa5",
+  "state_digest": null
+}

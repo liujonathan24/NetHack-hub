@@ -1,0 +1,13 @@
+{
+  "id": "c6",
+  "parent": "c5",
+  "attempt": 1,
+  "step": 20,
+  "reason": "periodic",
+  "progression": 0.13636363636363635,
+  "aux_progress": 3.0,
+  "summary": "step 20, achievements 3: collect_wood, make_wood_pickaxe, place_table",
+  "prev_action": "Move West",
+  "obs_digest": "d4fe508c5cd15385",
+  "state_digest": "cc60d3baf7f3e71f"
+}

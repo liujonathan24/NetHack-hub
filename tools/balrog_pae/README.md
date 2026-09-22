@@ -35,7 +35,10 @@ Inference requires gets sent.
 | `pae.py` | the loop, the archive, the ablation switches, the metrics |
 | `run.py` | CLI |
 | `selftest_offline.py` | full loop with a scripted client — no LLM calls, no money |
-| `cost_projection.py` | per-task projection for the full study |
+| `cost_projection.py` | per-task projection for the full panel, with per-row provenance |
+| `aggregate.py` | base mean vs PAE mean-of-best across seeds, per game/task |
+| `archive_tree.py` | rebuild + validate the checkpoint tree from `archive/*/meta.json` |
+| `test_replay_invalid_action.py` | replay parity across an invalid action (free) |
 | `../balrog_ckpt/` | the earlier checkpoint-feasibility work this reuses (see its REPORT.md) |
 
 ## Ablation switches (the three used on NetHack)
@@ -45,6 +48,10 @@ Inference requires gets sent.
 | `--select` | `fixed` \| `orchestrator` | `fixed` = latest resumable checkpoint of the previous attempt (the "pre-death" rule) |
 | `--directive` | `on` \| `off` | `off` = no extra message at all |
 | `--blind` | flag | the extra message is the neutral `"Continue playing."` |
+
+`--checkpoint-every K` (default 10) and `--max-steps` set the checkpoint
+density and the episode horizon. Both matter more than they look — see
+"Checkpoint starvation on MiniHack" below.
 
 `--base-only` runs a single unchanged BALROG episode (the leaderboard protocol).
 Stop rules: `--attempts N` (default 10) and `--plateau P` attempts with no
@@ -77,6 +84,16 @@ plus two audit streams that are the point of the whole thing:
 
 Both are asserted at runtime (`--no-verify-restore` to downgrade to logging).
 
+Every `summary.json` carries `provenance` (this tool's git commit, branch and
+dirty flag, and the BALROG checkout's commit), `env_patches`, and an
+`orchestrator` block (`rounds`, `directive_rejections`, `root_picks`). Each
+`archive/cN/meta.json` carries `parent`, so the archive is a tree
+reconstructible without opening a single pickle — `archive_tree.py` does that
+and flags multiple roots or orphans.
+
+Run outputs are tracked in git except the per-step traces, the checkpoint
+pickles and the driver logs (`runs/.gitignore`).
+
 ## Restore method per game
 
 | game | method | verified |
@@ -88,14 +105,22 @@ Both are asserted at runtime (`--no-verify-restore` to downgrade to logging).
 ## Engine patches (disclosed)
 
 `summary.json` carries `env_patches`. MiniHack and TextWorld run stock
-(`env_patches: []`). **Crafter runs with one patch in every arm, `--base-only`
-included**: `crafter_balance_chunk_sorted` sorts the per-chunk object set before
-Crafter's despawn logic indexes into it. Stock Crafter is not reproducible
-across processes because that set is iterated in `id()`-hash order, and a
-pickle-restored copy diverges from the original within ~30 steps (1/5 seeds pass
-unpatched, 5/5 patched — `balrog_ckpt/REPORT.md`). The patch reorders an
-already-arbitrary choice; it leaves the RNG stream, rewards and achievements
-alone. Both arms get it so base and PAE play the same game; the paper states it.
+(`env_patches: []`). **Crafter runs with TWO patches in every arm, `--base-only` included:**
+
+1. `crafter_balance_chunk_sorted` — sorts the per-chunk object set before
+   Crafter's despawn logic indexes into it. Stock Crafter is not reproducible
+   across processes because that set is iterated in `id()`-hash order, so a
+   pickle-restored copy diverges from the original within ~30 steps. It reorders
+   an already-arbitrary choice; the RNG stream, rewards and achievements are
+   untouched.
+2. `crafter_seed_pinning` — Crafter drew its world seed from the **global** numpy
+   RNG, so `reset(seed=)` never reached it and the same nominal seed produced
+   different worlds. Owned by the Crafter agent's branch.
+
+Restore verification with both patches: **750/750 branch steps identical**,
+against **252/750 unpatched**. Both arms get the patches so base and PAE play
+the same game; `summary.json` lists them in `env_patches` and the paper states
+them.
 
 ## Progress accounting
 
@@ -123,56 +148,94 @@ horizon — a checkpoint at step 60 leaves 40) and `total_env_steps` (every env
 step including replays). A checkpoint at the cap is not resumable and is
 filtered out of both the fixed rule and the orchestrator's ledger.
 
-## Measured (GLM-5.2, 2026-09-22)
+## Measured (GLM-5.2, 2026-09-22, seed 0, all at commit `6a26ee8`'s parent tree)
 
-| run | arm | attempts | ckpts | committed steps | LLM calls | in tok | out tok | list $ | billed $ | progression |
-|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| `runs/mh_quest_easy_s0_base` | base (unchanged BALROG) | 1 | 6 | 7 | 7 | 9,668 | 1,385 | 0.0216 | 0.0062 | 0.000 |
-| `runs/mh_quest_easy_s0_pae` | PAE fixed + directive | 3 | 11 | 17 | 22 | 63,322 | 5,495 | 0.1241 | n/a | 0.000 |
-| `runs/mh_quest_easy_s0_pae_orch` | PAE orchestrator + directive | 4 | 20 | 13 | 31 | 53,301 | 13,734 | 0.1486 | 0.0572 | 0.000 |
-| `runs/abl_directive_off` | PAE fixed, no directive | 2 | 5 | 6 | 7 | 9,399 | 1,706 | 0.0227 | 0.0089 | 0.000 |
-| `runs/abl_blind` | PAE fixed, neutral turn | 2 | 7 | 10 | 11 | 19,622 | 3,046 | 0.0450 | 0.0132 | 0.000 |
-| `runs/crafter_s0_pae` | PAE fixed + directive | 2 | 10 | 60 (capped) | 70 | 104,046 | 11,630 | 0.2165 | 0.0834 | **0.091** (2/22) |
+| run | arm | att | ckpts | committed steps | LLM calls | in tok | out tok | list $ | billed $ | a1 prog | PAE best | restore parity | prompt parity |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|:-:|:-:|
+| `runs/mh_quest_easy_s0_base` | base (unchanged BALROG) | 1 | 1 | 5 | 5 | 5,706 | 1,607 | 0.0166 | 0.0052 | 0.000 | **0.000** | n/a | n/a |
+| `runs/mh_quest_easy_s0_pae` | PAE fixed + directive | 3 | 2 | 14 | 20 | 52,169 | 6,860 | 0.1135 | 0.0293 | 0.000 | **0.000** | 2/2 | 2/2 |
+| `runs/mh_quest_easy_s0_pae_orch` | PAE orchestrator + directive | 4 | 1 | 10 | 30 | 46,117 | 11,323 | 0.1258 | 0.0445 | 0.000 | **0.000** | 3/3 | 3/3 |
+| `runs/mh_quest_easy_s0_pae_orch_k3` | PAE orchestrator + directive, K=3 | 4 | 6 | 15 | 26 | 62,812 | 9,121 | 0.1409 | 0.0436 | 0.000 | **0.000** | 3/3 | 3/3 |
+| `runs/abl_directive_off` | PAE fixed, no directive | 2 | 1 | 8 | 15 | 21,589 | 2,575 | 0.0457 | 0.0107 | 0.000 | **0.000** | 1/1 | 1/1 |
+| `runs/abl_blind` | PAE fixed, neutral turn | 2 | 2 | 17 | 18 | 45,959 | 4,728 | 0.0937 | 0.0228 | 0.000 | **0.000** | 1/1 | 1/1 |
+| `runs/crafter_s0_pae` | PAE fixed + directive | 2 | 13 | 60 | 70 | 125,448 | 10,536 | 0.2442 | 0.0913 | 0.273 | **0.273** | 1/1 | 1/1 |
+| `runs/tw_cooking_s0_pae` | PAE fixed + directive | 2 | 8 | 80 | 90 | 152,900 | 6,349 | 0.2662 | 0.0909 | 0.235 | **0.235** | 1/1 | 1/1 |
+
+totals: list $1.0466  billed $0.3383  llm calls 274; billed/list ratio: 0.323
+
+"restore parity" = restores whose replayed/restored state digest and observation
+text matched the checkpoint exactly. "prompt parity" = resumes whose message list
+equalled the checkpoint's stored next-prompt plus exactly the directive turn.
+**Both are 100% across all three games.**
 
 Per-step: MiniHack input grows ~235 tok/step until the 16-observation window
-saturates (≈4.5K/step steady state), output 200-440. Crafter 1.49K in / 170 out
-per step. Prime's own `usage.cost` came in at 0.29-0.39x the list price from
-`model_prices.json`.
+saturates (~4.5K/step steady state), output 200-440. Crafter 1.5K in / 170 out.
+TextWorld 1.9K in / 130 out. Prime's own `usage.cost` totalled $0.338 against a
+$1.047 list-price estimate — **a 0.32 ratio**, so `model_prices.json` overstates
+wallet cost ~3x for this model.
+
+Variance warning: these are one seed each, at temperature 1.0. An earlier
+TextWorld run of the identical configuration reached progression **1.0** (solved)
+where the run tabulated above reached 0.235. Nothing here is a measurement of
+PAE's effect; they are plumbing checks with cost attached.
 
 ## Cost projection
 
-`python tools/balrog_pae/cost_projection.py --r 3` (env-step counts from
-tasks.md §3.4, token/step measured here):
+`python -m tools.balrog_pae.cost_projection --measure runs/` (multipliers and the
+billed ratio derived from the runs above; env-step counts from tasks.md 3.4):
 
 ```
-task                           eps  steps   in (M)  out (M)   base $    PAE $  all arms $
-MiniHack Quest-Easy              5    470     2.12     0.14     3.94    12.41       28.96
-MiniHack Quest-Medium            5    240     1.08     0.07     2.01     6.34       14.79
-MiniHack CorridorBattle-Dark     5    250     1.12     0.07     2.10     6.60       15.40
-MiniHack Boxoban-Medium          5    450     2.02     0.14     3.77    11.88       27.72
-MiniHack Boxoban-Hard            5    440     1.98     0.13     3.69    11.62       27.11
-Crafter default                 10   2700     4.02     0.46     8.42    26.51       61.86
-TextWorld treasure_hunter        5    400     0.60     0.12     1.50     4.74       11.06
-TextWorld the_cooking_game       5    400     0.60     0.12     1.50     4.74       11.06
-TextWorld coin_collector         5    400     0.60     0.12     1.50     4.74       11.06
-TOTAL (list price)                           14.15     1.37    28.44    89.58      209.02
-TOTAL (observed billed ~0.36x)                                 10.24    32.25       75.25
+PANEL: 5 MiniHack tasks x 5 seeds, Crafter x 10 seeds, TextWorld x 3 games x 5 seeds
+ARMS : base (stock BALROG) and PAE (orchestrator + directive, N=10 attempts)
+       step_mult   = 6.16   [measured: runs/]
+       prompt_mult = 1.76   [measured: runs/]  (input only)
+       orchestrator overhead 5% on the PAE arm only
+       billed ratio = 0.32 of list [measured: runs/]
+       (cross-check: dividing by the separate base run instead gives step_mult 18.6 - noisy on one seed, not used)
+
+game      task                   eps  steps  in/step out/step   base $    PAE $   both $
+----------------------------------------------------------------------------------------
+minihack  Quest-Easy               5    470     4500      320     3.99    41.72    45.71
+minihack  Quest-Medium             5    240     4500      320     2.03    21.31    23.34
+minihack  CorridorBattle-Dark      5    250     4500      320     2.12    22.19    24.31
+minihack  Boxoban-Medium           5    450     4500      320     3.82    39.95    43.76
+minihack  Boxoban-Hard             5    440     4500      320     3.73    39.06    42.79
+crafter   default                 10   2700     1490      170     8.42    84.77    93.19
+textworld treasure_hunter          5    400     1500      300     1.50    14.26    15.76
+textworld the_cooking_game         5    400     1500      300     1.50    14.26    15.76
+textworld coin_collector           5    400     1500      300     1.50    14.26    15.76
+----------------------------------------------------------------------------------------
+TOTAL list price                                             28.62   291.77   320.38
+TOTAL at billed ratio                                         9.25    94.31   103.56
 ```
 
-`all arms` = base + PAE + one token-matched sampling control, +5% orchestrator
-overhead. At r=5 the same table totals $328 list / $118 billed. Both fit the
-~$400 remaining budget; the MiniHack-only subset is $114 list / $41 billed at r=3.
+Every row states whether its step count and token rates were measured (and in
+which run) or assumed — `cost_projection.py` prints that provenance block after
+the table. The panel fits the ~$400 remaining budget at list price and has
+roughly 4x headroom at the observed billed ratio. `step_mult` is the weakest
+number in it: 6.2 is extrapolated from 2-4-attempt smokes to N=10 on one seed.
 
 ## Feasibility notes
 
-**MiniHack.** Works today; restore is exact. Two things to decide before the
-real runs: (i) the fixed "pre-death" rule picks the checkpoint 1-2 steps before
-death, and on Quest-Easy the agent simply walks into the same lava again — a
-lookback (e.g. the checkpoint ≥5 steps before the end) is needed, which is
-exactly tasks.md §1's open question; (ii) replay cost is ~0.25 ms/step, so
-restore is free relative to the LLM call. The engine-fork path (10x faster) is
-still blocked by the `load_mirror` heap corruption on Quest levels documented in
-`balrog_ckpt/REPORT.md`; the replay path avoids it entirely.
+**MiniHack.** Works today; restore is exact. Replay cost is ~0.25 ms/step, so
+restore is free next to the LLM call, and the engine-fork path (10x faster, but
+blocked by the `load_mirror` heap corruption on Quest levels in
+`balrog_ckpt/REPORT.md`) is not needed. Two open items:
+
+*Checkpoint starvation.* Checkpoints fire every K steps or on an increase of
+BALROG's progression. MiniHack's progression is binary, and GLM-5.2 dies on
+Quest-Easy at step 7-9, so at the default K=10 an episode produces **exactly one
+checkpoint — the root**. PAE then degenerates into "restart the episode", and
+the orchestrator's 3/3 root picks in `runs/mh_quest_easy_s0_pae_orch` are that,
+not restart bias: `selection.jsonl` records `n_candidates: 1`. `--checkpoint-every
+3` fixes it without touching any metric (`runs/mh_quest_easy_s0_pae_orch_k3`).
+**K must be set per game against the observed episode length before the real
+runs.**
+
+*The fixed rule branches too late.* It picks the last checkpoint of the previous
+attempt, 1-2 steps before death, and the agent walks into the same lava again.
+A lookback (the checkpoint ≥5 steps before the end) is tasks.md §1's open
+question and should be decided with the same evidence.
 
 **Crafter.** Works today. "Progress" is achievements/22, which is dense enough
 to drive both the checkpoint trigger and the orchestrator. Budget risk from
@@ -189,13 +252,33 @@ resumes have little room late in an episode.
 
 ## Reproduce
 
+Free checks first — no API calls, no money:
+
 ```bash
 cd /root/nld/gen-pae
-.venv-balrog/bin/python -m tools.balrog_pae.selftest_offline --game minihack --run-dir /tmp/st   # free
+# the whole loop with a scripted client, on each of the three games
+for g in "minihack:MiniHack-Quest-Easy-v0" "crafter:default" "textworld:the_cooking_game"; do
+  IFS=':' read -r game task <<< "$g"
+  .venv-balrog/bin/python -m tools.balrog_pae.selftest_offline \
+      --game "$game" --task "$task" --attempts 3 --max-steps 25 \
+      --checkpoint-every 5 --run-dir "/tmp/st_$game"
+done
+# replay parity across an invalid action
+.venv-balrog/bin/python -m tools.balrog_pae.test_replay_invalid_action
+# rebuild the checkpoint tree from meta.json alone
+.venv-balrog/bin/python tools/balrog_pae/archive_tree.py runs/crafter_s0_pae
+```
+
+Paid runs:
+
+```bash
+cd /root/nld/gen-pae
 .venv-balrog/bin/python -m tools.balrog_pae.run --game minihack --task MiniHack-Quest-Easy-v0 \
     --seed 0 --attempts 3 --select fixed --directive on --run-dir runs/x
 .venv-balrog/bin/python -m tools.balrog_pae.run --game minihack --task MiniHack-Quest-Easy-v0 \
     --seed 0 --base-only --run-dir runs/x_base
+.venv-balrog/bin/python -m tools.balrog_pae.aggregate runs/
+.venv-balrog/bin/python -m tools.balrog_pae.cost_projection --measure runs/
 ```
 
 The venv is `/root/nld/gen-pae/.venv-balrog` (BALROG `b7afe79` installed editable

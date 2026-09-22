@@ -1,0 +1,13 @@
+{
+  "id": "c10",
+  "parent": "c9",
+  "attempt": 1,
+  "step": 40,
+  "reason": "periodic",
+  "progression": 0.2727272727272727,
+  "aux_progress": 6.0,
+  "summary": "step 40, achievements 6: collect_coal, collect_drink, collect_stone, collect_wood, make_wood_pickaxe, place_table",
+  "prev_action": "Move West",
+  "obs_digest": "30cb212f74ecf790",
+  "state_digest": "827bd6ed45a53ed5"
+}

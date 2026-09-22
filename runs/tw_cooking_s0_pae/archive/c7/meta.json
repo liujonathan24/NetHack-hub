@@ -1,0 +1,13 @@
+{
+  "id": "c7",
+  "parent": "c6",
+  "attempt": 1,
+  "step": 60,
+  "reason": "periodic",
+  "progression": 0.0,
+  "aux_progress": 0.0,
+  "summary": "step 60, score fraction 0.00",
+  "prev_action": "open frostedglass door",
+  "obs_digest": "dfeb1f82b2d80ef4",
+  "state_digest": "54d834a1fe6e3471"
+}

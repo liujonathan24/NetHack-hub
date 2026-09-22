@@ -1,0 +1,13 @@
+{
+  "id": "c2",
+  "parent": "c1",
+  "attempt": 1,
+  "step": 4,
+  "reason": "progression",
+  "progression": 0.045454545454545456,
+  "aux_progress": 1.0,
+  "summary": "step 4, achievements 1: collect_wood",
+  "prev_action": "Do",
+  "obs_digest": "33f1568365d88bfd",
+  "state_digest": "b4330a0a8d4d9677"
+}

@@ -1,4 +1,5 @@
 # Run summaries, attempt rows and the two audit streams ARE tracked.
-# The bulky per-step traces and checkpoint blobs are not.
+# The bulky per-step traces, checkpoint blobs and driver logs are not.
 */attempts/*/trace.jsonl
 */archive/*/checkpoint.pkl
+*.log

@@ -1,0 +1,13 @@
+{
+  "id": "c3",
+  "parent": "c2",
+  "attempt": 1,
+  "step": 10,
+  "reason": "periodic",
+  "progression": 0.045454545454545456,
+  "aux_progress": 1.0,
+  "summary": "step 10, achievements 1: collect_wood",
+  "prev_action": "Move South",
+  "obs_digest": "eca0deecd8bfa4de",
+  "state_digest": "3a1f4c934c6956df"
+}

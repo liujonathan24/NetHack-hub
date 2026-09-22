@@ -1,0 +1,13 @@
+{
+  "id": "c1",
+  "parent": null,
+  "attempt": 1,
+  "step": 0,
+  "reason": "episode start",
+  "progression": 0.0,
+  "aux_progress": 0.0,
+  "summary": "step 0, achievements 0: none",
+  "prev_action": null,
+  "obs_digest": "2e6c262520cca6c5",
+  "state_digest": "0df543fc948b040d"
+}

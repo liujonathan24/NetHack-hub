@@ -1,0 +1,13 @@
+{
+  "id": "c5",
+  "parent": "c4",
+  "attempt": 1,
+  "step": 15,
+  "reason": "progression",
+  "progression": 0.13636363636363635,
+  "aux_progress": 3.0,
+  "summary": "step 15, achievements 3: collect_wood, make_wood_pickaxe, place_table",
+  "prev_action": "Make Wood Pickaxe",
+  "obs_digest": "f821fed00e00f025",
+  "state_digest": "4da1870262336d59"
+}
