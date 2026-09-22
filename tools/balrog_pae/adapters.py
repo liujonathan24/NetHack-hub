@@ -264,7 +264,7 @@ class CrafterAdapter(BaseAdapter):
 
     env_name = "crafter"
     aux_label = "achievements unlocked (of 22)"
-    env_patches = ("crafter_balance_chunk_sorted",)
+    env_patches = ("crafter_balance_chunk_sorted", "crafter_seed_pinned_to_episode_seed")
 
     def __init__(self, task, cfg):
         super().__init__(task, cfg)
@@ -276,6 +276,29 @@ class CrafterAdapter(BaseAdapter):
 
         crafter_ckpt.apply_determinism_patch()
         self._ck = crafter_ckpt
+
+    def reset(self, seed: int):
+        """Reset to the world named by ``seed`` (disclosed patch #2).
+
+        BALROG ships ``envs.crafter_kwargs.seed: null``, so ``crafter.Env.__init__``
+        draws its world seed from the *global* numpy RNG at construction time; and
+        ``CrafterLanguageWrapper.reset()`` takes no seed argument, so the seed the
+        evaluator passes never reaches Crafter at all.  Stock BALROG therefore
+        plays a different, uncontrolled world in every process - which would make
+        "base seed k" and "PAE seed k" different episodes and void the paired
+        comparison this experiment rests on.
+
+        Crafter derives the world seed as ``hash((_seed, _episode)) % (2**31-1)``;
+        tuples of ints hash identically in every CPython process (PYTHONHASHSEED
+        only perturbs str/bytes), so pinning ``_seed = seed`` and ``_episode = 0``
+        immediately before the reset makes ``--seed k`` name one fixed world.
+        Applied in EVERY arm, ``--base-only`` included, and disclosed in
+        ``summary.json`` as ``crafter_seed_pinned_to_episode_seed``.
+        """
+        _, core = self._ck.inner_crafter(self.env)
+        core._seed = int(seed)
+        core._episode = 0
+        return super().reset(seed)
 
     def env_snapshot(self) -> dict:
         return {"kind": "pickle", "blob": self._ck.snapshot_pickle(self.env), "steps": self.steps}
