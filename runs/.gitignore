@@ -1,0 +1,4 @@
+# Run summaries, attempt rows and the two audit streams ARE tracked.
+# The bulky per-step traces and checkpoint blobs are not.
+*/attempts/*/trace.jsonl
+*/archive/*/checkpoint.pkl

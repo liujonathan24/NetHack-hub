@@ -123,3 +123,34 @@ class Accountant:
         out["billed_by_provider_usd"] = round(BILLED["usd"], 6)
         out["billed_calls"] = BILLED["calls"]
         return out
+
+
+def provenance() -> dict:
+    """git commits of this tool and of the BALROG checkout it drives."""
+    import subprocess
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+
+    def git(repo: Path, *args):
+        try:
+            return subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                                  text=True, timeout=20, check=True).stdout.strip()
+        except Exception:  # noqa: BLE001
+            return None
+
+    repo = here.parent.parent
+    try:
+        import balrog
+
+        balrog_dir = Path(balrog.__file__).resolve().parent.parent
+    except Exception:  # noqa: BLE001
+        balrog_dir = None
+    return {
+        "tool_commit": git(repo, "rev-parse", "HEAD"),
+        "tool_branch": git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
+        "tool_dirty": bool(git(repo, "status", "--porcelain", "--", str(here))),
+        "tool_dir": str(here),
+        "balrog_commit": git(balrog_dir, "rev-parse", "HEAD") if balrog_dir else None,
+        "balrog_dir": str(balrog_dir) if balrog_dir else None,
+    }

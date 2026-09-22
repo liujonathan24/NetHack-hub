@@ -26,7 +26,7 @@ from omegaconf import OmegaConf
 from .adapters import make_adapter, obs_digest
 from .orchestrator import Orchestrator
 from .player import PAEAgent, dump_prompt_state, load_prompt_state, messages_to_json, simulate_next_prompt
-from .prime_client import MODEL_ID, Accountant, prime_client_factory
+from .prime_client import MODEL_ID, Accountant, prime_client_factory, provenance
 
 NEUTRAL_DIRECTIVE = "Continue playing."
 
@@ -384,6 +384,7 @@ class Run:
             "tokens": self.acct.snapshot(),
             "wall_s": round(time.time() - self.t0, 1),
             "run_dir": str(self.dir),
+            "provenance": provenance(),
         }
         st = summary["tokens"]["total"]
         summary["tokens_per_llm_step"] = {
