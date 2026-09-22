@@ -145,6 +145,15 @@ def audit_session_attempt(add, spec, adir: Path, from_ck_dir: Path, scope: str,
     add("session.first_new_turn_is_the_resume_prompt", text == resume_prompt,
         f"len {len(text)} vs served {len(resume_prompt)}; match {text == resume_prompt}", scope)
     new_text = "\n".join(_message_text(r) for r in new)
+    # EXACTLY ONE new user turn. A second one is the harness relaunch nudge
+    # ("Your previous session ended, but the game did not ..."), issued when
+    # the CLI exits with the game live (e.g. a first reply that spent its
+    # whole output budget thinking). Pre-existing mechanism, no checkpoint
+    # content, but it must be counted per attempt, not silently absorbed.
+    new_users = [r for r in new if (r.get("message") or {}).get("role") == "user"]
+    relaunch = [r for r in new_users[1:] if "previous session ended" in _message_text(r)]
+    add("session.exactly_one_new_user_turn", len(new_users) == 1,
+        f"{len(new_users)} new user turn(s); harness relaunch nudges: {len(relaunch)}", scope)
     # What the arm may and may not say in the resume turn.
     if spec["blind"]:
         add("session.blind_prompt_exact", resume_prompt == BLIND_RESUME_PROMPT,
