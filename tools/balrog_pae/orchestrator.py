@@ -78,23 +78,36 @@ def validate_directive(text: str) -> tuple[bool, list[str]]:
 
 
 class Orchestrator:
-    def __init__(self, game, task, accountant, model_id=MODEL_ID, temperature=1.0, max_tokens=1024):
+    def __init__(self, game, task, accountant, model_id=MODEL_ID, temperature=1.0, max_tokens=1024,
+                 step_cap: int | None = None):
         self.client = make_openai_client()
         self.game, self.task = game, task
+        #: the run's EFFECTIVE horizon - cfg.max_steps when given, else the env
+        #: default. Never adapter.max_steps directly: a run with --max-steps 20
+        #: would otherwise be told it has the env's 80 steps to play with.
+        self.step_cap = step_cap
         self.accountant = accountant
         self.model_id, self.temperature, self.max_tokens = model_id, temperature, max_tokens
         self.rounds: list[dict] = []
         self.rejections = 0
 
+    def _steps_left(self, step) -> str:
+        return "?" if self.step_cap is None else str(max(0, self.step_cap - step))
+
     def _ledger(self, archive, attempts) -> str:
         aux = attempts[0].get("aux_label", "measured") if attempts else "measured"
+        cap = "unknown" if self.step_cap is None else str(self.step_cap)
         lines = [
-            f"CHECKPOINT LEDGER (id | parent | from attempt | step | BALROG progression | {aux} | state)",
+            f"EPISODE HORIZON: {cap} steps total. A checkpoint taken at step S leaves {cap} - S steps"
+            " to play, so a deep checkpoint buys progress but little room to change course.",
+            "",
+            f"CHECKPOINT LEDGER (id | parent | from attempt | step | steps left | BALROG progression | {aux} | state)",
             "the checkpoint with parent '-' is the ROOT: resuming it restarts the episode from scratch",
         ]
         for c in archive:
             lines.append(
                 f"{c['id']} | {c.get('parent') or '-'} | a{c['attempt']} | step {c['step']} | "
+                f"{self._steps_left(c['step'])} | "
                 f"{c['progression']:.3f} | {c['aux_progress']:.0f} | {c['summary']}"
             )
         lines.append("")
