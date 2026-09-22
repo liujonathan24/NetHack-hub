@@ -73,7 +73,7 @@ class Run:
         if cfg.select == "orchestrator" or (cfg.directive == "on" and not cfg.blind):
             self.orch = Orchestrator(cfg.game, cfg.task, self.acct, cfg.model_id, cfg.temperature, cfg.max_tokens)
         self.t0 = time.time()
-        self.best = {"progression": -1.0, "aux": -1.0}
+        self.best = {"progression": -1.0, "attempt": None}
         try:
             self.step_cap = cfg.max_steps or self.adapter.max_steps
         except Exception:  # noqa: BLE001
@@ -188,7 +188,7 @@ class Run:
 
         max_steps = cfg.max_steps or self.adapter.max_steps
         outcome, step = "step_cap", step0
-        last_prog, last_aux = self.adapter.progression(), self.adapter.aux_progress()
+        last_prog = self.adapter.progression()
         in_tok = out_tok = calls = 0
         first_call_checked = ckpt_id is not None
 
@@ -236,13 +236,16 @@ class Run:
             })
 
             if not done:
-                advanced = prog > last_prog or aux > last_aux
+                # K steps, or an increase of BALROG's OWN progression. The dense
+                # aux signal deliberately does not trigger checkpoints: it is a
+                # measured field for the orchestrator ledger, not a metric.
+                advanced = prog > last_prog
                 if advanced or ((step + 1) % self.cfg.checkpoint_every == 0):
                     new_ckpts.append(self._save_checkpoint(
                         attempt, step + 1, agent, prev_action, obs,
-                        "progress" if advanced else "periodic",
+                        "progression" if advanced else "periodic",
                         new_ckpts[-1] if new_ckpts else ckpt_id))
-            last_prog, last_aux = prog, aux
+            last_prog = prog
 
             if done:
                 status = str(info.get("end_status", "")) if isinstance(info, dict) else ""
@@ -268,7 +271,8 @@ class Run:
             "directive_kind": ("none" if not directive else ("neutral" if directive == NEUTRAL_DIRECTIVE else "orchestrator")),
             "selection_source": "fresh" if ckpt_id is None else self._sel_source,
             "progression": self.adapter.progression(),
-            "aux_progress": self.adapter.aux_progress(),
+            "aux_measured": self.adapter.aux_progress(),
+            "aux_label": self.adapter.aux_label,
             "outcome": outcome,
             "end_status": str(info.get("end_status", "")) if isinstance(info, dict) else "",
             "calls": calls,
@@ -329,9 +333,11 @@ class Run:
         for attempt in range(1, n + 1):
             ckpt, directive = (None, None) if attempt == 1 else self._select()
             row = self.play(attempt, ckpt, directive)
-            key = (row["progression"], row["aux_progress"])
-            if key > (self.best["progression"], self.best["aux"]):
-                self.best = {"progression": key[0], "aux": key[1], "attempt": attempt}
+            # The plateau guard reads BALROG's progression ONLY. With MiniHack's
+            # binary progression it therefore never resets, and the attempt cap
+            # N is what bounds compute - which is the intended semantics.
+            if row["progression"] > self.best["progression"]:
+                self.best = {"progression": row["progression"], "attempt": attempt}
                 stale = 0
             else:
                 stale += 1
@@ -353,9 +359,15 @@ class Run:
                    f"pae(select={self.cfg.select},directive={'neutral' if self.cfg.blind else self.cfg.directive})",
             "attempts": len(self.attempts),
             "checkpoints": len(self.archive),
+            # (a) the base-comparable number: BALROG's progression for the
+            # single episode of attempt 1, which is a stock BALROG episode.
+            "attempt1_progression": self.attempts[0]["progression"] if self.attempts else 0.0,
+            # (b) PAE's run-level result: the best over all attempts.
+            "pae_best_progression": max((a["progression"] for a in self.attempts), default=0.0),
             "max_progression": max((a["progression"] for a in self.attempts), default=0.0),
             "final_progression": self.attempts[-1]["progression"] if self.attempts else 0.0,
-            "max_aux_progress": max((a["aux_progress"] for a in self.attempts), default=0.0),
+            "aux_label": self.adapter.aux_label,
+            "aux_max_measured": max((a["aux_measured"] for a in self.attempts), default=0.0),
             "committed_steps_max": max((a["committed_steps"] for a in self.attempts), default=0),
             "total_env_steps": self.adapter.total_env_steps,
             "llm_steps": sum(a["calls"] for a in self.attempts),

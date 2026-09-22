@@ -51,6 +51,8 @@ def obs_digest(obs: dict) -> str:
 
 class BaseAdapter:
     env_name = ""
+    #: label for the dense exploration proxy (NOT a reported metric)
+    aux_label: str = "none"
     #: engine patches this adapter installs. Applied IDENTICALLY in every arm
     #: (base included) so the arms stay comparable; disclosed in summary.json.
     env_patches: tuple[str, ...] = ()
@@ -131,6 +133,7 @@ class MiniHackAdapter(BaseAdapter):
     """
 
     env_name = "minihack"
+    aux_label = "distinct (dlvl,x,y) cells seen"
 
     def __init__(self, task, cfg):
         super().__init__(task, cfg)
@@ -260,6 +263,7 @@ class CrafterAdapter(BaseAdapter):
     """
 
     env_name = "crafter"
+    aux_label = "achievements unlocked (of 22)"
     env_patches = ("crafter_balance_chunk_sorted",)
 
     def __init__(self, task, cfg):
@@ -298,6 +302,7 @@ class CrafterAdapter(BaseAdapter):
 # ---------------------------------------------------------------------------
 class TextWorldAdapter(BaseAdapter):
     env_name = "textworld"
+    aux_label = "score / max_score (same as progression)"
     _SKIP = {
         "_wrapped_env", "_game", "_inform7", "_jericho", "_gamefile", "gamefile",
         "request_infos", "_tracked_infos", "_process", "_names_struct",
