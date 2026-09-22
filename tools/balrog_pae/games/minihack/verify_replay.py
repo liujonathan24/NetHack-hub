@@ -156,10 +156,11 @@ def verify_task(task, cfg, seed=0, steps=100, every=10, replays=3, source="scrip
     ckpts = []          # {"step", "snap", "rec", "digests", "invalid_before"}
     invalid_steps = []
 
-    def take(step):
+    def take(step, reason="periodic"):
         rec = snap_obs(obs)
         ckpts.append({
             "step": step,
+            "reason": reason,
             "snap": base.env_snapshot(),
             "rec": rec,
             "digests": digests(rec),
@@ -181,16 +182,24 @@ def verify_task(task, cfg, seed=0, steps=100, every=10, replays=3, source="scrip
         if term or trunc:
             outcome = "terminated" if term else "truncated"
             break
-        if played % every == 0:
+        # A checkpoint taken immediately after an invalid action is the one that
+        # carries the evaluator's feedback banner in its rendered text, so its
+        # long_term_context comparison is a direct assertion that the
+        # "did not contain a valid action" text survives the replay verbatim.
+        if action != completion:
+            take(played, "post_invalid")
+        elif played % every == 0:
             take(played)
     base.close()
 
     # pick the checkpoints to replay: prefer ones whose prefix contains an
     # invalid action, then spread over the episode.
     pool = ckpts[1:]                       # step 0 has an empty prefix: nothing to replay
+    post_invalid = [c for c in pool if c["reason"] == "post_invalid"]
     with_invalid = [c for c in pool if c["invalid_before"]]
-    picked = []                            # earliest invalid-covering one, then the deepest ones
-    if with_invalid:
+    picked = []                            # the feedback-banner ones first, then the deepest
+    picked.extend(post_invalid[:1])
+    if with_invalid and not picked:
         picked.append(with_invalid[0])
     for c in reversed(pool):
         if len(picked) >= replays:
@@ -207,10 +216,16 @@ def verify_task(task, cfg, seed=0, steps=100, every=10, replays=3, source="scrip
         ms = (time.perf_counter() - t1) * 1e3
         rrec = snap_obs(robs)
         per_field = {k: bool(_eq(c["rec"][k], rrec[k])) for k in c["rec"]}
+        banner = "did not contain a valid action"
+        saved_text = c["rec"]["long_term_context"] or ""
         results.append({
             "checkpoint_step": c["step"],
+            "checkpoint_reason": c["reason"],
             "n_replayed_actions": len(c["snap"]["log"]),
             "prefix_contains_invalid_action": bool(c["invalid_before"]),
+            "carries_invalid_action_feedback": banner in saved_text,
+            "invalid_feedback_text_identical": (
+                bool(_eq(saved_text, rrec["long_term_context"])) if banner in saved_text else None),
             "invalid_action_steps_in_prefix": c["invalid_before"],
             "identical": all(per_field.values()),
             "fields_identical": per_field,
@@ -234,6 +249,8 @@ def verify_task(task, cfg, seed=0, steps=100, every=10, replays=3, source="scrip
         "replays": results,
         "all_identical": all(r["identical"] for r in results) and len(results) >= 1,
         "invalid_action_covered": any(r["prefix_contains_invalid_action"] for r in results),
+        "invalid_feedback_text_verified": any(r["carries_invalid_action_feedback"] for r in results)
+        and all(r["invalid_feedback_text_identical"] is not False for r in results),
         "compared_fields": OBS_FIELDS + TEXT_FIELDS,
         "wall_s": round(time.time() - t0, 1),
     }
@@ -270,16 +287,22 @@ def main(argv=None):
         out["tasks"][key] = r
         print(f"{t:34s} src={a.source:8s} steps={r['episode_steps_played']:3d} "
               f"ckpts={r['checkpoints_taken']:2d} replays={len(r['replays'])} "
-              f"identical={r['all_identical']} invalid_covered={r['invalid_action_covered']}")
+              f"identical={r['all_identical']} invalid_covered={r['invalid_action_covered']} "
+              f"feedback_text_verified={r['invalid_feedback_text_verified']}")
         for rr in r["replays"]:
-            print(f"    step {rr['checkpoint_step']:3d}: {rr['n_replayed_actions']:3d} actions, "
-                  f"identical={rr['identical']}, invalid_in_prefix={rr['prefix_contains_invalid_action']}, "
+            print(f"    step {rr['checkpoint_step']:3d} ({rr['checkpoint_reason']}): "
+                  f"{rr['n_replayed_actions']:3d} actions, identical={rr['identical']}, "
+                  f"invalid_in_prefix={rr['prefix_contains_invalid_action']}, "
+                  f"feedback_banner={rr['carries_invalid_action_feedback']}"
+                  f"/{rr['invalid_feedback_text_identical']}, "
                   f"{rr['ms_per_replayed_step']:.3f} ms/step")
 
     out["summary"] = {
         "all_identical": all(v["all_identical"] for v in out["tasks"].values()),
         "tasks_with_invalid_action_coverage": sorted(
             {v["task"] for v in out["tasks"].values() if v["invalid_action_covered"]}),
+        "tasks_with_invalid_feedback_text_verified": sorted(
+            {v["task"] for v in out["tasks"].values() if v.get("invalid_feedback_text_verified")}),
         "n_task_source_pairs": len(out["tasks"]),
     }
     if a.out:
