@@ -4489,6 +4489,17 @@ Write the opening discussion again, once, as a single coherent plan. Do not
 repeat yourself and do not restate sections you have already written.
 """
 
+    SELECTION_ONLY_RETRY_PROMPT = """\
+Your last reply could not be used: {reason}
+
+Reply again. Prose first if you want it, then EXACTLY this JSON object alone on
+the final line, with an id from the archive above ({ids}):
+{{"checkpoint": "<id>", "directive": "", "rationale": "<one line>"}}
+
+IN THIS RUN NOTHING YOU WRITE REACHES THE PLAYER: leave "directive" empty. Your
+only decision is which checkpoint the next player resumes.
+"""
+
     DIRECTIVE_RETRY_PROMPT = """\
 Your last reply could not be used: {reason}
 
@@ -4785,11 +4796,18 @@ player result.
             else:
                 reason = (dec.fallback_reason or "no decision found") \
                     if dec is not None else "no reply"
-                if dec is not None and dec.valid and not dec.directive.strip():
+                if dec is not None and dec.valid and not dec.directive.strip() \
+                        and not self.cfg.no_directive:
                     reason = ("the JSON object parsed but its `directive` was "
                               "empty")
-                ask_text = self.DIRECTIVE_RETRY_PROMPT.format(
-                    reason=reason, ids=", ".join(ids))
+                # A retry must not change the ARM: a no-directive orchestrator
+                # told 'the directive must be non-empty' (measured 2026-09-22,
+                # ablate_A1_s2_sr2 round3 after a RoundTimeout) writes
+                # directives the harness then discards, and reasons as if
+                # they mattered.
+                template = (self.SELECTION_ONLY_RETRY_PROMPT if self.cfg.no_directive
+                            else self.DIRECTIVE_RETRY_PROMPT)
+                ask_text = template.format(reason=reason, ids=", ".join(ids))
                 if fixed_pick is not None:
                     # A retry must not become a free choice (A3): restate the
                     # rule. Measured 2026-09-22, ablate_A3_s0_sr2 round18_retry1.
