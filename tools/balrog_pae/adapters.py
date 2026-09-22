@@ -51,6 +51,9 @@ def obs_digest(obs: dict) -> str:
 
 class BaseAdapter:
     env_name = ""
+    #: engine patches this adapter installs. Applied IDENTICALLY in every arm
+    #: (base included) so the arms stay comparable; disclosed in summary.json.
+    env_patches: tuple[str, ...] = ()
 
     def __init__(self, task: str, cfg):
         self.task = task
@@ -244,7 +247,20 @@ class MiniHackAdapter(BaseAdapter):
 # Crafter: pickle of the inner env (plus the determinism patch)
 # ---------------------------------------------------------------------------
 class CrafterAdapter(BaseAdapter):
+    """Crafter, snapshotted by pickling the inner ``crafter.Env``.
+
+    ``crafter_ckpt.apply_determinism_patch`` sorts the per-chunk object set
+    before ``_balance_object`` picks a creature to despawn.  Without it stock
+    Crafter is not reproducible across processes and a restored copy diverges
+    from the original within ~30 steps (balrog_ckpt/REPORT.md: 1/5 seeds pass
+    unpatched, 5/5 patched).  It reorders which object an already-arbitrary
+    choice lands on; it does not touch the RNG stream, rewards or achievements.
+    It is applied in EVERY arm, --base-only included, so base and PAE play the
+    same game, and is disclosed as ``env_patches`` in summary.json.
+    """
+
     env_name = "crafter"
+    env_patches = ("crafter_balance_chunk_sorted",)
 
     def __init__(self, task, cfg):
         super().__init__(task, cfg)
