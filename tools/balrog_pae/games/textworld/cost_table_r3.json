@@ -1,0 +1,47 @@
+{
+ "ratio": 0.5314988711714594,
+ "r": 3.0,
+ "seeds": 5,
+ "attempts": 10,
+ "price_in": 1.54,
+ "price_out": 4.84,
+ "rows": [
+  {
+   "task": "treasure_hunter",
+   "base_steps": 34,
+   "in_per_step": 912.7941176470588,
+   "out_per_step": 34.26470588235294,
+   "base_list_usd": 0.0534325,
+   "pae_list_usd": 0.16831237500000001,
+   "arm_list_usd": 1.108724375,
+   "arm_billed_usd": 0.5892857537527819,
+   "base_progression": 0.0
+  },
+  {
+   "task": "the_cooking_game",
+   "base_steps": 80,
+   "in_per_step": 1768.0125,
+   "out_per_step": 109.1625,
+   "base_list_usd": 0.26008686000000003,
+   "pae_list_usd": 0.8192736090000001,
+   "arm_list_usd": 5.396802345,
+   "arm_billed_usd": 2.8683943543029855,
+   "base_progression": 0.29411764705882354
+  },
+  {
+   "task": "coin_collector",
+   "base_steps": 80,
+   "in_per_step": 1338.7875,
+   "out_per_step": 126.825,
+   "base_list_usd": 0.21404526000000001,
+   "pae_list_usd": 0.6742425690000001,
+   "arm_list_usd": 4.441439145,
+   "arm_billed_usd": 2.360619891944232,
+   "base_progression": 0.0
+  }
+ ],
+ "total_list_usd": 10.946965865000001,
+ "total_billed_usd": 5.818299999999999,
+ "ceiling_list_usd": 12.44700472529412,
+ "ceiling_billed_usd": 6.615568960959647
+}

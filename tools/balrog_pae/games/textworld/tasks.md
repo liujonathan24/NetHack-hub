@@ -178,3 +178,61 @@ Measured cost (seed 0, `restore_verification.json`): snapshot 36 ms / 875 KB
 for the Jericho path; replay restore 13–55 ms for a 10–40 step prefix
 (reset 43–266 ms amortised, ~0.5 ms/command). Both are negligible next to one
 LLM call.
+
+## 9. Calibration (measured, GLM-5.2 via Prime, 2026-09-22, seed 0)
+
+Run dirs: `/root/nld/gen_runs/textworld/cal_*`.
+
+### Base arm — one unchanged BALROG episode
+
+| task | steps | in tok | out tok | in/step | out/step | list $ | billed $ | progression | wall |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| treasure_hunter | 34 | 31,035 | 1,165 | 913 | 34 | 0.0534 | 0.0184 | 0.000 (died: took the wrong object, "*** You lost! ***") | 77 s |
+| the_cooking_game | 80 | 141,441 | 8,733 | 1,768 | 109 | 0.2601 | 0.0865 | **0.294** (5/17, hit the cap) | 139 s |
+| coin_collector | 80 | 107,103 | 10,146 | 1,339 | 127 | 0.2140 | 0.1755 | 0.000 (hit the cap) | 191 s |
+
+Input tokens/step grow with BALROG's 16-observation window and then flatten;
+output is small (GLM-5.2 emits one short command). Prime's own `usage.cost`
+summed to **0.53 ×** the list price over these nine runs.
+
+### PAE arm
+
+The first PAE pass (2 attempts, fixed rule + directive) **solved all three games
+on attempt 1** (progression 1.0; `stop_reason: solved`), so the loop never
+resumed. A second pass with a shortened horizon (`--max-steps 20`,
+`--checkpoint-every 5`) forces a resume and confirms restore + resume
+end to end on every game:
+
+| task | attempt 2 resumed from | method | restore identical | prompt state matches | directive inserted |
+|---|---|---|---|---|---|
+| treasure_hunter | `c4` @ step 15 | replay (15 steps) | yes (digest + text) | yes (32 → 33 messages) | 1 |
+| the_cooking_game | `c4` @ step 15 | jericho `set_state` | yes (digest + text) | yes (32 → 33 messages) | 1 |
+| coin_collector | `c4` @ step 15 | replay (15 steps) | yes (digest + text) | yes (32 → 33 messages) | 1 |
+
+Two things to hand back to the loop owner:
+
+* GLM-5.2 solves these games often enough that a 2-attempt smoke can finish on
+  attempt 1. The batch should keep `--attempts 10`; it will stop early on the
+  episodes that solve, which is what makes the arm cheap.
+* The orchestrator's directive said *"You have 65 steps left"* on a run whose
+  horizon was 20 — it is reading `adapter.max_steps` rather than the run's
+  effective `--max-steps`. Harmless at the default horizon (they coincide),
+  wrong under `--max-steps`. That is in `orchestrator.py`, not this adapter.
+
+### Cost for the batch
+
+`python -m tools.balrog_pae.games.textworld.cost_table --r <r>` — per-step
+tokens read out of the runs above, prices `$1.54/M` in and `$4.84/M` out,
+billed column at the measured `usage.cost / list = 0.531`.
+
+3 games × 5 seeds × {base, PAE}:
+
+| r (PAE ÷ base) | base total | PAE total | **list $** | **billed $** |
+|---|--:|--:|--:|--:|
+| 3.0 (the shared projection's figure) | 2.64 | 8.31 | **10.95** | **5.82** |
+| 4.5 (N=10 upper bound) | 2.64 | 12.46 | **15.10** | **8.03** |
+| ceiling: every episode runs the full 80-step cap, r=3 | | | 12.45 | 6.62 |
+
+`r` is **not** measured — no full N=10 run exists yet. Both rows include a 5 %
+orchestrator overhead. Smoke spend for everything above: **$1.18 list /
+$0.55 provider-billed** (nine runs).
