@@ -331,7 +331,10 @@ class TextWorldAdapter(BaseAdapter):
     """
 
     env_name = "textworld"
-    aux_label = "score / max_score (live; BALROG's progression is 0 until done)"
+    aux_label = "score / max_score (live)"
+    #: ``env_patches`` is a property below: the live-progression change is
+    #: disclosed there, and BALROG's own ``get_stats()["progression"]`` rides
+    #: along so it lands in summary.json (which the loop writes at episode end).
     _SKIP = {
         "_wrapped_env", "_game", "_inform7", "_jericho", "_gamefile", "gamefile",
         "request_infos", "_tracked_infos", "_process", "_names_struct",
@@ -397,6 +400,14 @@ class TextWorldAdapter(BaseAdapter):
     def step(self, action):
         obs, reward, term, trunc, info = super().step(action)
         self._track(info)
+        if (term or trunc) and isinstance(info, dict):
+            # lands in attempts.jsonl -> the per-episode record of BALROG's own
+            # number next to the live one the loop reports.
+            info.setdefault(
+                "end_status",
+                f"score={self._score:.0f}/{self._max_score:.0f} won={self._won} "
+                f"balrog_get_stats_progression={self.balrog_progression():.6f}",
+            )
         return obs, reward, term, trunc, info
 
     def _track(self, info):
@@ -494,16 +505,44 @@ class TextWorldAdapter(BaseAdapter):
         st = objs[-1]._jericho.get_state()
         return hashlib.sha256(_pickle.dumps(st, protocol=4)).hexdigest()[:16]
 
-    def aux_progress(self) -> float:
-        """Live score fraction.
+    # -- progress -----------------------------------------------------------
+    def progression(self) -> float:
+        """BALROG's progression formula, evaluated at **every** step.
 
-        BALROG's own ``progression`` is written only when the episode is done
-        (``TextWorldWrapper.step``: ``if done: self.progression = ...``), so it
-        reads 0.0 for the whole episode.  This is the dense live mirror of it
-        shown to the orchestrator in the ledger.  It drives nothing: the
-        checkpoint trigger, the plateau guard and the reported metric all read
-        ``progression()``, which stays BALROG's own.
+        ``TextWorldWrapper.step`` computes
+        ``max(score / max_score, 1.0 if won else 0.0)`` but only inside
+        ``if done:``, so ``get_stats()["progression"]`` reads 0.0 for the whole
+        episode and is written exactly once.  That is fine for BALROG (it makes
+        one env per episode and reads the number at the end) but it blinds a
+        checkpointed loop: ``pae.py``'s checkpoint trigger and plateau guard
+        both read this method, so with the stock behaviour no TextWorld score
+        gain would ever fire a checkpoint or reset the plateau.
+
+        This returns the *same formula on the same numbers*, live.  At ``done``
+        the two are equal by construction, and
+        ``games/textworld/test_progression_parity.py`` asserts it on a winning
+        trace of each game.  The deviation is disclosed in ``env_patches`` and
+        applies identically in every arm, ``--base-only`` included.
         """
+        return max(float(self._score) / float(self._max_score or 1.0),
+                   1.0 if self._won else 0.0)
+
+    def balrog_progression(self) -> float:
+        """BALROG's own ``get_stats()["progression"]``, untouched."""
+        try:
+            return float(self.env.get_stats().get("progression", 0.0))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    @property
+    def env_patches(self) -> tuple[str, ...]:
+        return (
+            "textworld_live_progression",
+            f"balrog_get_stats_progression={self.balrog_progression():.6f}",
+        )
+
+    def aux_progress(self) -> float:
+        """Dense exploration proxy: the same live score fraction."""
         return float(self._score) / float(self._max_score or 1.0)
 
     def summary(self) -> str:

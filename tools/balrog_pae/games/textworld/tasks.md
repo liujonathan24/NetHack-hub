@@ -60,13 +60,18 @@ def get_stats(self):
 So for every game progression is **the score fraction at the end of the
 episode**, floored by the win flag. Two consequences that matter for us:
 
-1. **It is 0.0 for the whole episode and is written exactly once, when `done`
-   first becomes true.** A mid-episode read (which is what a checkpointed loop
-   does) always returns 0.0. The PAE loop keeps reporting `progression()` as
-   the metric, and the TextWorld adapter exposes the live `score/max_score` as
-   the dense `aux` signal for the orchestrator's ledger only — it drives
-   nothing (not the checkpoint trigger, not the plateau guard, not the reported
-   number).
+1. **Stock BALROG writes it exactly once, when `done` first becomes true**, so
+   a mid-episode read — which is what a checkpointed loop does — always returns
+   0.0, and no TextWorld score gain would ever fire a checkpoint or reset the
+   plateau. `TextWorldAdapter.progression()` therefore evaluates *the same
+   formula on the same numbers* at every step. At `done` the two are equal by
+   construction; `test_progression_parity.py` asserts it on a winning trace of
+   each game, and every finished episode also records BALROG's own number in
+   its `attempts.jsonl` `end_status`. The deviation is disclosed in
+   `env_patches` (`textworld_live_progression`, plus
+   `balrog_get_stats_progression=<v>` read at episode end — for the base arm,
+   a single episode that ends at `done`, that is BALROG's own final number) and
+   applies identically in every arm, `--base-only` included.
 2. For `treasure_hunter` and `coin_collector`, `max_score == 1`, so progression
    is binary; only `the_cooking_game` gives partial credit (`k/17`). The
    published per-task means confirm it: coin_collector comes out at exactly
@@ -236,3 +241,23 @@ billed column at the measured `usage.cost / list = 0.531`.
 `r` is **not** measured — no full N=10 run exists yet. Both rows include a 5 %
 orchestrator overhead. Smoke spend for everything above: **$1.18 list /
 $0.55 provider-billed** (nine runs).
+
+
+## 10. Live progression — effect on checkpointing (measured)
+
+`cal_the_cooking_game_s0_liveprog` (`--max-steps 20 --checkpoint-every 10`,
+$0.015 billed) — the score-gain trigger now fires:
+
+| ckpt | step | reason | progression | state |
+|---|--:|---|--:|---|
+| c1 | 0 | episode start | 0.000 | score 0/17 |
+| **c2** | 5 | **progression** | 0.059 | score 1/17 |
+| **c3** | 6 | **progression** | 0.118 | score 2/17 |
+| c4 | 10 | periodic | 0.118 | score 2/17 |
+| c5 | 20 | periodic | 0.118 | score 2/17 |
+
+Attempt 1 ended at step 6 (`end_status: score=2/17 won=False
+balrog_get_stats_progression=0.117647` — BALROG's own number, equal to the live
+one at `done`). Attempt 2 resumed from **c3**, the latest score-gain
+checkpoint, with an identical Jericho state digest — under the stock all-zero
+progression only the periodic c4/c5 would have existed to choose from.
