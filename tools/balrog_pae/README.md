@@ -70,6 +70,18 @@ Both are asserted at runtime (`--no-verify-restore` to downgrade to logging).
 | Crafter | pickle of the inner `crafter.Env` (minus gym's `_np_random`) restored in place, plus the `_balance_chunk` determinism patch from `balrog_ckpt/crafter_ckpt.py` | canonical `state_digest` identical on restore |
 | TextWorld | `.z8` (`the_cooking_game`): Jericho `get_state`/`set_state` + deepcopy of every wrapper's mutable state. `.ulx` (`treasure_hunter`, `coin_collector`): replay (no state export exists) | digest identical on restore (`.z8`) |
 
+## Engine patches (disclosed)
+
+`summary.json` carries `env_patches`. MiniHack and TextWorld run stock
+(`env_patches: []`). **Crafter runs with one patch in every arm, `--base-only`
+included**: `crafter_balance_chunk_sorted` sorts the per-chunk object set before
+Crafter's despawn logic indexes into it. Stock Crafter is not reproducible
+across processes because that set is iterated in `id()`-hash order, and a
+pickle-restored copy diverges from the original within ~30 steps (1/5 seeds pass
+unpatched, 5/5 patched — `balrog_ckpt/REPORT.md`). The patch reorders an
+already-arbitrary choice; it leaves the RNG stream, rewards and achievements
+alone. Both arms get it so base and PAE play the same game; the paper states it.
+
 ## Progress accounting
 
 The reported metric is always **BALROG's own** `env.get_stats()["progression"]`.

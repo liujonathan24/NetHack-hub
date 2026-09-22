@@ -347,6 +347,7 @@ class Run:
             "committed_steps_max": max((a["committed_steps"] for a in self.attempts), default=0),
             "total_env_steps": self.adapter.total_env_steps,
             "llm_steps": sum(a["calls"] for a in self.attempts),
+            "env_patches": list(self.adapter.env_patches),
             "stop_reason": stop_reason,
             "best": self.best,
             "tokens": self.acct.snapshot(),
