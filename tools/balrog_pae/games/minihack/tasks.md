@@ -149,3 +149,49 @@ aliases of its internal `last_observation` buffers.** A checkpoint that keeps
 `obs["obs"]` by reference silently tracks the live env and every later
 comparison is vacuous. `pae.py` is safe (it stores rendered text plus a digest
 computed on the spot); anything new must copy.
+
+## 6. Calibration runs on this branch (what was actually run, and what it cost)
+
+Runs live under `/root/nld/gen_runs/minihack/<task>_s0_{base,pae}`; the numbers
+are in `summary.json` and are reproduced in the branch report. Protocol:
+
+* **base** — one unchanged BALROG episode (`--base-only`), seed 0.
+* **pae** — one PAE run, `--attempts 2 --select fixed --directive on`, seed 0.
+  Two attempts is the minimum that exercises a resume; the point of these runs
+  is `restore_fidelity.jsonl` + `resume_prompt_check.jsonl`, not progression.
+
+Deliberate deviations, all for budget/wall-clock, all disclosed:
+
+| run | deviation | why |
+|---|---|---|
+| Boxoban-Medium/Hard base | `--max-steps 40` instead of the 100-step cap | see the `max_tokens` finding below: GLM-5.2 spends 4–8K output tokens per Boxoban step and a full 100-step episode did not fit the smoke budget |
+| Boxoban-Medium/Hard pae | `--max-steps 20` | the resume only needs one resumable checkpoint (step 10) |
+| CorridorBattle-Dark pae | `--max-steps 30` | the uncapped base episode *solved* at step 46, and `pae.Run.go` stops on `progression >= 1.0`, so an uncapped PAE run would never have reached attempt 2 |
+| Quest-Easy pae | `--checkpoint-every 5` | the base episode died at step 9, so with `K=10` the only checkpoint would have been step 0 and the "replay" would have been empty |
+
+`--max-steps` sets both the horizon and the resumability cap in `pae.py`, so
+these runs are internally consistent; they are **not** leaderboard-comparable
+and the cost table extrapolates their per-call tokens to the real 100-step cap
+rather than using their episode lengths (`cost_table.py --resume-model`).
+
+### Finding: BALROG's default `max_tokens: 8192` truncates GLM-5.2 on Boxoban
+
+On Boxoban (and only there) GLM-5.2 regularly returns `finish_reason="length"`
+with ~5.5K reasoning tokens and **no content**, which BALROG's client treats as
+a retryable error (`balrog/client.py`, `max_retries: 5`). Each retry is a full
+8192-token completion that is thrown away — ~$0.017 billed each — and after
+five of them the client returns an empty completion with
+`stop_reason="error_max_retries"`, which the evaluator then scores as an
+invalid action and defaults to `north`.
+
+Two consequences:
+
+1. **The token ledger under-reports.** `pae.py` accumulates the tokens of the
+   *successful* call only, because that is all BALROG's `LLMResponse` carries.
+   Retries are invisible to `tokens.total`. They are **not** invisible to
+   `tokens.billed_by_provider_usd`, which wraps `chat.completions.create` and
+   sums Prime's own `usage.cost` on every attempt. On Boxoban the gap between
+   the two is the retry waste; use the billed number.
+2. **Boxoban is the expensive task**, by a wide margin, and the reason is
+   output tokens, not input. Anything that raises `max_tokens` would fix the
+   retries but is a change to BALROG's published config, so it was not made.
