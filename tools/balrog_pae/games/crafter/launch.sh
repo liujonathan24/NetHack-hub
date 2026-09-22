@@ -56,44 +56,12 @@ done
 BATCH="$OUT_ROOT/batch_$TAG"
 N_SEEDS=$(echo $SEEDS | wc -w)
 
-# --- projected cost -----------------------------------------------------------
-# MEASURED on this stack (games/crafter/calibration.json), GLM-5.2 over Prime.
-IN_TOK_PER_STEP=${IN_TOK_PER_STEP:-1930}
-OUT_TOK_PER_STEP=${OUT_TOK_PER_STEP:-150}
-BASE_STEPS_EST=${BASE_STEPS_EST:-215}
-PRICE_IN=1.54; PRICE_OUT=4.84
-BILLED_RATIO=${BILLED_RATIO:-0.39}
-
-read -r PLAN_TXT <<'EOF'
-EOF
-COST=$("$PY" - "$N_SEEDS" "$ATTEMPTS" "$PAE_MAX_STEPS" "$BASE_STEPS_EST" \
-        "$IN_TOK_PER_STEP" "$OUT_TOK_PER_STEP" "$BILLED_RATIO" "$ARMS" <<'PYEOF'
-import sys
-n, att, cap, base_steps, tin, tout, ratio, arms = sys.argv[1:]
-n, att, cap, base_steps, tin, tout, ratio = int(n), int(att), int(cap), int(base_steps), int(tin), int(tout), float(ratio)
-PIN, POUT = 1.54, 4.84
-def usd(steps):
-    return steps * (tin * PIN + tout * POUT) / 1e6
-# base: one episode per seed, ends on death at ~base_steps
-base_llm = base_steps
-# PAE: attempt 1 = a base episode; each later attempt resumes ~K steps before the
-# end of the previous one and plays to the cap, so LLM calls per later attempt
-# are bounded by the cap and floored by the measured resume length.
-pae_llm = base_steps + (att - 1) * min(cap, base_steps)
-rows, tot_l = [], 0.0
-if "base" in arms:
-    c = n * usd(base_llm); tot_l += c
-    rows.append(("base", n, base_llm, c))
-if "pae" in arms:
-    c = n * usd(pae_llm) * 1.05; tot_l += c   # +5% orchestrator turns
-    rows.append((f"PAE N={att} (cap {cap})", n, pae_llm, c))
-out = []
-for name, nn, steps, c in rows:
-    out.append(f"  {name:<24} {nn:>2} runs x ~{steps:>5} LLM calls  ${c:8.2f} list  ${c*ratio:7.2f} billed")
-out.append(f"  {'TOTAL':<24} {'':>2}                         ${tot_l:8.2f} list  ${tot_l*ratio:7.2f} billed")
-print("\n".join(out))
-PYEOF
-)
+# --- projected cost (single source of truth: games/crafter/cost_table.py) -----
+CAL="$REPO/tools/balrog_pae/games/crafter/calibration.json"
+CAL_ARG=""
+[ -f "$CAL" ] && CAL_ARG="--calibration $CAL"
+COST=$("$PY" -m tools.balrog_pae.games.crafter.cost_table \
+        --seeds "$N_SEEDS" --attempts "$ATTEMPTS" --cap "$PAE_MAX_STEPS" $CAL_ARG 2>&1)
 
 cat <<EOF
 ================================================================================
@@ -112,8 +80,8 @@ env patches     crafter_balance_chunk_sorted, crafter_seed_pinned_to_episode_see
                 (both arms; recorded in every summary.json under env_patches)
 parallel jobs   $JOBS
 
-projected cost (measured ${IN_TOK_PER_STEP} in / ${OUT_TOK_PER_STEP} out tokens per step,
-                base episode ~${BASE_STEPS_EST} steps, billed/list ${BILLED_RATIO}x):
+projected cost (games/crafter/cost_table.py, from the measured calibration):
+
 $COST
 ================================================================================
 EOF

@@ -18,11 +18,14 @@ import json
 PRICE_IN, PRICE_OUT = 1.54, 4.84      # z-ai/glm-5.2, USD per 1M tokens
 
 # --- MEASURED defaults (overridden by --calibration) -------------------------
-DEFAULTS = {
-    "in_tok_per_step": 1930,
-    "out_tok_per_step": 150,
-    "base_steps": 215,
-    "billed_ratio": 0.39,
+DEFAULTS = {                 # measured, seed 0, GLM-5.2 (games/crafter/calibration.json)
+    "in_tok_per_step_base": 1712,
+    "out_tok_per_step_base": 266,
+    "in_tok_per_step_pae": 1364,
+    "out_tok_per_step_pae": 208,
+    "base_steps": 278,
+    "resume_steps_mean": 9,   # measured: resumed attempts died 4-14 steps in
+    "billed_ratio": 0.4121,
     "orch_overhead": 0.05,   # orchestrator turns as a fraction of player tokens
 }
 
@@ -32,7 +35,9 @@ def usd(steps: int, tin: float, tout: float) -> float:
 
 
 def table(seeds: int, attempts: int, cap: int, m: dict) -> list[dict]:
-    tin, tout, base_steps = m["in_tok_per_step"], m["out_tok_per_step"], m["base_steps"]
+    base_steps = m["base_steps"]
+    tin, tout = m["in_tok_per_step_base"], m["out_tok_per_step_base"]
+    ptin, ptout = m["in_tok_per_step_pae"], m["out_tok_per_step_pae"]
     rows = []
 
     base_calls = base_steps
@@ -47,15 +52,17 @@ def table(seeds: int, attempts: int, cap: int, m: dict) -> list[dict]:
     # PAE: attempt 1 is a base episode; each later attempt resumes ~K steps before
     # the previous ending and plays to the explicit cap, so its LLM calls are
     # bounded above by `cap` and, empirically, are close to the base length.
-    for lab, per_attempt in (("low  (resume plays ~base length)", min(cap, base_steps)),
-                             ("high (every resume runs to the cap)", cap)):
+    for lab, per_attempt in ((f"measured (resumes died after ~{m['resume_steps_mean']} steps)",
+                              m["resume_steps_mean"]),
+                             ("pessimistic (resume plays ~base length)", min(cap, base_steps)),
+                             ("worst case (every resume runs to the cap)", cap)):
         calls = base_steps + (attempts - 1) * per_attempt
         rows.append({
             "arm": f"PAE N={attempts}, cap {cap} - {lab}",
             "runs": seeds,
             "llm_calls_per_run": calls,
             "note": f"attempt 1 = base episode; {attempts - 1} resumes x {per_attempt} steps, +{int(m['orch_overhead']*100)}% orchestrator",
-            "list_usd": seeds * usd(calls, tin, tout) * (1 + m["orch_overhead"]),
+            "list_usd": seeds * usd(calls, ptin, ptout) * (1 + m["orch_overhead"]),
         })
 
     # the uncapped PAE arm, for reference: this is the budget risk tasks.md flags
@@ -65,7 +72,7 @@ def table(seeds: int, attempts: int, cap: int, m: dict) -> list[dict]:
         "runs": seeds,
         "llm_calls_per_run": unc,
         "note": "what happens if --max-steps is not passed: the budget risk",
-        "list_usd": seeds * usd(unc, tin, tout) * (1 + m["orch_overhead"]),
+        "list_usd": seeds * usd(unc, ptin, ptout) * (1 + m["orch_overhead"]),
     })
     for r in rows:
         r["billed_usd"] = r["list_usd"] * m["billed_ratio"]
@@ -85,15 +92,17 @@ def main():
     if a.calibration:
         c = json.load(open(a.calibration))
         mm = c.get("measured", {})
-        for k in ("in_tok_per_step", "out_tok_per_step", "base_steps", "billed_ratio"):
+        for k in ("in_tok_per_step_base", "out_tok_per_step_base", "in_tok_per_step_pae",
+                  "out_tok_per_step_pae", "base_steps", "billed_ratio", "resume_steps_mean"):
             if mm.get(k) is not None:
                 m[k] = mm[k]
 
     rows = table(a.seeds, a.attempts, a.cap, m)
     print(f"Crafter panel cost — GLM-5.2 @ ${PRICE_IN}/M in, ${PRICE_OUT}/M out (list); "
           f"billed ratio {m['billed_ratio']:.2f}x")
-    print(f"measured: {m['in_tok_per_step']} in / {m['out_tok_per_step']} out tokens per step; "
-          f"base episode {m['base_steps']} steps")
+    print(f"measured: base {m['in_tok_per_step_base']} in / {m['out_tok_per_step_base']} out per step; "
+          f"PAE {m['in_tok_per_step_pae']} in / {m['out_tok_per_step_pae']} out per step; "
+          f"base episode {m['base_steps']} steps (death)")
     print()
     hdr = f"{'arm':<44}{'runs':>5}{'calls/run':>11}{'list $':>10}{'billed $':>10}"
     print(hdr)
@@ -103,16 +112,20 @@ def main():
         if "UNCAPPED" in r["arm"]:
             print("-" * len(hdr))
         print(f"{r['arm']:<44}{r['runs']:>5}{r['llm_calls_per_run']:>11}{r['list_usd']:>10.2f}{r['billed_usd']:>10.2f}")
-        if "UNCAPPED" not in r["arm"] and "high" not in r["arm"]:
+        if "UNCAPPED" not in r["arm"] and "pessimistic" not in r["arm"] and "worst case" not in r["arm"]:
             tl += r["list_usd"]
             tb += r["billed_usd"]
     print("-" * len(hdr))
-    print(f"{'PANEL TOTAL (base + PAE low estimate)':<44}{'':>5}{'':>11}{tl:>10.2f}{tb:>10.2f}")
-    hi = rows[0]["list_usd"] + rows[2]["list_usd"]
-    print(f"{'PANEL TOTAL (base + PAE high estimate)':<44}{'':>5}{'':>11}{hi:>10.2f}{hi*m['billed_ratio']:>10.2f}")
+    print(f"{'PANEL TOTAL (base + PAE measured)':<44}{'':>5}{'':>11}{tl:>10.2f}{tb:>10.2f}")
+    for idx, lab in ((2, "pessimistic"), (3, "worst case")):
+        hi = rows[0]["list_usd"] + rows[idx]["list_usd"]
+        print(f"{'PANEL TOTAL (base + PAE ' + lab + ')':<44}{'':>5}{'':>11}{hi:>10.2f}{hi*m['billed_ratio']:>10.2f}")
     print()
     for r in rows:
         print(f"  {r['arm']}: {r['note']}")
+    print(f"\n  NOTE --plateau 4 stops a run after 4 attempts with no progression advance. In the "
+          f"seed-0 smoke\n  no resume advanced, so a real N=10 run would have stopped at attempt 5 - "
+          f"roughly half\n  the 'measured' row. The table does not assume that.")
     if a.json:
         json.dump({"params": {**m, "seeds": a.seeds, "attempts": a.attempts, "cap": a.cap,
                               "price_in": PRICE_IN, "price_out": PRICE_OUT},

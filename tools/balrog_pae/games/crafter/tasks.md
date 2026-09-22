@@ -185,18 +185,77 @@ checkpoint the divergence reaches the agent's own observation — canonical worl
 state at +8, rendered image and observation **text** at +24. The patched arm was
 identical on every field, every step, every checkpoint, every process.
 
-## 7. Budget risk (open, flagged)
+## 7. Calibration (measured, seed 0, GLM-5.2 over Prime)
 
-Base Crafter episodes end on **death**, measured above at 56-210 steps under a
-random policy and reported in `calibration.json` for the LLM. PAE resumes from a
-checkpoint taken *before* death and plays on under the same 2000-step horizon,
-so the committed trajectory can only get longer, attempt after attempt. With
-N=10 attempts an uncapped PAE run can approach 2000 committed steps where the
-base episode cost ~250, i.e. an ~8× cost blow-up per seed.
+Artifact: `calibration.json`. Runs: `/root/nld/gen_runs/crafter/cal_s0_base`
+and `/root/nld/gen_runs/crafter/cal_s0_pae3`. Both started from the same pinned
+world (`state_digest f9ee440fd993c332` in both processes — the seed fix working
+end to end in the real loop).
 
-Mitigation used here and in `launch.sh`: **always pass `--max-steps` explicitly**
-to the PAE arm. `launch.sh` defaults the PAE arm to `--max-steps 400` (≈ the
-measured base episode length plus headroom) while the base arm runs at BALROG's
-own 2000, and it prints the projected cost before it launches anything.
-`committed_steps` and `total_env_steps` in `summary.json` are both reported so
-the two accountings stay auditable.
+| | base (unchanged BALROG) | PAE, 3 attempts, orchestrator + directive |
+|---|--:|--:|
+| `--max-steps` | 2000 (BALROG default) | 400 (explicit cap) |
+| committed steps | **278** (died) | **164** (attempts ended at 160 / 164 / 164) |
+| LLM calls | 278 | 178 |
+| input tok / step | **1712** | 1389 |
+| output tok / step | **266** | 214 |
+| list $ | 1.091 | 0.565 |
+| billed `usage.cost` $ | **0.456** | **0.226** |
+| billed / list | 0.42x | 0.40x |
+| progression | **0.6364 = 14/22** | attempt 1 0.2727 = 6/22; run best **0.2727** |
+| checkpoints | 41 | 23 |
+| wall | 1094 s (3.9 s/step) | 607 s |
+
+Restore audit on the PAE run: 2/2 resumes exact (`restore_fidelity.jsonl`,
+`state_digest` identical), 2/2 resumed prompts equal to the checkpoint's stored
+next-prompt plus exactly the one directive message
+(`resume_prompt_check.jsonl`). Both orchestrator directives were strategy, not
+keystrokes, and neither was rejected.
+
+Total measured spend for the calibration: **$0.68 billed** ($1.66 at list).
+
+## 8. Did PAE keep the agent alive longer? (the budget risk — answered, no)
+
+`pae_kept_agent_alive_longer: false` on this seed. Attempt 1 ended at step 160
+(the agent went to sleep with a zombie adjacent and was killed). The
+orchestrator picked the two latest checkpoints (step 150, then step 160); those
+resumes survived only **14** and **4** further steps and died at step 164 both
+times. The committed trajectory therefore grew from 160 to 164 — **+4 steps for
+two extra attempts**, not the 8x blow-up the pre-registered risk assumed.
+
+This is the Crafter instance of the "walks back into the same lava" failure the
+MiniHack notes flag: the latest resumable checkpoint sits inside the situation
+that kills the agent, so the resume inherits a losing position. A lookback rule
+(prefer a checkpoint ≥ K steps before the end) is the same open question here as
+on MiniHack, and Crafter's dense achievement signal makes it cheap to test.
+
+Consequences for the budget, all measured rather than assumed:
+
+* **The cap is not the binding constraint at N=10.** Measured resume length is
+  ~9 steps, so a full N=10 run costs ~359 LLM calls against the base episode's
+  278 — a 1.3x, not an 8x. `cost_table.py` prints that row alongside the
+  pessimistic and worst-case rows, and the uncapped row for reference.
+* `--plateau 4` would have stopped a real N=10 run at attempt 5 on this seed (no
+  resume advanced progression), halving even that.
+* **Keep passing `--max-steps` anyway.** One seed is one seed; a seed where the
+  resume escapes the death trap and plays on is exactly the case the cap is for,
+  and the uncapped worst case is $609 list / $251 billed for the panel.
+
+`launch.sh` therefore defaults the PAE arm to `--max-steps 400` and the base arm
+to BALROG's own 2000, prints the cost table before it launches anything, and
+refuses to launch without `--go`.
+
+## 9. Open items
+
+* The orchestrator's checkpoint choice needs a lookback rule (§8); untested.
+* `adapters.obs_digest()` hashes a PIL image through `repr()`, which embeds the
+  object's memory address, so Crafter `obs_digest` values are not comparable
+  across processes (the two calibration runs start from the same world but log
+  different `obs_digest`). Harmless today — `pae.py` uses `state_digest` for
+  Crafter's fidelity assertion and `obs_digest` only for MiniHack, whose
+  observations are arrays — but it is a trap for anyone who later compares
+  Crafter checkpoints by `obs_digest`. Shared file, owned elsewhere; not changed
+  here.
+* BALROG's leaderboard protocol for Crafter is 10 episodes with *uncontrolled*
+  seeds (§3). Our seeds are pinned. The base arm is still a stock BALROG
+  episode in every other respect, but the paper should say the seeds are ours.

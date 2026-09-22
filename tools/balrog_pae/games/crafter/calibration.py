@@ -118,9 +118,17 @@ def main():
                                // max(1, base["llm_steps"] + pae["llm_steps"]),
             "out_tok_per_step": (base["output_tokens_total"] + pae["output_tokens_total"])
                                 // max(1, base["llm_steps"] + pae["llm_steps"]),
+            "in_tok_per_step_base": base["input_tokens_total"] // max(1, base["llm_steps"]),
+            "out_tok_per_step_base": base["output_tokens_total"] // max(1, base["llm_steps"]),
+            "in_tok_per_step_pae": pae["input_tokens_total"] // max(1, pae["llm_steps"]),
+            "out_tok_per_step_pae": pae["output_tokens_total"] // max(1, pae["llm_steps"]),
             "base_steps": base_end,
+            "resume_steps_mean": (round(st.fmean([d["steps_played"] for d in pae["attempts_detail"][1:]]))
+                                  if len(pae["attempts_detail"]) > 1 else None),
             "billed_ratio": round(((base["billed_usd"] or 0) + (pae["billed_usd"] or 0))
                                   / max(1e-9, base["list_usd"] + pae["list_usd"]), 4),
+            "billed_ratio_base": base["billed_over_list"],
+            "billed_ratio_pae": pae["billed_over_list"],
         },
     }
     Path(a.out).write_text(json.dumps(res, indent=2, default=str))
