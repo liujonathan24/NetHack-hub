@@ -97,11 +97,20 @@ class Run:
         return agent
 
     # -- checkpoints ------------------------------------------------------
-    def _save_checkpoint(self, attempt, step, agent, prev_action, obs, reason):
+    def _save_checkpoint(self, attempt, step, agent, prev_action, obs, reason, parent):
+        """Append a checkpoint.
+
+        ``parent`` is the checkpoint immediately upstream of this one on the
+        same trajectory: the previous checkpoint of this attempt, or - for the
+        first checkpoint of an attempt - the checkpoint the attempt resumed
+        from. It is None only for the root (attempt 1, step 0). The archive is
+        therefore a tree reconstructible from ``archive/*/meta.json`` alone.
+        """
         cid = f"c{len(self.archive) + 1}"
         prompt_state = dump_prompt_state(agent.prompt_builder)
         ck = {
             "id": cid,
+            "parent": parent,
             "attempt": attempt,
             "step": step,
             "reason": reason,
@@ -117,13 +126,15 @@ class Run:
             "next_prompt": simulate_next_prompt(prompt_state, prev_action, obs),
         }
         self.blobs[cid] = ck
-        self.archive.append({k: ck[k] for k in ("id", "attempt", "step", "reason", "progression", "aux_progress", "summary")})
+        self.archive.append({k: ck[k] for k in
+                             ("id", "parent", "attempt", "step", "reason", "progression", "aux_progress", "summary")})
         d = self.dir / "archive" / cid
         d.mkdir(parents=True, exist_ok=True)
         with (d / "checkpoint.pkl").open("wb") as f:
             pickle.dump(ck, f)
         (d / "meta.json").write_text(json.dumps(
-            {k: ck[k] for k in ("id", "attempt", "step", "reason", "progression", "aux_progress", "summary", "prev_action", "obs_digest")},
+            {k: ck[k] for k in ("id", "parent", "attempt", "step", "reason", "progression", "aux_progress",
+                                "summary", "prev_action", "obs_digest", "state_digest")},
             indent=2, default=str))
         return cid
 
@@ -142,7 +153,7 @@ class Run:
             obs, info = self.adapter.reset(cfg.seed)
             agent.prompt_builder.update_instruction_prompt(self.adapter.instruction_prompt(obs))
             prev_action, step0 = None, 0
-            new_ckpts.append(self._save_checkpoint(attempt, 0, agent, None, obs, "episode start"))
+            new_ckpts.append(self._save_checkpoint(attempt, 0, agent, None, obs, "episode start", None))
         else:
             ck = self.blobs[ckpt_id]
             robs, _, digests = self.adapter.env_restore(ck["env"])
@@ -229,7 +240,8 @@ class Run:
                 if advanced or ((step + 1) % self.cfg.checkpoint_every == 0):
                     new_ckpts.append(self._save_checkpoint(
                         attempt, step + 1, agent, prev_action, obs,
-                        "progress" if advanced else "periodic"))
+                        "progress" if advanced else "periodic",
+                        new_ckpts[-1] if new_ckpts else ckpt_id))
             last_prog, last_aux = prog, aux
 
             if done:
