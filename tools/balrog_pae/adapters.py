@@ -301,8 +301,37 @@ class CrafterAdapter(BaseAdapter):
 # TextWorld: Jericho save/restore (.z8) or replay (.ulx)
 # ---------------------------------------------------------------------------
 class TextWorldAdapter(BaseAdapter):
+    """BALROG's three TextWorld games.
+
+    Stack: ``EnvWrapper > GymV21CompatibilityV0 > TextWorldWrapper >
+    TextworldGymEnv > SyncBatchEnv > Filter > Limit > GenericEnvironment >
+    TWInform7 > StateTracking > Inform7Data > GameData > {JerichoEnv (.z8) |
+    GitGlulxEnv (.ulx)}``.
+
+    Restore (verified in ``games/textworld/verify_restore.py``):
+
+    * ``the_cooking_game`` (.z8) -- native: ``jericho.FrotzEnv.get_state()/
+      set_state()`` plus a deepcopy of every Python wrapper's mutable state
+      (``Limit.nb_steps``, the Inform7 state tracker, ``SyncBatchEnv.last`` --
+      a done latch that short-circuits ``step()`` if forgotten).
+    * ``treasure_hunter`` / ``coin_collector`` (.ulx) -- replay: ``GitGlulxEnv``
+      is a ``git-glulx-ml`` subprocess over a socket with no state export
+      (``copy()`` -> ``NotImplementedError``; in-game ``save`` kills the
+      interpreter). The games are deterministic, so reset + replay of the
+      command prefix reproduces the state exactly.
+
+    Seeding. BALROG's ``TextWorldFactory`` picks the *game file* with
+    ``env_ids[task][seed % 25]`` when ``envs.env_kwargs.seed`` is set, and
+    otherwise cycles a global counter -- which would make "seed 0" and "seed 1"
+    the same game in a fresh process. This adapter therefore binds the game
+    file to the episode seed: ``make()``/``reset()`` (re)build the env with
+    ``envs.env_kwargs.seed = seed``. Nothing else about the env is touched.
+    ``env.reset(seed=)`` itself only seeds the gym wrapper's unused RNG; the
+    games carry no run-time randomness.
+    """
+
     env_name = "textworld"
-    aux_label = "score / max_score (same as progression)"
+    aux_label = "score / max_score (live; BALROG's progression is 0 until done)"
     _SKIP = {
         "_wrapped_env", "_game", "_inform7", "_jericho", "_gamefile", "gamefile",
         "request_infos", "_tracked_infos", "_process", "_names_struct",
@@ -312,6 +341,37 @@ class TextWorldAdapter(BaseAdapter):
     def __init__(self, task, cfg):
         super().__init__(task, cfg)
         self.log: list[dict] = []
+        self._built_seed = None
+        self._score = 0.0
+        self._max_score = 1.0
+        self._won = False
+
+    # -- env construction, with the game file bound to the seed -------------
+    def _build(self, seed: int):
+        from balrog.environments import make_env
+
+        if self.env is not None:
+            try:
+                self.env.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self.cfg.envs.env_kwargs.seed = int(seed)
+        self.env = make_env(self.env_name, self.task, self.cfg)
+        self._built_seed = int(seed)
+        return self.env
+
+    def make(self):
+        seed = self.cfg.envs.env_kwargs.get("seed", None)
+        return self._build(0 if seed is None else int(seed))
+
+    def gamefile(self) -> str:
+        """Absolute path of the game file this env is bound to (after reset)."""
+        try:
+            _, objs = self._chain()
+        except Exception:  # noqa: BLE001
+            return ""
+        base = objs[-1]
+        return str(getattr(base, "gamefile", None) or getattr(base, "_gamefile", "") or "")
 
     def _chain(self):
         gymenv = self.env.env.gym_env.env
@@ -327,16 +387,42 @@ class TextWorldAdapter(BaseAdapter):
         return hasattr(objs[-1], "_jericho")
 
     def reset(self, seed):
+        if self._built_seed != int(seed):
+            self._build(seed)
         out = super().reset(seed)
         self.log = []
+        self._score, self._max_score, self._won = 0.0, 1.0, False
         return out
+
+    def step(self, action):
+        obs, reward, term, trunc, info = super().step(action)
+        self._track(info)
+        return obs, reward, term, trunc, info
+
+    def _track(self, info):
+        if not info:
+            return
+        if info.get("max_score"):
+            self._max_score = float(info["max_score"])
+        if info.get("score") is not None:
+            self._score = float(info["score"])
+        self._won = bool(info.get("won"))
 
     def record(self, validated, completion):
         self.log.append({"action": validated, "completion": completion})
 
+    # -- checkpointing ------------------------------------------------------
     def env_snapshot(self) -> dict:
+        common = {
+            "seed": self.seed,
+            "steps": self.steps,
+            "log": copy.deepcopy(self.log),
+            "score": self._score,
+            "max_score": self._max_score,
+            "won": self._won,
+        }
         if not self._native():
-            return {"kind": "replay", "seed": self.seed, "log": copy.deepcopy(self.log)}
+            return {"kind": "replay", **common}
         gymenv, objs = self._chain()
         return {
             "kind": "jericho",
@@ -347,21 +433,36 @@ class TextWorldAdapter(BaseAdapter):
             ),
             "progression": self.env.env.gym_env.progression,
             "failed_candidates": list(self.env.failed_candidates),
-            "steps": self.steps,
-            "log": copy.deepcopy(self.log),
+            **common,
         }
 
     def env_restore(self, snap: dict):
         if snap["kind"] == "replay":
+            if self._built_seed != int(snap["seed"]):
+                self._build(snap["seed"])
             random.seed(snap["seed"])
             np.random.seed(snap["seed"])
             obs, info = self.env.reset(seed=snap["seed"])
             self.steps = 0
+            self.total_env_steps += 1
+            self.seed = snap["seed"]
+            self._score, self._max_score, self._won = 0.0, 1.0, False
             digests = [obs_digest(obs)]
+            feedback = self.cfg.eval.feedback_on_invalid_action
             for entry in snap["log"]:
                 obs, reward, term, trunc, info = self.step(entry["action"])
+                # TextWorld's language_action_space accepts everything, so this
+                # branch is currently dead; kept so the replayed prompt would
+                # still match if BALROG ever constrained the action space.
+                if feedback and entry["action"] != entry["completion"]:
+                    obs["text"]["long_term_context"] = (
+                        f"\n\nYour previous output did not contain a valid action. "
+                        f"Defaulted to action: {entry['action']}\n\nObservation:\n"
+                        + obs["text"]["long_term_context"]
+                    )
                 digests.append(obs_digest(obs))
             self.log = copy.deepcopy(snap["log"])
+            self._restore_scalars(snap)
             return obs, info, digests
         gymenv, objs = self._chain()
         objs[-1]._jericho.set_state(snap["jericho"])
@@ -375,22 +476,41 @@ class TextWorldAdapter(BaseAdapter):
         self.env.failed_candidates = list(snap["failed_candidates"])
         self.steps = snap["steps"]
         self.log = copy.deepcopy(snap["log"])
+        self._restore_scalars(snap)
         return None, None, None
+
+    def _restore_scalars(self, snap):
+        self._score = float(snap.get("score", 0.0))
+        self._max_score = float(snap.get("max_score", 1.0) or 1.0)
+        self._won = bool(snap.get("won", False))
+        self.steps = int(snap.get("steps", self.steps))
 
     def state_digest(self):
         if not self._native():
             return None
-        _, objs = self._chain()
         import pickle as _pickle
 
+        _, objs = self._chain()
         st = objs[-1]._jericho.get_state()
         return hashlib.sha256(_pickle.dumps(st, protocol=4)).hexdigest()[:16]
 
     def aux_progress(self) -> float:
-        return float(self.env.env.gym_env.progression)
+        """Live score fraction.
+
+        BALROG's own ``progression`` is written only when the episode is done
+        (``TextWorldWrapper.step``: ``if done: self.progression = ...``), so it
+        reads 0.0 for the whole episode.  This is the dense live mirror of it
+        shown to the orchestrator in the ledger.  It drives nothing: the
+        checkpoint trigger, the plateau guard and the reported metric all read
+        ``progression()``, which stays BALROG's own.
+        """
+        return float(self._score) / float(self._max_score or 1.0)
 
     def summary(self) -> str:
-        return f"step {self.steps}, score fraction {self.env.env.gym_env.progression:.2f}"
+        return (
+            f"step {self.steps}/{self.max_steps}, score {self._score:.0f}/{self._max_score:.0f} "
+            f"({self.aux_progress():.2f}), won={self._won}"
+        )
 
 
 ADAPTERS = {"minihack": MiniHackAdapter, "crafter": CrafterAdapter, "textworld": TextWorldAdapter}
