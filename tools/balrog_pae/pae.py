@@ -69,15 +69,19 @@ class Run:
         self.archive: list[dict] = []          # ledger rows (no blobs)
         self.blobs: dict[str, dict] = {}       # id -> full checkpoint
         self.attempts: list[dict] = []
-        self.orch = None
-        if cfg.select == "orchestrator" or (cfg.directive == "on" and not cfg.blind):
-            self.orch = Orchestrator(cfg.game, cfg.task, self.acct, cfg.model_id, cfg.temperature, cfg.max_tokens)
         self.t0 = time.time()
         self.best = {"progression": -1.0, "attempt": None}
+        # The run's EFFECTIVE horizon: --max-steps when given, else the env
+        # default. Everything downstream (resumability, the orchestrator's
+        # "steps left" column) reads this, never adapter.max_steps.
         try:
             self.step_cap = cfg.max_steps or self.adapter.max_steps
         except Exception:  # noqa: BLE001
             self.step_cap = cfg.max_steps or 100
+        self.orch = None
+        if cfg.select == "orchestrator" or (cfg.directive == "on" and not cfg.blind):
+            self.orch = Orchestrator(cfg.game, cfg.task, self.acct, cfg.model_id, cfg.temperature,
+                                     cfg.max_tokens, step_cap=self.step_cap)
 
     def resumable(self, ids=None):
         """Checkpoints that still have steps left under the episode cap.
@@ -372,6 +376,7 @@ class Run:
             "aux_max_measured": max((a["aux_measured"] for a in self.attempts), default=0.0),
             "committed_steps_max": max((a["committed_steps"] for a in self.attempts), default=0),
             "total_env_steps": self.adapter.total_env_steps,
+            "step_cap": self.step_cap,
             "llm_steps": sum(a["calls"] for a in self.attempts),
             "env_patches": list(self.adapter.env_patches),
             "stop_reason": stop_reason,
