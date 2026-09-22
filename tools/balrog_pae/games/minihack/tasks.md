@@ -205,9 +205,24 @@ Two more consequences:
 2. **Boxoban is the expensive task**, by a wide margin, and the reason is
    output tokens, not input.
 
-Before the full panel runs, one of these has to be chosen and stated in the
-paper: raise `client.generate_kwargs.max_tokens` above 8192 (a disclosed change
-to BALROG's published config, applied to *every* arm), or make the loop treat
-`error_max_retries` as an invalid action rather than a crash. Leaving it as is
-means Boxoban-Hard episodes die at random points for a harness reason, which
-would silently bias the arm that plays more steps.
+### Blocker: Boxoban-Hard is unplayable by GLM-5.2 under BALROG's naive prompt
+
+Six launches of `MiniHack-Boxoban-Hard-v0` seed 0 (base and PAE, at
+`max_tokens` 8192 twice and 16384 once) produced **two** usable LLM calls in
+total; every other call came back `finish_reason="length"` with `completion_tokens`
+pinned exactly at the cap and no content, and each run died on the first
+5-in-a-row streak. Raising the cap did not help: at 16384 the model consumed
+all 16384 tokens on the same observation, 5/5. GLM-5.2 simply does not stop
+reasoning on that puzzle. Boxoban-Medium has the same failure mode at a much
+lower rate (27 steps before its first 5-streak).
+
+Before the full panel runs, this has to be decided and stated in the paper.
+Raising `client.generate_kwargs.max_tokens` is **not** sufficient on its own.
+The options are: make the loop treat `error_max_retries` as an invalid action
+(the behaviour BALROG's other client classes already have at
+`balrog/client.py:507`) so a truncation costs one defaulted step instead of the
+episode; cap the model's thinking budget
+(`client.generate_kwargs.thinking_budget`, which BALROG exposes and leaves
+`null`); or drop Boxoban-Hard from the GLM-5.2 panel. Leaving it as is means
+episodes die at essentially random points for a harness reason, which biases
+whichever arm plays more steps — i.e. the PAE arm.
