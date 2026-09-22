@@ -53,7 +53,7 @@ def per_task(runs: Path, task: str, N: int, resume_model: str = "fixed_rule"):
     out_base = a1["output_tokens"] / max(1, S_base)
 
     src_resume = "measured"
-    if pae_dir.exists():
+    if (pae_dir / "summary.json").exists():
         ps, prows = load(pae_dir)
         res = [r for r in prows if r["from_checkpoint"]]
     else:
