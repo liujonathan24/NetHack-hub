@@ -44,12 +44,19 @@ with its own conversation history exactly as it was at that checkpoint, plus you
 directive as one extra message; it cannot see this conversation or the ledger.
 
 CHOOSING A CHECKPOINT. Every id in the ledger is choosable, not just the deepest
-or the newest. Prefer a branch point close to the frontier of what has been
-achieved but early enough to still change the outcome; if attempts from one
-checkpoint keep failing the same way, step further back. The ROOT checkpoint
-(the one with no parent) is a FULL RESTART of the episode: it throws away every
-step taken so far, so choose it only when you can say why a restart beats
-branching, and never as a default.
+or the newest. The ROOT checkpoint (the one with no parent) is a FULL RESTART of
+the episode: it throws away every step taken so far, so choose it only when you
+can say why a restart beats branching, and never as a default.
+
+SELECTION RULE. Read the "tried" column, which records every attempt already
+launched from each checkpoint and how it ended. A checkpoint whose attempts keep
+ending the same way after only a handful of steps is ALREADY INSIDE the
+situation that kills the player: no directive can save it, because the player
+resumes with the trap already sprung. When you see that, walk the "parent"
+column back and choose an EARLIER ANCESTOR, so the player can avoid entering the
+situation at all. Otherwise prefer the deepest checkpoint that has not yet failed
+repeatedly - it carries the most progress while still leaving room to change
+course.
 
 WRITING A DIRECTIVE. A directive is STRATEGY - what to aim for, what to avoid,
 what the last attempt got wrong. It is NEVER keystrokes, key names, literal
@@ -94,21 +101,45 @@ class Orchestrator:
     def _steps_left(self, step) -> str:
         return "?" if self.step_cap is None else str(max(0, self.step_cap - step))
 
+    @staticmethod
+    def _tried(attempts):
+        """checkpoint id -> one phrase per attempt launched from it."""
+        from collections import defaultdict
+
+        out = defaultdict(list)
+        for a in attempts:
+            src = a.get("from_checkpoint")
+            if not src:
+                continue
+            cause = a.get("outcome", "?")
+            status = str(a.get("end_status", "") or "")
+            if status and status not in ("None", ""):
+                cause = f"{cause}({status})"
+            out[src].append(
+                f"a{a['attempt']}: {cause} after {a.get('steps_played', 0)} steps, "
+                f"reached {a.get('progression', 0.0):.3f}"
+            )
+        return out
+
     def _ledger(self, archive, attempts) -> str:
         aux = attempts[0].get("aux_label", "measured") if attempts else "measured"
         cap = "unknown" if self.step_cap is None else str(self.step_cap)
+        tried = self._tried(attempts)
         lines = [
             f"EPISODE HORIZON: {cap} steps total. A checkpoint taken at step S leaves {cap} - S steps"
             " to play, so a deep checkpoint buys progress but little room to change course.",
             "",
-            f"CHECKPOINT LEDGER (id | parent | from attempt | step | steps left | BALROG progression | {aux} | state)",
+            f"CHECKPOINT LEDGER (id | parent | from attempt | step | steps left | BALROG progression | {aux} | state | tried)",
             "the checkpoint with parent '-' is the ROOT: resuming it restarts the episode from scratch",
+            "'tried' lists every attempt already launched FROM that checkpoint and how it ended",
         ]
         for c in archive:
+            t = tried.get(c["id"], [])
+            tcol = f"tried {len(t)}x: " + "; ".join(t) if t else "never tried"
             lines.append(
                 f"{c['id']} | {c.get('parent') or '-'} | a{c['attempt']} | step {c['step']} | "
                 f"{self._steps_left(c['step'])} | "
-                f"{c['progression']:.3f} | {c['aux_progress']:.0f} | {c['summary']}"
+                f"{c['progression']:.3f} | {c['aux_progress']:.0f} | {c['summary']} | {tcol}"
             )
         lines.append("")
         lines.append("ATTEMPT HISTORY (attempt | resumed from | steps played | final progression | outcome | directive given)")

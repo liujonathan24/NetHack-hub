@@ -84,6 +84,20 @@ def main():
 
     run._select = select
     run.go()
+
+    # Render the orchestrator ledger offline (constructing the client makes no
+    # network call) and assert the per-checkpoint outcome fields are present.
+    from .orchestrator import Orchestrator
+
+    o = Orchestrator(a.game, a.task, run.acct, step_cap=run.step_cap)
+    ledger = o._ledger(run.resumable(), run.attempts)
+    print("--- orchestrator ledger (rendered offline)")
+    print(ledger)
+    missing = [w for w in ("steps left", "tried", "parent", "EPISODE HORIZON") if w not in ledger]
+    assert not missing, f"ledger is missing {missing}"
+    assert any("tried 1x" in ln or "tried 2x" in ln for ln in ledger.splitlines()), \
+        "no checkpoint shows a launched attempt - the tried column is not being filled"
+    print("ledger check: OK (horizon, steps-left, parent and tried columns all render)")
     print(json.dumps(json.load(open(run.dir / "summary.json")), indent=2))
     for name in ("restore_fidelity.jsonl", "resume_prompt_check.jsonl"):
         p = run.dir / name

@@ -42,6 +42,14 @@ def obs_digest(obs: dict) -> str:
                 feed(v[k])
         elif v is None:
             h.update(b"None")
+        elif hasattr(v, "tobytes") and hasattr(v, "mode") and hasattr(v, "size"):
+            # PIL Image (the VLM observation). repr() would embed the object's
+            # memory address, making digests differ between processes - and
+            # between two restores in the same process - for identical pixels.
+            h.update(str(v.mode).encode() + repr(tuple(v.size)).encode() + v.tobytes())
+        elif isinstance(v, (list, tuple)):
+            for item in v:
+                feed(item)
         else:
             h.update(repr(v).encode())
 
