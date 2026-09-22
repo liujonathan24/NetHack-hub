@@ -184,7 +184,17 @@ five of them the client returns an empty completion with
 `stop_reason="error_max_retries"`, which the evaluator then scores as an
 invalid action and defaults to `north`.
 
-Two consequences:
+It is worse than a cost problem. `OpenAIWrapper.generate` routes through
+`execute_with_retries`, which **raises** after `max_retries`
+(`balrog/client.py:93`) — it does not fall back to an empty completion (that
+path belongs to a different client class). Five consecutive truncations
+therefore kill the episode with
+`Exception: Failed to execute api_call after 5 retries`, and both
+Boxoban-Hard runs died that way on their first launch (base at step 0, PAE at
+step 2). Measured truncation rate on the Boxoban logs: 6–10 `finish_reason
+= "length"` completions per run, i.e. the 5-in-a-row event is not rare.
+
+Two more consequences:
 
 1. **The token ledger under-reports.** `pae.py` accumulates the tokens of the
    *successful* call only, because that is all BALROG's `LLMResponse` carries.
@@ -193,5 +203,11 @@ Two consequences:
    sums Prime's own `usage.cost` on every attempt. On Boxoban the gap between
    the two is the retry waste; use the billed number.
 2. **Boxoban is the expensive task**, by a wide margin, and the reason is
-   output tokens, not input. Anything that raises `max_tokens` would fix the
-   retries but is a change to BALROG's published config, so it was not made.
+   output tokens, not input.
+
+Before the full panel runs, one of these has to be chosen and stated in the
+paper: raise `client.generate_kwargs.max_tokens` above 8192 (a disclosed change
+to BALROG's published config, applied to *every* arm), or make the loop treat
+`error_max_retries` as an invalid action rather than a crash. Leaving it as is
+means Boxoban-Hard episodes die at random points for a harness reason, which
+would silently bias the arm that plays more steps.
