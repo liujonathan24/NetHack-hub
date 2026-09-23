@@ -1,0 +1,71 @@
+{
+  "game": "crafter",
+  "task": "default",
+  "seed": 3,
+  "arm": "pae(select=orchestrator,directive=on)",
+  "attempts": 10,
+  "checkpoints": 51,
+  "attempt1_progression": 0.6818181818181818,
+  "pae_best_progression": 0.7727272727272727,
+  "max_progression": 0.7727272727272727,
+  "final_progression": 0.7727272727272727,
+  "aux_label": "achievements unlocked (of 22)",
+  "aux_max_measured": 17.0,
+  "committed_steps_max": 214,
+  "total_env_steps": 363,
+  "step_cap": 400,
+  "llm_steps": 362,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [
+    "crafter_balance_chunk_sorted",
+    "crafter_seed_pinned_to_episode_seed"
+  ],
+  "stop_reason": "plateau_4",
+  "orchestrator": {
+    "rounds": 9,
+    "directive_rejections": 3,
+    "root_picks": 0
+  },
+  "best": {
+    "progression": 0.7727272727272727,
+    "attempt": 6
+  },
+  "tokens": {
+    "player": {
+      "calls": 362,
+      "input_tokens": 663819,
+      "output_tokens": 130261,
+      "cost_usd": 1.652745
+    },
+    "orchestrator": {
+      "calls": 12,
+      "input_tokens": 51902,
+      "output_tokens": 8825,
+      "cost_usd": 0.122642
+    },
+    "total": {
+      "calls": 374,
+      "input_tokens": 715721,
+      "output_tokens": 139086,
+      "cost_usd": 1.775387
+    },
+    "billed_by_provider_usd": 0.6903,
+    "billed_calls": 374
+  },
+  "wall_s": 2500.2,
+  "run_dir": "/root/nld/gen_runs/panel/crafter_s3",
+  "provenance": {
+    "tool_commit": "9a8c3bd0feecb77523b3cf2b8aa62dae95bfc9ea",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": false,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 1977,
+    "output": 384
+  },
+  "cost_per_llm_step_usd": 0.004904
+}

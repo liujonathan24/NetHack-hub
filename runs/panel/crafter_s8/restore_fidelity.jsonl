@@ -1,0 +1,8 @@
+{"attempt": 2, "checkpoint": "c33", "method": "pickle", "replayed_digest": "cf3672f13e4a81cd", "saved_digest": "cf3672f13e4a81cd", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 3, "checkpoint": "c29", "method": "pickle", "replayed_digest": "ce33ce8f7f270283", "saved_digest": "ce33ce8f7f270283", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 4, "checkpoint": "c39", "method": "pickle", "replayed_digest": "67a5f004ef7af688", "saved_digest": "67a5f004ef7af688", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 5, "checkpoint": "c30", "method": "pickle", "replayed_digest": "54e756b3ff4a7045", "saved_digest": "54e756b3ff4a7045", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 6, "checkpoint": "c45", "method": "pickle", "replayed_digest": "326688070e0e7eba", "saved_digest": "326688070e0e7eba", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 7, "checkpoint": "c47", "method": "pickle", "replayed_digest": "9593fb11159bea6c", "saved_digest": "9593fb11159bea6c", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 8, "checkpoint": "c44", "method": "pickle", "replayed_digest": "333ba2d997906e54", "saved_digest": "333ba2d997906e54", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 9, "checkpoint": "c43", "method": "pickle", "replayed_digest": "df7be5f593846c44", "saved_digest": "df7be5f593846c44", "identical": true, "text_identical": true, "n_replayed_steps": 0}
