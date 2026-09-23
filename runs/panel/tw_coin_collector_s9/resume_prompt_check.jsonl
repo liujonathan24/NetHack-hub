@@ -1,0 +1,1 @@
+{"attempt": 2, "checkpoint": "c1", "history_matches_checkpoint": true, "n_messages_base": 2, "n_messages_sent": 3, "extra_messages": [{"role": "user", "content": "Explore systematically by sweeping the map in a grid pattern, never revisiting rooms you've already cleared. The coin is reachable if you check every room methodically instead of wandering."}]}

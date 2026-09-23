@@ -1,0 +1,71 @@
+{
+  "game": "textworld",
+  "task": "coin_collector",
+  "seed": 9,
+  "arm": "pae(select=orchestrator,directive=on)",
+  "attempts": 2,
+  "checkpoints": 13,
+  "attempt1_progression": 0.0,
+  "pae_best_progression": 1.0,
+  "max_progression": 1.0,
+  "final_progression": 1.0,
+  "aux_label": "score / max_score (live)",
+  "aux_max_measured": 1.0,
+  "committed_steps_max": 80,
+  "total_env_steps": 138,
+  "step_cap": 80,
+  "llm_steps": 136,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [
+    "textworld_live_progression",
+    "balrog_get_stats_progression=1.000000"
+  ],
+  "stop_reason": "solved",
+  "orchestrator": {
+    "rounds": 1,
+    "directive_rejections": 1,
+    "root_picks": 1
+  },
+  "best": {
+    "progression": 1.0,
+    "attempt": 2
+  },
+  "tokens": {
+    "player": {
+      "calls": 136,
+      "input_tokens": 169763,
+      "output_tokens": 23510,
+      "cost_usd": 0.375223
+    },
+    "orchestrator": {
+      "calls": 2,
+      "input_tokens": 2064,
+      "output_tokens": 616,
+      "cost_usd": 0.00616
+    },
+    "total": {
+      "calls": 138,
+      "input_tokens": 171827,
+      "output_tokens": 24126,
+      "cost_usd": 0.381383
+    },
+    "billed_by_provider_usd": 0.1727,
+    "billed_calls": 138
+  },
+  "wall_s": 446.7,
+  "run_dir": "/root/nld/gen_runs/panel/tw_coin_collector_s9",
+  "provenance": {
+    "tool_commit": "6cacdfba563826f484d77193d10a612e8121ad2f",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": false,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 1263,
+    "output": 177
+  },
+  "cost_per_llm_step_usd": 0.002804
+}

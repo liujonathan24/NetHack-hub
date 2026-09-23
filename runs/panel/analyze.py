@@ -1,6 +1,43 @@
 #!/usr/bin/env python3
 """Panel readout: paired deltas, resume quality, fidelity/parity, pathology."""
-import json, os, glob, statistics as st
+import json, os, glob, math, statistics as st
+
+def _t_sf(t, dof):
+    """One-sided upper-tail p for Student-t, via the regularized incomplete beta."""
+    if t <= 0:
+        return 1.0 - _t_sf(-t, dof)
+    x = dof / (dof + t * t)
+    return 0.5 * _betainc(dof / 2.0, 0.5, x)
+
+def _betainc(a, b, x):
+    """Regularized incomplete beta I_x(a,b) by continued fraction (Lentz)."""
+    if x <= 0: return 0.0
+    if x >= 1: return 1.0
+    lbeta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+    front = math.exp(math.log(x) * a + math.log(1 - x) * b - lbeta)
+    if x < (a + 1) / (a + b + 2):
+        return front / a * _betacf(a, b, x)
+    return 1.0 - math.exp(math.log(1 - x) * b + math.log(x) * a - lbeta) / b * _betacf(b, a, 1 - x)
+
+def _betacf(a, b, x, itmax=300, eps=3e-16):
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    if abs(d) < 1e-300: d = 1e-300
+    d = 1.0 / d; h = d
+    for m in range(1, itmax + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d;  c = 1.0 + aa / c
+        if abs(d) < 1e-300: d = 1e-300
+        if abs(c) < 1e-300: c = 1e-300
+        d = 1.0 / d; h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d;  c = 1.0 + aa / c
+        if abs(d) < 1e-300: d = 1e-300
+        if abs(c) < 1e-300: c = 1e-300
+        d = 1.0 / d; de = d * c; h *= de
+        if abs(de - 1.0) < eps: break
+    return h
 from collections import defaultdict
 
 ROOT = "/root/nld/gen_runs/panel"
@@ -87,6 +124,26 @@ for g in sorted(groups):
         lo, hi = st.mean(ds) - 1.96 * sem, st.mean(ds) + 1.96 * sem
         print(f"  95% CI on the mean delta = [{lo:+.4f}, {hi:+.4f}]  "
               f"{'SEPARATED from 0' if lo > 0 else '*** NOT separated from 0 ***'}")
+    # Primary test.  treasure_hunter / coin_collector are binary (won/not), so the
+    # honest test is an exact one-sided sign test over the discordant pairs; the
+    # cooking game is graded out of 17, so a paired t-test on the deltas is valid.
+    binary = g.endswith("treasure_hunter") or g.endswith("coin_collector")
+    nneg = sum(1 for x in ds if x < 0)
+    m = npos + nneg
+    if binary:
+        pv = sum(math.comb(m, k) for k in range(npos, m + 1)) / 2 ** m if m else 1.0
+        print(f"  SIGN TEST (exact, one-sided): {npos}+ / {nneg}- over {m} discordant "
+              f"of {len(ds)} pairs -> p = {pv:.5f}  "
+              f"{'significant at 0.05' if pv < 0.05 else '*** not significant at 0.05 ***'}")
+    else:
+        if sd > 0 and len(ds) > 1:
+            tstat = st.mean(ds) / sem
+            dof = len(ds) - 1
+            pv = _t_sf(tstat, dof)
+            print(f"  PAIRED t-TEST (one-sided): t({dof}) = {tstat:.3f}  p = {pv:.5f}  "
+                  f"{'significant at 0.05' if pv < 0.05 else '*** not significant at 0.05 ***'}")
+        pvs = sum(math.comb(m, k) for k in range(npos, m + 1)) / 2 ** m if m else 1.0
+        print(f"  (sign test for reference: {npos}+ / {nneg}- of {m} discordant -> p = {pvs:.5f})")
     print(f"  restore fidelity {sum(r['rf_ok'] for r in rs)}/{sum(r['rf_total'] for r in rs)}   "
           f"resumed-prompt parity {sum(r['rp_ok'] for r in rs)}/{sum(r['rp_total'] for r in rs)}")
     print(f"  resumes: genuine(>2 steps) {sum(r['n_genuine'] for r in rs)} / "
