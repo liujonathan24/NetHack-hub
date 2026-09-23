@@ -143,12 +143,40 @@ class MiniHackAdapter(BaseAdapter):
     env_name = "minihack"
     aux_label = "distinct (dlvl,x,y) cells seen"
 
+    #: NetHack glyph ids, derived once from nle.nethack's own tables (see
+    #: games/minihack/tasks.md).  Boxoban's goal is "every boulder on a
+    #: fountain", and a boulder standing on a fountain hides the fountain
+    #: glyph, so boxes-on-goals = (cells that were fountains at reset) that
+    #: now show the boulder glyph.
+    _BOULDER_GLYPH: int | None = None
+    _FOUNTAIN_GLYPH: int | None = None
+
+    @classmethod
+    def _glyph_consts(cls):
+        if cls._BOULDER_GLYPH is None:
+            from nle import nethack
+
+            boulder = next(
+                i for i in range(nethack.NUM_OBJECTS)
+                if (nethack.OBJ_NAME(nethack.objclass(i)) or "") == "boulder"
+            )
+            cls._BOULDER_GLYPH = nethack.GLYPH_OBJ_OFF + boulder
+            cls._FOUNTAIN_GLYPH = nethack.GLYPH_CMAP_OFF + 31  # S_fountain
+        return cls._BOULDER_GLYPH, cls._FOUNTAIN_GLYPH
+
     def __init__(self, task, cfg):
         super().__init__(task, cfg)
         self.effective_seeds = None
         self.log: list[dict] = []   # {"action": validated, "completion": raw}
         self._visited: set = set()
         self._max_depth = 0
+        # Boxoban has no exploration to measure (one small lit room) but it has
+        # a natural dense signal; Quest/Corridor have the reverse.
+        self._boxoban = "boxoban" in task.lower()
+        self._goal_cells: frozenset = frozenset()
+        self._boxes_on_goals = 0
+        if self._boxoban:
+            self.aux_label = "boulders on fountains (boxes on goals)"
 
     def _inner(self):
         return self.env.env.gym_env.unwrapped
@@ -168,6 +196,8 @@ class MiniHackAdapter(BaseAdapter):
         self.log = []
         self._visited = set()
         self._max_depth = 0
+        self._goal_cells = frozenset()
+        self._boxes_on_goals = 0
         self._track(obs)
         return obs, info
 
@@ -186,6 +216,22 @@ class MiniHackAdapter(BaseAdapter):
             x, y, depth = int(bl[0]), int(bl[1]), int(bl[12])
             self._visited.add((depth, x, y))
             self._max_depth = max(self._max_depth, depth)
+        if self._boxoban:
+            self._track_boxes(raw.get("glyphs"))
+
+    def _track_boxes(self, glyphs):
+        """Count boulders sitting on cells that were fountains at reset."""
+        if glyphs is None:
+            return
+        boulder, fountain = self._glyph_consts()
+        g = np.asarray(glyphs)
+        if not self._goal_cells:
+            # first frame of the episode: the fountains are all still visible
+            self._goal_cells = frozenset(map(tuple, np.argwhere(g == fountain)))
+        if not self._goal_cells:
+            return
+        idx = tuple(np.array(sorted(self._goal_cells)).T)
+        self._boxes_on_goals = int(np.count_nonzero(g[idx] == boulder))
 
     def record(self, validated, completion):
         self.log.append({"action": validated, "completion": completion})
@@ -216,6 +262,8 @@ class MiniHackAdapter(BaseAdapter):
         self.effective_seeds = list(snap["effective_seeds"])
         self._visited = set()
         self._max_depth = 0
+        self._goal_cells = frozenset()
+        self._boxes_on_goals = 0
         self._track(obs)
         digests = [obs_digest(obs)]
         feedback = self.cfg.eval.feedback_on_invalid_action
@@ -235,10 +283,11 @@ class MiniHackAdapter(BaseAdapter):
         return obs, info, digests
 
     def aux_progress(self) -> float:
+        if self._boxoban:
+            return float(self._boxes_on_goals)
         return float(len(self._visited))
 
     def summary(self) -> str:
-        raw = self.env.env.gym_env.last_obs if hasattr(self.env.env.gym_env, "last_obs") else None
         bl = None
         try:
             inner = self._inner()
@@ -246,11 +295,15 @@ class MiniHackAdapter(BaseAdapter):
             bl = obs[inner._observation_keys.index("blstats")]
         except Exception:
             pass
+        tail = (
+            f"boxes_on_goals={self._boxes_on_goals}/{len(self._goal_cells)}"
+            if self._boxoban else f"cells_seen={len(self._visited)}"
+        )
         if bl is None:
-            return f"step {self.steps}, cells seen {len(self._visited)}"
+            return f"step {self.steps}, {tail}"
         return (
             f"pos=({int(bl[0])},{int(bl[1])}) dlvl={int(bl[12])} hp={int(bl[10])}/{int(bl[11])} "
-            f"time={int(bl[20])} cells_seen={len(self._visited)}"
+            f"time={int(bl[20])} {tail}"
         )
 
 
