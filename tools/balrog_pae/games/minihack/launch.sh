@@ -130,6 +130,10 @@ wait
 [[ $DRY -eq 1 ]] && { echo "dry run: nothing launched"; exit 0; }
 
 echo
-"$PY" -m tools.balrog_pae.games.minihack.aggregate_minihack "$OUT_ROOT" \
-      --json "$BATCH/results.json" --csv "$BATCH/results.csv" | tee "$BATCH/results.txt"
+# NB: must run from the repo root -- `python -m tools.balrog_pae...` cannot
+# resolve the package from $OUT_ROOT, and under this script's `set -euo
+# pipefail` the resulting ModuleNotFoundError kills the batch AFTER the first
+# task completes, silently skipping every task queued behind it.
+( cd "$REPO" && "$PY" -m tools.balrog_pae.games.minihack.aggregate_minihack "$OUT_ROOT" \
+      --json "$BATCH/results.json" --csv "$BATCH/results.csv" ) | tee "$BATCH/results.txt"
 echo "aggregate: $BATCH/results.{json,csv,txt}"
