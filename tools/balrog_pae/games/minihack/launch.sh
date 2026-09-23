@@ -60,7 +60,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 wallet_usd() {
-  prime wallet 2>/dev/null | awk '/Balance:/ {gsub(/[$,]/,"",$2); print $2; exit}'
+  # NB: must not pipe `prime wallet` into an awk that `exit`s early -- the early
+  # close sends prime a SIGPIPE, and under `set -euo pipefail` that non-zero
+  # status propagates out of the command substitution and aborts the whole
+  # batch before a single run starts. Capture first, then scan the string.
+  local out
+  out=$(prime wallet 2>/dev/null) || return 0
+  awk '/Balance:/ {gsub(/[$,]/,"",$2); print $2; exit}' <<<"$out"
 }
 
 BATCH="$OUT_ROOT/batch_$(date +%Y%m%d_%H%M%S)${TAG}"
