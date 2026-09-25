@@ -1,0 +1,4 @@
+{"attempt": 2, "checkpoint": "c1", "method": "replay", "replayed_digest": "4a2e6d4ef7433745", "saved_digest": "4a2e6d4ef7433745", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 3, "checkpoint": "c1", "method": "replay", "replayed_digest": "4a2e6d4ef7433745", "saved_digest": "4a2e6d4ef7433745", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 4, "checkpoint": "c2", "method": "replay", "replayed_digest": "c5a2b2a595c86afe", "saved_digest": "c5a2b2a595c86afe", "identical": true, "text_identical": true, "n_replayed_steps": 10}
+{"attempt": 5, "checkpoint": "c1", "method": "replay", "replayed_digest": "4a2e6d4ef7433745", "saved_digest": "4a2e6d4ef7433745", "identical": true, "text_identical": true, "n_replayed_steps": 0}

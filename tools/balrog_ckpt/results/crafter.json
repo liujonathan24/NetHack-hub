@@ -1,0 +1,448 @@
+{
+  "env": "crafter",
+  "task": "default",
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "runs": {
+    "unpatched": {
+      "1": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.734829343855381,
+          "restore_ms": 0.7708802198370298,
+          "step_ms": 3.667229861021042,
+          "snapshot_bytes": 120580,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.3743143752217293,
+          "restore_ms": 0.5040811374783516,
+          "step_ms": 3.9059784077107906,
+          "snapshot_bytes": 120409,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.475417822599411,
+          "restore_ms": 0.5762896810968717,
+          "step_ms": 3.662721415360769,
+          "snapshot_bytes": 35364,
+          "branch_len": 50,
+          "ok": false
+        }
+      ],
+      "2": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.7491493597626686,
+          "restore_ms": 0.8547703425089518,
+          "step_ms": 3.7946424074470997,
+          "snapshot_bytes": 124004,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.3805439919233322,
+          "restore_ms": 0.4814298202594121,
+          "step_ms": 3.722846992313862,
+          "snapshot_bytes": 123802,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.4995344206690788,
+          "restore_ms": 0.5533620715141296,
+          "step_ms": 3.7102583361168704,
+          "snapshot_bytes": 35595,
+          "branch_len": 50,
+          "ok": true
+        }
+      ],
+      "3": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.7797172293066978,
+          "restore_ms": 0.8086804300546646,
+          "step_ms": 3.7790201045572758,
+          "snapshot_bytes": 124081,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.3956584259867668,
+          "restore_ms": 0.5569970235228539,
+          "step_ms": 3.991575570156177,
+          "snapshot_bytes": 123852,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.5422681570053101,
+          "restore_ms": 0.5758221571644148,
+          "step_ms": 3.722411567966143,
+          "snapshot_bytes": 36463,
+          "branch_len": 50,
+          "ok": false
+        }
+      ],
+      "4": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.7926858961582184,
+          "restore_ms": 0.7874720419446627,
+          "step_ms": 3.7949183707435927,
+          "snapshot_bytes": 119063,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.3844909369945526,
+          "restore_ms": 0.48068445175886154,
+          "step_ms": 3.7958322962125144,
+          "snapshot_bytes": 118852,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.5280869081616402,
+          "restore_ms": 0.5873329937458038,
+          "step_ms": 3.774351142346859,
+          "snapshot_bytes": 36248,
+          "branch_len": 50,
+          "ok": false
+        }
+      ],
+      "5": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.9424621239304543,
+          "restore_ms": 0.8349977433681488,
+          "step_ms": 3.780301927278439,
+          "snapshot_bytes": 126899,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.41729025542736053,
+          "restore_ms": 0.6036044408877691,
+          "step_ms": 4.380591008812189,
+          "snapshot_bytes": 126679,
+          "branch_len": 50,
+          "ok": false
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": false,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.4884069785475731,
+          "restore_ms": 0.6135199218988419,
+          "step_ms": 3.8661624242862067,
+          "snapshot_bytes": 35298,
+          "branch_len": 50,
+          "ok": false
+        }
+      ]
+    },
+    "with_determinism_patch": {
+      "1": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.7818285375833511,
+          "restore_ms": 0.7738607625166575,
+          "step_ms": 3.831856989612182,
+          "snapshot_bytes": 121830,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.42173732072114944,
+          "restore_ms": 0.5116884907086691,
+          "step_ms": 3.8967805728316307,
+          "snapshot_bytes": 121621,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.5323439836502075,
+          "restore_ms": 0.5935390169421831,
+          "step_ms": 3.826654894898335,
+          "snapshot_bytes": 35820,
+          "branch_len": 50,
+          "ok": true
+        }
+      ],
+      "2": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.8888309821486473,
+          "restore_ms": 0.9913463145494461,
+          "step_ms": 3.9411755030353866,
+          "snapshot_bytes": 128082,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.50370953977108,
+          "restore_ms": 0.6208668152491251,
+          "step_ms": 5.086306097606818,
+          "snapshot_bytes": 127653,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.6745383143424988,
+          "restore_ms": 0.8334706847866377,
+          "step_ms": 4.8714194012184935,
+          "snapshot_bytes": 37126,
+          "branch_len": 50,
+          "ok": true
+        }
+      ],
+      "3": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 1.2708092108368874,
+          "restore_ms": 1.2184260413050652,
+          "step_ms": 6.073014885187149,
+          "snapshot_bytes": 129881,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.6432207301259041,
+          "restore_ms": 0.7418363044659296,
+          "step_ms": 6.113287849972646,
+          "snapshot_bytes": 129643,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.830543227493763,
+          "restore_ms": 1.0359265531102817,
+          "step_ms": 5.654867210735877,
+          "snapshot_bytes": 35039,
+          "branch_len": 50,
+          "ok": true
+        }
+      ],
+      "4": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 1.3927016407251358,
+          "restore_ms": 1.0332660749554634,
+          "step_ms": 5.1659283476571245,
+          "snapshot_bytes": 126376,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.4055416211485863,
+          "restore_ms": 0.7008081302046776,
+          "step_ms": 6.368846781551838,
+          "snapshot_bytes": 126171,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.8954731747508049,
+          "restore_ms": 1.2020446980992954,
+          "step_ms": 6.551305900017421,
+          "snapshot_bytes": 35564,
+          "branch_len": 50,
+          "ok": true
+        }
+      ],
+      "5": [
+        {
+          "approach": "A_deepcopy_inner",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 1.4571687206625938,
+          "restore_ms": 1.72878863910834,
+          "step_ms": 7.994447226325671,
+          "snapshot_bytes": 129534,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "B_pickle_inner_inplace",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.4968000575900078,
+          "restore_ms": 0.5979997416337332,
+          "step_ms": 3.9468173248072467,
+          "snapshot_bytes": 129146,
+          "branch_len": 50,
+          "ok": true
+        },
+        {
+          "approach": "C_explicit_world_player_rng",
+          "identical_branches": true,
+          "saved_state_unchanged_after_branch_mutation": true,
+          "restore_reproduces_snapshot_state": true,
+          "no_alias": true,
+          "snapshot_ms": 0.535259023308754,
+          "restore_ms": 0.576753169298172,
+          "step_ms": 3.86342894906799,
+          "snapshot_bytes": 36240,
+          "branch_len": 50,
+          "ok": true
+        }
+      ]
+    }
+  },
+  "A0_deepcopy_full_stack": {
+    "ok": false,
+    "error": "ValueError: <numpy.random._pcg64.PCG64 object at 0x7f0c4a9eba00> is not a known BitGenerator module."
+  },
+  "summary": {
+    "unpatched": {
+      "A_deepcopy_inner": "2/5 seeds ok",
+      "B_pickle_inner_inplace": "1/5 seeds ok",
+      "C_explicit_world_player_rng": "1/5 seeds ok"
+    },
+    "with_determinism_patch": {
+      "A_deepcopy_inner": "5/5 seeds ok",
+      "B_pickle_inner_inplace": "5/5 seeds ok",
+      "C_explicit_world_player_rng": "5/5 seeds ok"
+    }
+  },
+  "working_approaches_with_patch": [
+    "A_deepcopy_inner",
+    "B_pickle_inner_inplace",
+    "C_explicit_world_player_rng"
+  ]
+}

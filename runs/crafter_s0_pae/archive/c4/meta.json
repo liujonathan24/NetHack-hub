@@ -1,0 +1,13 @@
+{
+  "id": "c4",
+  "parent": "c3",
+  "attempt": 1,
+  "step": 14,
+  "reason": "progression",
+  "progression": 0.09090909090909091,
+  "aux_progress": 2.0,
+  "summary": "step 14, achievements 2: collect_wood, place_table",
+  "prev_action": "Place Table",
+  "obs_digest": "654cdb6340c0b277",
+  "state_digest": "2a4eb1f4d2966217"
+}

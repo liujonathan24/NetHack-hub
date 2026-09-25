@@ -1,0 +1,13 @@
+{
+  "id": "c3",
+  "parent": "c2",
+  "attempt": 1,
+  "step": 20,
+  "reason": "periodic",
+  "progression": 0.0,
+  "aux_progress": 0.0,
+  "summary": "step 20, score fraction 0.00",
+  "prev_action": "go south",
+  "obs_digest": "ba13fc2651d15dce",
+  "state_digest": "08ce3fb3b0c20e16"
+}

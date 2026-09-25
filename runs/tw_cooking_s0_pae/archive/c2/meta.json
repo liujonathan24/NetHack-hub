@@ -1,0 +1,13 @@
+{
+  "id": "c2",
+  "parent": "c1",
+  "attempt": 1,
+  "step": 10,
+  "reason": "periodic",
+  "progression": 0.0,
+  "aux_progress": 0.0,
+  "summary": "step 10, score fraction 0.00",
+  "prev_action": "take raw tuna from showcase",
+  "obs_digest": "36da84098007ac19",
+  "state_digest": "f4646ccdfea32b48"
+}

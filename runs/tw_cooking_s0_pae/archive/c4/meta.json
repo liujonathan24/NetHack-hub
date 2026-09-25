@@ -1,0 +1,13 @@
+{
+  "id": "c4",
+  "parent": "c3",
+  "attempt": 1,
+  "step": 30,
+  "reason": "periodic",
+  "progression": 0.0,
+  "aux_progress": 0.0,
+  "summary": "step 30, score fraction 0.00",
+  "prev_action": "look",
+  "obs_digest": "faf4cd2827284154",
+  "state_digest": "95a724b7aa3a6573"
+}

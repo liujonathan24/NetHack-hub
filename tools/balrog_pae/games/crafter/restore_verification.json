@@ -1,0 +1,302 @@
+{
+  "what": "Crafter checkpoint/restore fidelity, with and without the crafter_balance_chunk_sorted determinism patch",
+  "protocol": "one base episode (seed 0) of 210 scripted actions; env_snapshot() at steps [10, 50, 150]; each snapshot restored and replayed with the SAME 50 actions; each restored step compared to the original continuation on observation text, full observation (text+rendered image+raw array), canonical world state, score, progression, achievements, reward, done",
+  "same_world_in_both_arms": true,
+  "initial_state_digest": "f9ee440fd993c332",
+  "verdict": {
+    "patched_all_identical": true,
+    "unpatched_all_identical": false,
+    "patched_identical_steps": 150,
+    "unpatched_identical_steps": 16,
+    "total_compared_steps": 150,
+    "unpatched_first_divergence_offsets": {
+      "10": 8,
+      "50": 8,
+      "150": null
+    }
+  },
+  "decision": "the patch is applied in BOTH arms of the experiment (--base-only included) and disclosed in summary.json under env_patches",
+  "repeats": {
+    "why": "the unpatched failure depends on id()-based set iteration order, so the divergence point moves from process to process; the patched arm must not",
+    "unpatched": [
+      {
+        "repeat": 0,
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": false,
+        "identical_steps": 64,
+        "first_divergence_offsets": {
+          "10": 8,
+          "50": 38,
+          "150": 18
+        }
+      },
+      {
+        "repeat": 1,
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": false,
+        "identical_steps": 54,
+        "first_divergence_offsets": {
+          "10": 8,
+          "50": 38,
+          "150": 8
+        }
+      },
+      {
+        "repeat": 2,
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": false,
+        "identical_steps": 64,
+        "first_divergence_offsets": {
+          "10": 28,
+          "50": 8,
+          "150": 28
+        }
+      },
+      {
+        "repeat": 3,
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": false,
+        "identical_steps": 54,
+        "first_divergence_offsets": {
+          "10": 38,
+          "50": 8,
+          "150": 8
+        }
+      }
+    ],
+    "patched": [
+      {
+        "repeat": 0,
+        "arm": "patched",
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": true,
+        "identical_steps": 150,
+        "first_divergence_offsets": {
+          "10": null,
+          "50": null,
+          "150": null
+        }
+      },
+      {
+        "repeat": 1,
+        "arm": "patched",
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": true,
+        "identical_steps": 150,
+        "first_divergence_offsets": {
+          "10": null,
+          "50": null,
+          "150": null
+        }
+      },
+      {
+        "repeat": 2,
+        "arm": "patched",
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": true,
+        "identical_steps": 150,
+        "first_divergence_offsets": {
+          "10": null,
+          "50": null,
+          "150": null
+        }
+      },
+      {
+        "repeat": 3,
+        "arm": "patched",
+        "initial_state_digest": "f9ee440fd993c332",
+        "all_identical": true,
+        "identical_steps": 150,
+        "first_divergence_offsets": {
+          "10": null,
+          "50": null,
+          "150": null
+        }
+      }
+    ],
+    "patched_always_identical": true,
+    "unpatched_ever_identical": false
+  },
+  "arms": {
+    "patched": {
+      "arm": "patched",
+      "determinism_patch": true,
+      "balance_chunk_is_patched": true,
+      "seed": 0,
+      "action_seed": 26,
+      "env_patches": [
+        "crafter_balance_chunk_sorted",
+        "crafter_seed_pinned_to_episode_seed"
+      ],
+      "initial_state_digest": "f9ee440fd993c332",
+      "base_steps_requested": 210,
+      "base_steps_played": 210,
+      "base_episode_ended_at": null,
+      "base_wall_s": 1.1,
+      "final_score": 3.0,
+      "final_progression": 0.13636363636363635,
+      "checkpoints": [
+        {
+          "checkpoint_step": 10,
+          "status": "ok",
+          "restore_ms": 0.518,
+          "state_digest_at_snapshot": "24dbdd22ad9af2eb",
+          "state_digest_after_restore": "24dbdd22ad9af2eb",
+          "state_digest_identical_on_restore": true,
+          "follow_steps": 50,
+          "identical_steps": 50,
+          "all_identical": true,
+          "first_divergence": null,
+          "first_divergence_by_field": {
+            "text": null,
+            "obs_full": null,
+            "state": null,
+            "score": null,
+            "progression": null,
+            "achievements": null,
+            "reward": null,
+            "done": null
+          }
+        },
+        {
+          "checkpoint_step": 50,
+          "status": "ok",
+          "restore_ms": 0.522,
+          "state_digest_at_snapshot": "3a2243ea2b302abd",
+          "state_digest_after_restore": "3a2243ea2b302abd",
+          "state_digest_identical_on_restore": true,
+          "follow_steps": 50,
+          "identical_steps": 50,
+          "all_identical": true,
+          "first_divergence": null,
+          "first_divergence_by_field": {
+            "text": null,
+            "obs_full": null,
+            "state": null,
+            "score": null,
+            "progression": null,
+            "achievements": null,
+            "reward": null,
+            "done": null
+          }
+        },
+        {
+          "checkpoint_step": 150,
+          "status": "ok",
+          "restore_ms": 0.607,
+          "state_digest_at_snapshot": "14f2019543f5f110",
+          "state_digest_after_restore": "14f2019543f5f110",
+          "state_digest_identical_on_restore": true,
+          "follow_steps": 50,
+          "identical_steps": 50,
+          "all_identical": true,
+          "first_divergence": null,
+          "first_divergence_by_field": {
+            "text": null,
+            "obs_full": null,
+            "state": null,
+            "score": null,
+            "progression": null,
+            "achievements": null,
+            "reward": null,
+            "done": null
+          }
+        }
+      ],
+      "all_checkpoints_identical": true
+    },
+    "unpatched": {
+      "arm": "unpatched",
+      "determinism_patch": false,
+      "balance_chunk_is_patched": false,
+      "seed": 0,
+      "action_seed": 26,
+      "env_patches": [
+        "crafter_balance_chunk_sorted",
+        "crafter_seed_pinned_to_episode_seed"
+      ],
+      "initial_state_digest": "f9ee440fd993c332",
+      "base_steps_requested": 210,
+      "base_steps_played": 153,
+      "base_episode_ended_at": 153,
+      "base_wall_s": 0.7,
+      "final_score": 4.0,
+      "final_progression": 0.18181818181818182,
+      "checkpoints": [
+        {
+          "checkpoint_step": 10,
+          "status": "ok",
+          "restore_ms": 0.439,
+          "state_digest_at_snapshot": "592048e14e0f7b00",
+          "state_digest_after_restore": "592048e14e0f7b00",
+          "state_digest_identical_on_restore": true,
+          "follow_steps": 50,
+          "identical_steps": 8,
+          "all_identical": false,
+          "first_divergence": {
+            "index": 8,
+            "fields": [
+              "state"
+            ],
+            "original": {
+              "state": "1847de81cd0af61d"
+            },
+            "restored": {
+              "state": "d60c7e0eceae4f96"
+            }
+          },
+          "first_divergence_by_field": {
+            "text": 24,
+            "obs_full": 24,
+            "state": 8,
+            "score": null,
+            "progression": null,
+            "achievements": null,
+            "reward": null,
+            "done": null
+          }
+        },
+        {
+          "checkpoint_step": 50,
+          "status": "ok",
+          "restore_ms": 0.442,
+          "state_digest_at_snapshot": "423e0cc6c1573473",
+          "state_digest_after_restore": "423e0cc6c1573473",
+          "state_digest_identical_on_restore": true,
+          "follow_steps": 50,
+          "identical_steps": 8,
+          "all_identical": false,
+          "first_divergence": {
+            "index": 8,
+            "fields": [
+              "state"
+            ],
+            "original": {
+              "state": "7309191c609e375f"
+            },
+            "restored": {
+              "state": "9cf3d21af1a84617"
+            }
+          },
+          "first_divergence_by_field": {
+            "text": null,
+            "obs_full": null,
+            "state": 8,
+            "score": null,
+            "progression": null,
+            "achievements": null,
+            "reward": null,
+            "done": null
+          }
+        },
+        {
+          "checkpoint_step": 150,
+          "status": "unavailable",
+          "reason": "base episode only reached step 153"
+        }
+      ],
+      "all_checkpoints_identical": false
+    }
+  },
+  "generated": "2026-09-22T06:53:21"
+}

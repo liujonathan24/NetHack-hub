@@ -1,0 +1,1414 @@
+{
+  "generated": "2026-09-22T09:22:44",
+  "tasks": {
+    "MiniHack-Quest-Easy-v0|scripted": {
+      "task": "MiniHack-Quest-Easy-v0",
+      "seed": 0,
+      "source": "scripted",
+      "run_dir": null,
+      "episode_steps_played": 99,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 12,
+      "invalid_action_steps": [
+        3,
+        17
+      ],
+      "replays": [
+        {
+          "checkpoint_step": 4,
+          "checkpoint_reason": "post_invalid",
+          "n_replayed_actions": 4,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": true,
+          "invalid_feedback_text_identical": true,
+          "invalid_action_steps_in_prefix": [
+            3
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "819bc26bd8017c83",
+            "tty_chars": "a65cec41ced97da3",
+            "tty_colors": "f15166973e6607b1",
+            "blstats": "63544f8266bb2e14",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "7d724c5415bbf76f",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "7035c078d64c6f2f",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "819bc26bd8017c83",
+            "tty_chars": "a65cec41ced97da3",
+            "tty_colors": "f15166973e6607b1",
+            "blstats": "63544f8266bb2e14",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "7d724c5415bbf76f",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "7035c078d64c6f2f",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 2.6,
+          "ms_per_replayed_step": 0.638
+        },
+        {
+          "checkpoint_step": 80,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 80,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "2cbc0097f82bda4c",
+            "tty_chars": "231519598f3c9851",
+            "tty_colors": "9c87933a7ca1d70d",
+            "blstats": "9d36ccb061909ead",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "98169eceb1e1a5d5",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "c827a82581bf90c1",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "2cbc0097f82bda4c",
+            "tty_chars": "231519598f3c9851",
+            "tty_colors": "9c87933a7ca1d70d",
+            "blstats": "9d36ccb061909ead",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "98169eceb1e1a5d5",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "c827a82581bf90c1",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 21.7,
+          "ms_per_replayed_step": 0.271
+        },
+        {
+          "checkpoint_step": 90,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 90,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "3a376b28b07db842",
+            "tty_chars": "fdaa96b8cc023821",
+            "tty_colors": "ceb4f9573e1bf105",
+            "blstats": "6a20ebcecbae65b5",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "85b96caa7818f3bb",
+            "text_message": "8498b80846879062",
+            "long_term_context": "5287e92fafb524cd",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "3a376b28b07db842",
+            "tty_chars": "fdaa96b8cc023821",
+            "tty_colors": "ceb4f9573e1bf105",
+            "blstats": "6a20ebcecbae65b5",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "85b96caa7818f3bb",
+            "text_message": "8498b80846879062",
+            "long_term_context": "5287e92fafb524cd",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 23.7,
+          "ms_per_replayed_step": 0.264
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": true,
+      "invalid_feedback_text_verified": true,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.8
+    },
+    "MiniHack-Quest-Medium-v0|scripted": {
+      "task": "MiniHack-Quest-Medium-v0",
+      "seed": 0,
+      "source": "scripted",
+      "run_dir": null,
+      "episode_steps_played": 69,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 9,
+      "invalid_action_steps": [
+        3,
+        17
+      ],
+      "replays": [
+        {
+          "checkpoint_step": 4,
+          "checkpoint_reason": "post_invalid",
+          "n_replayed_actions": 4,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": true,
+          "invalid_feedback_text_identical": true,
+          "invalid_action_steps_in_prefix": [
+            3
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "0d9e85dd69e1fefb",
+            "tty_chars": "477a950510b3c1d8",
+            "tty_colors": "9f78cd297df8bf5c",
+            "blstats": "dd1fbadda85af343",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "6fc12f4bab6fb169",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "8a5235995e0fb53f",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "0d9e85dd69e1fefb",
+            "tty_chars": "477a950510b3c1d8",
+            "tty_colors": "9f78cd297df8bf5c",
+            "blstats": "dd1fbadda85af343",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "6fc12f4bab6fb169",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "8a5235995e0fb53f",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 2.2,
+          "ms_per_replayed_step": 0.549
+        },
+        {
+          "checkpoint_step": 50,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 50,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "0d618133439bc85a",
+            "tty_chars": "5e65eeb16a12116b",
+            "tty_colors": "79297d01a3485157",
+            "blstats": "889d233f6c86083a",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "d31b0986c16da8a5",
+            "text_message": "24a352c775689e35",
+            "long_term_context": "23f90bb876a701ea",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "0d618133439bc85a",
+            "tty_chars": "5e65eeb16a12116b",
+            "tty_colors": "79297d01a3485157",
+            "blstats": "889d233f6c86083a",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "d31b0986c16da8a5",
+            "text_message": "24a352c775689e35",
+            "long_term_context": "23f90bb876a701ea",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 13.4,
+          "ms_per_replayed_step": 0.268
+        },
+        {
+          "checkpoint_step": 60,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 60,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "9349175f3be5de06",
+            "tty_chars": "43fba15939f433ee",
+            "tty_colors": "df08e461f22525ee",
+            "blstats": "54e47dd14cb7f931",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "a37b170b48b57d7c",
+            "text_message": "c16ca2022f29fa57",
+            "long_term_context": "1e14f112a28b8098",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "9349175f3be5de06",
+            "tty_chars": "43fba15939f433ee",
+            "tty_colors": "df08e461f22525ee",
+            "blstats": "54e47dd14cb7f931",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "a37b170b48b57d7c",
+            "text_message": "c16ca2022f29fa57",
+            "long_term_context": "1e14f112a28b8098",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 15.8,
+          "ms_per_replayed_step": 0.263
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": true,
+      "invalid_feedback_text_verified": true,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.1
+    },
+    "MiniHack-CorridorBattle-Dark-v0|scripted": {
+      "task": "MiniHack-CorridorBattle-Dark-v0",
+      "seed": 0,
+      "source": "scripted",
+      "run_dir": null,
+      "episode_steps_played": 81,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 11,
+      "invalid_action_steps": [
+        3,
+        17
+      ],
+      "replays": [
+        {
+          "checkpoint_step": 4,
+          "checkpoint_reason": "post_invalid",
+          "n_replayed_actions": 4,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": true,
+          "invalid_feedback_text_identical": true,
+          "invalid_action_steps_in_prefix": [
+            3
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "9bd9cadc40fb3912",
+            "tty_chars": "3105c56d3ecfa708",
+            "tty_colors": "bfda53e98a16fba7",
+            "blstats": "1221ab7f91580873",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "98169eceb1e1a5d5",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "e1c6c6cbaee91dec",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "9bd9cadc40fb3912",
+            "tty_chars": "3105c56d3ecfa708",
+            "tty_colors": "bfda53e98a16fba7",
+            "blstats": "1221ab7f91580873",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "98169eceb1e1a5d5",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "e1c6c6cbaee91dec",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 2.0,
+          "ms_per_replayed_step": 0.512
+        },
+        {
+          "checkpoint_step": 70,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 70,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "d66e50d47fba21de",
+            "tty_chars": "fd5f29c12da1b5af",
+            "tty_colors": "cefd7bfdc8231728",
+            "blstats": "0bb4840e64545c01",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "0785dc5dfb4eb963",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "153eca2c4a843d4f",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "d66e50d47fba21de",
+            "tty_chars": "fd5f29c12da1b5af",
+            "tty_colors": "cefd7bfdc8231728",
+            "blstats": "0bb4840e64545c01",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "0785dc5dfb4eb963",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "153eca2c4a843d4f",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 18.1,
+          "ms_per_replayed_step": 0.259
+        },
+        {
+          "checkpoint_step": 80,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 80,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "684f39bef597d1dc",
+            "tty_chars": "ebf3c4f64b2c2aab",
+            "tty_colors": "664d74990bc138db",
+            "blstats": "5b6af2e24da6122d",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "c15cbb6be619e047",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "b4e94880f2d31ae5",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "684f39bef597d1dc",
+            "tty_chars": "ebf3c4f64b2c2aab",
+            "tty_colors": "664d74990bc138db",
+            "blstats": "5b6af2e24da6122d",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "c15cbb6be619e047",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "b4e94880f2d31ae5",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 20.5,
+          "ms_per_replayed_step": 0.256
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": true,
+      "invalid_feedback_text_verified": true,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.1
+    },
+    "MiniHack-Boxoban-Medium-v0|scripted": {
+      "task": "MiniHack-Boxoban-Medium-v0",
+      "seed": 0,
+      "source": "scripted",
+      "run_dir": null,
+      "episode_steps_played": 100,
+      "episode_outcome": "truncated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 12,
+      "invalid_action_steps": [
+        3,
+        17
+      ],
+      "replays": [
+        {
+          "checkpoint_step": 4,
+          "checkpoint_reason": "post_invalid",
+          "n_replayed_actions": 4,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": true,
+          "invalid_feedback_text_identical": true,
+          "invalid_action_steps_in_prefix": [
+            3
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "09ee79ac18aab0f4",
+            "tty_chars": "b5f424c8d7d05487",
+            "tty_colors": "f1424c915924d8a0",
+            "blstats": "42ceb6e1da632ea2",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "e02fd976477ac0eb",
+            "text_message": "c4ca289e7b675d06",
+            "long_term_context": "dc74ceec50cea2a0",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "09ee79ac18aab0f4",
+            "tty_chars": "b5f424c8d7d05487",
+            "tty_colors": "f1424c915924d8a0",
+            "blstats": "42ceb6e1da632ea2",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "e02fd976477ac0eb",
+            "text_message": "c4ca289e7b675d06",
+            "long_term_context": "dc74ceec50cea2a0",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 7.4,
+          "ms_per_replayed_step": 1.854
+        },
+        {
+          "checkpoint_step": 80,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 80,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "6f429feb48b42110",
+            "tty_chars": "b4edc5917350aa5c",
+            "tty_colors": "b14db421eddadc4f",
+            "blstats": "4b58f9d25e94f56d",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "e4e3d94f6d988f57",
+            "text_message": "13bcb88637f7646a",
+            "long_term_context": "c56630e8b8c3cac0",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "6f429feb48b42110",
+            "tty_chars": "b4edc5917350aa5c",
+            "tty_colors": "b14db421eddadc4f",
+            "blstats": "4b58f9d25e94f56d",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "e4e3d94f6d988f57",
+            "text_message": "13bcb88637f7646a",
+            "long_term_context": "c56630e8b8c3cac0",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 39.3,
+          "ms_per_replayed_step": 0.492
+        },
+        {
+          "checkpoint_step": 90,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 90,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "8fa1e70bfaed2349",
+            "tty_chars": "f62174e3d95acfe6",
+            "tty_colors": "3471762795745b10",
+            "blstats": "c108c7d063de314f",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "e02fd976477ac0eb",
+            "text_message": "c4ca289e7b675d06",
+            "long_term_context": "c19cf1af5b2aab44",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "8fa1e70bfaed2349",
+            "tty_chars": "f62174e3d95acfe6",
+            "tty_colors": "3471762795745b10",
+            "blstats": "c108c7d063de314f",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "e02fd976477ac0eb",
+            "text_message": "c4ca289e7b675d06",
+            "long_term_context": "c19cf1af5b2aab44",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 37.0,
+          "ms_per_replayed_step": 0.412
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": true,
+      "invalid_feedback_text_verified": true,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 1.1
+    },
+    "MiniHack-Boxoban-Hard-v0|scripted": {
+      "task": "MiniHack-Boxoban-Hard-v0",
+      "seed": 0,
+      "source": "scripted",
+      "run_dir": null,
+      "episode_steps_played": 100,
+      "episode_outcome": "truncated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 12,
+      "invalid_action_steps": [
+        3,
+        17
+      ],
+      "replays": [
+        {
+          "checkpoint_step": 4,
+          "checkpoint_reason": "post_invalid",
+          "n_replayed_actions": 4,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": true,
+          "invalid_feedback_text_identical": true,
+          "invalid_action_steps_in_prefix": [
+            3
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "d7c79e3b6b7fe877",
+            "tty_chars": "29aa953022cd3f00",
+            "tty_colors": "7d3ad6105be4fbe2",
+            "blstats": "d6bed81edbf8a9de",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "8751785586ac7d37",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "0e9cab670deabf13",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "d7c79e3b6b7fe877",
+            "tty_chars": "29aa953022cd3f00",
+            "tty_colors": "7d3ad6105be4fbe2",
+            "blstats": "d6bed81edbf8a9de",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "8751785586ac7d37",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "0e9cab670deabf13",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 6.7,
+          "ms_per_replayed_step": 1.677
+        },
+        {
+          "checkpoint_step": 80,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 80,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "7ac091503991895d",
+            "tty_chars": "8c2521ee5fd4690b",
+            "tty_colors": "f4e74d6c60eccb21",
+            "blstats": "f2bcd4e33d279bba",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "8751785586ac7d37",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "d9ba4f93098556eb",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "7ac091503991895d",
+            "tty_chars": "8c2521ee5fd4690b",
+            "tty_colors": "f4e74d6c60eccb21",
+            "blstats": "f2bcd4e33d279bba",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "8751785586ac7d37",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "d9ba4f93098556eb",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 32.3,
+          "ms_per_replayed_step": 0.403
+        },
+        {
+          "checkpoint_step": 90,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 90,
+          "prefix_contains_invalid_action": true,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [
+            3,
+            17
+          ],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "2ce62555837aa6bc",
+            "tty_chars": "03c56603fc3e1bfb",
+            "tty_colors": "718002651ad5fa81",
+            "blstats": "d69eb673c2bb9e17",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "19aba3dd13eab53f",
+            "text_message": "c4ca289e7b675d06",
+            "long_term_context": "ca4d4b27d4f64833",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "2ce62555837aa6bc",
+            "tty_chars": "03c56603fc3e1bfb",
+            "tty_colors": "718002651ad5fa81",
+            "blstats": "d69eb673c2bb9e17",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "19aba3dd13eab53f",
+            "text_message": "c4ca289e7b675d06",
+            "long_term_context": "ca4d4b27d4f64833",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 35.1,
+          "ms_per_replayed_step": 0.39
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": true,
+      "invalid_feedback_text_verified": true,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.2
+    },
+    "MiniHack-Quest-Easy-v0|trace": {
+      "task": "MiniHack-Quest-Easy-v0",
+      "seed": 0,
+      "source": "trace",
+      "run_dir": "/root/nld/gen_runs/minihack/MiniHack-Quest-Easy-v0_s0_base",
+      "episode_steps_played": 9,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 3,
+      "checkpoints_taken": 3,
+      "invalid_action_steps": [],
+      "replays": [
+        {
+          "checkpoint_step": 3,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 3,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "c29658ba8bd43adc",
+            "tty_chars": "b869d57ccb309d23",
+            "tty_colors": "4edaee1b95ff5749",
+            "blstats": "a7d4c1eddeda8257",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "658c311991d7a77d",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "29ca7735818e89a4",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "c29658ba8bd43adc",
+            "tty_chars": "b869d57ccb309d23",
+            "tty_colors": "4edaee1b95ff5749",
+            "blstats": "a7d4c1eddeda8257",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "658c311991d7a77d",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "29ca7735818e89a4",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 2.2,
+          "ms_per_replayed_step": 0.729
+        },
+        {
+          "checkpoint_step": 6,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 6,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "29fdbcd01eceda1d",
+            "tty_chars": "db8a48569c68ff6b",
+            "tty_colors": "49c1b88a25ed578e",
+            "blstats": "dd6be58115dc07c7",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "bfeebd963a7d176c",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "a331f4345b97037b",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "replayed_digests": {
+            "glyphs": "29fdbcd01eceda1d",
+            "tty_chars": "db8a48569c68ff6b",
+            "tty_colors": "49c1b88a25ed578e",
+            "blstats": "dd6be58115dc07c7",
+            "inv_strs": "6f2caafb8e08a9a3",
+            "inv_letters": "64dd7a8e0798bba8",
+            "tty_cursor": "bfeebd963a7d176c",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "a331f4345b97037b",
+            "short_term_context": "3389f984d73e2142"
+          },
+          "restore_ms": 2.9,
+          "ms_per_replayed_step": 0.486
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": false,
+      "invalid_feedback_text_verified": false,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.7
+    },
+    "MiniHack-Quest-Medium-v0|trace": {
+      "task": "MiniHack-Quest-Medium-v0",
+      "seed": 0,
+      "source": "trace",
+      "run_dir": "/root/nld/gen_runs/minihack/MiniHack-Quest-Medium-v0_s0_base",
+      "episode_steps_played": 79,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 8,
+      "invalid_action_steps": [],
+      "replays": [
+        {
+          "checkpoint_step": 50,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 50,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "3ce3e354eebe2392",
+            "tty_chars": "41046fbddbba7f6f",
+            "tty_colors": "8333b8f95f3cc6dc",
+            "blstats": "bbde3cb084979dc6",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f48d1fe51ec34b95",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "edf66d513bd11428",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "3ce3e354eebe2392",
+            "tty_chars": "41046fbddbba7f6f",
+            "tty_colors": "8333b8f95f3cc6dc",
+            "blstats": "bbde3cb084979dc6",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f48d1fe51ec34b95",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "edf66d513bd11428",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 13.7,
+          "ms_per_replayed_step": 0.274
+        },
+        {
+          "checkpoint_step": 60,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 60,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "4d78530c5bbea0dd",
+            "tty_chars": "38717e0f1d67cb35",
+            "tty_colors": "b5f5cdbd64b0bbf0",
+            "blstats": "c594e429c2b959cf",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e71d680b0ae91228",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "fe981b44082b9ee8",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "4d78530c5bbea0dd",
+            "tty_chars": "38717e0f1d67cb35",
+            "tty_colors": "b5f5cdbd64b0bbf0",
+            "blstats": "c594e429c2b959cf",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e71d680b0ae91228",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "fe981b44082b9ee8",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 16.2,
+          "ms_per_replayed_step": 0.27
+        },
+        {
+          "checkpoint_step": 70,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 70,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "09daed7221503e8c",
+            "tty_chars": "43df2c7209fb753e",
+            "tty_colors": "c8e72dd10caee2f7",
+            "blstats": "04f1cc849dfe5ee3",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b81c39ae0e7440a9",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "06db8a80d9aca282",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "09daed7221503e8c",
+            "tty_chars": "43df2c7209fb753e",
+            "tty_colors": "c8e72dd10caee2f7",
+            "blstats": "04f1cc849dfe5ee3",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b81c39ae0e7440a9",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "06db8a80d9aca282",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 18.3,
+          "ms_per_replayed_step": 0.261
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": false,
+      "invalid_feedback_text_verified": false,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.8
+    },
+    "MiniHack-CorridorBattle-Dark-v0|trace": {
+      "task": "MiniHack-CorridorBattle-Dark-v0",
+      "seed": 0,
+      "source": "trace",
+      "run_dir": "/root/nld/gen_runs/minihack/MiniHack-CorridorBattle-Dark-v0_s0_base",
+      "episode_steps_played": 46,
+      "episode_outcome": "terminated",
+      "checkpoint_every": 10,
+      "checkpoints_taken": 5,
+      "invalid_action_steps": [],
+      "replays": [
+        {
+          "checkpoint_step": 20,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 20,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "f40360a4ccf6bcb0",
+            "tty_chars": "55261b0da1c74f9d",
+            "tty_colors": "7752ea11c99900d3",
+            "blstats": "cc154f121a60a120",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f5862534469d4df8",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "bdd43f695e7486f5",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "f40360a4ccf6bcb0",
+            "tty_chars": "55261b0da1c74f9d",
+            "tty_colors": "7752ea11c99900d3",
+            "blstats": "cc154f121a60a120",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "f5862534469d4df8",
+            "text_message": "0a0de72aaa707e5c",
+            "long_term_context": "bdd43f695e7486f5",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 6.2,
+          "ms_per_replayed_step": 0.309
+        },
+        {
+          "checkpoint_step": 30,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 30,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "ef97a3490a85c22b",
+            "tty_chars": "db756ef2d936948f",
+            "tty_colors": "c06550ff134f6549",
+            "blstats": "af6d4cce42d6616e",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e7720e2d022b7cf8",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "ca8b980d07960658",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "ef97a3490a85c22b",
+            "tty_chars": "db756ef2d936948f",
+            "tty_colors": "c06550ff134f6549",
+            "blstats": "af6d4cce42d6616e",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "e7720e2d022b7cf8",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "ca8b980d07960658",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 8.9,
+          "ms_per_replayed_step": 0.296
+        },
+        {
+          "checkpoint_step": 40,
+          "checkpoint_reason": "periodic",
+          "n_replayed_actions": 40,
+          "prefix_contains_invalid_action": false,
+          "carries_invalid_action_feedback": false,
+          "invalid_feedback_text_identical": null,
+          "invalid_action_steps_in_prefix": [],
+          "identical": true,
+          "fields_identical": {
+            "glyphs": true,
+            "tty_chars": true,
+            "tty_colors": true,
+            "blstats": true,
+            "inv_strs": true,
+            "inv_letters": true,
+            "tty_cursor": true,
+            "text_message": true,
+            "long_term_context": true,
+            "short_term_context": true
+          },
+          "saved_digests": {
+            "glyphs": "8c80b7bc46e77a2a",
+            "tty_chars": "0f874d73a5348b82",
+            "tty_colors": "a1e863251b039397",
+            "blstats": "4e3aa85934ff964d",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b25a3fcf180982ed",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "e2ebfa0093ee8abd",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "replayed_digests": {
+            "glyphs": "8c80b7bc46e77a2a",
+            "tty_chars": "0f874d73a5348b82",
+            "tty_colors": "a1e863251b039397",
+            "blstats": "4e3aa85934ff964d",
+            "inv_strs": "37dbe29a06b2e5ca",
+            "inv_letters": "1d05cdbb238af5e3",
+            "tty_cursor": "b25a3fcf180982ed",
+            "text_message": "6f49cdbd80e1b95d",
+            "long_term_context": "e2ebfa0093ee8abd",
+            "short_term_context": "b7f979bda1e6b0c2"
+          },
+          "restore_ms": 11.0,
+          "ms_per_replayed_step": 0.275
+        }
+      ],
+      "all_identical": true,
+      "invalid_action_covered": false,
+      "invalid_feedback_text_verified": false,
+      "compared_fields": [
+        "glyphs",
+        "tty_chars",
+        "tty_colors",
+        "blstats",
+        "inv_strs",
+        "inv_letters",
+        "tty_cursor",
+        "text_message",
+        "long_term_context",
+        "short_term_context"
+      ],
+      "wall_s": 0.8
+    }
+  },
+  "summary": {
+    "all_identical": true,
+    "tasks_with_invalid_action_coverage": [
+      "MiniHack-Boxoban-Hard-v0",
+      "MiniHack-Boxoban-Medium-v0",
+      "MiniHack-CorridorBattle-Dark-v0",
+      "MiniHack-Quest-Easy-v0",
+      "MiniHack-Quest-Medium-v0"
+    ],
+    "tasks_with_invalid_feedback_text_verified": [
+      "MiniHack-Boxoban-Hard-v0",
+      "MiniHack-Boxoban-Medium-v0",
+      "MiniHack-CorridorBattle-Dark-v0",
+      "MiniHack-Quest-Easy-v0",
+      "MiniHack-Quest-Medium-v0"
+    ],
+    "n_task_source_pairs": 8
+  }
+}

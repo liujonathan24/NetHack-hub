@@ -1,0 +1,13 @@
+{
+  "id": "c8",
+  "parent": "c7",
+  "attempt": 1,
+  "step": 70,
+  "reason": "periodic",
+  "progression": 0.0,
+  "aux_progress": 0.0,
+  "summary": "step 70, score fraction 0.00",
+  "prev_action": "go south",
+  "obs_digest": "af7f6c577468f887",
+  "state_digest": "ecd6d5291b88f31e"
+}

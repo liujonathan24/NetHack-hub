@@ -1,0 +1,71 @@
+{
+  "game": "textworld",
+  "task": "the_cooking_game",
+  "seed": 9,
+  "arm": "pae(select=orchestrator,directive=on)",
+  "attempts": 5,
+  "checkpoints": 26,
+  "attempt1_progression": 0.7647058823529411,
+  "pae_best_progression": 1.0,
+  "max_progression": 1.0,
+  "final_progression": 1.0,
+  "aux_label": "score / max_score (live)",
+  "aux_max_measured": 1.0,
+  "committed_steps_max": 80,
+  "total_env_steps": 119,
+  "step_cap": 80,
+  "llm_steps": 118,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [
+    "textworld_live_progression",
+    "balrog_get_stats_progression=1.000000"
+  ],
+  "stop_reason": "solved",
+  "orchestrator": {
+    "rounds": 4,
+    "directive_rejections": 1,
+    "root_picks": 0
+  },
+  "best": {
+    "progression": 1.0,
+    "attempt": 5
+  },
+  "tokens": {
+    "player": {
+      "calls": 118,
+      "input_tokens": 199977,
+      "output_tokens": 13673,
+      "cost_usd": 0.374142
+    },
+    "orchestrator": {
+      "calls": 5,
+      "input_tokens": 8283,
+      "output_tokens": 3326,
+      "cost_usd": 0.028854
+    },
+    "total": {
+      "calls": 123,
+      "input_tokens": 208260,
+      "output_tokens": 16999,
+      "cost_usd": 0.402996
+    },
+    "billed_by_provider_usd": 0.204,
+    "billed_calls": 123
+  },
+  "wall_s": 461.8,
+  "run_dir": "/root/nld/gen_runs/panel/tw_the_cooking_game_s9",
+  "provenance": {
+    "tool_commit": "6cacdfba563826f484d77193d10a612e8121ad2f",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": false,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 1765,
+    "output": 144
+  },
+  "cost_per_llm_step_usd": 0.003415
+}

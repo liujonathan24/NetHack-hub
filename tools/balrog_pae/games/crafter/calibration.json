@@ -1,0 +1,190 @@
+{
+  "what": "Crafter calibration: 1 base episode + 1 three-attempt PAE run, seed 0, GLM-5.2 over Prime",
+  "base": {
+    "run_dir": "/root/nld/gen_runs/crafter/cal_s0_base",
+    "arm": "base",
+    "seed": 0,
+    "env_patches": [
+      "crafter_balance_chunk_sorted",
+      "crafter_seed_pinned_to_episode_seed"
+    ],
+    "attempts": 1,
+    "checkpoints": 41,
+    "committed_steps_max": 278,
+    "total_env_steps": 279,
+    "llm_steps": 278,
+    "attempt1_progression": 0.6363636363636364,
+    "pae_best_progression": 0.6363636363636364,
+    "achievements_unlocked": 14,
+    "achievements_of": 22,
+    "stop_reason": "attempts_exhausted",
+    "input_tokens_total": 476000,
+    "output_tokens_total": 74056,
+    "list_usd": 1.091471,
+    "billed_usd": 0.4564,
+    "billed_over_list": 0.4182,
+    "input_tokens_per_step": {
+      "mean": 1712,
+      "median": 1798,
+      "min": 552,
+      "max": 2161,
+      "first": 552,
+      "last": 1376
+    },
+    "output_tokens_per_step": {
+      "mean": 266,
+      "median": 232,
+      "min": 16,
+      "max": 1157,
+      "first": 100,
+      "last": 365
+    },
+    "invalid_action_rate": 0.0036,
+    "wall_s": 1094.0,
+    "wall_s_per_llm_step": 3.94,
+    "attempts_detail": [
+      {
+        "attempt": 1,
+        "from_checkpoint": null,
+        "start_step": 0,
+        "end_step": 278,
+        "steps_played": 278,
+        "committed_steps": 278,
+        "outcome": "ended",
+        "progression": 0.6363636363636364,
+        "aux_measured": 14.0,
+        "calls": 278,
+        "input_tokens": 476000,
+        "output_tokens": 74056,
+        "directive_kind": "none",
+        "selection_source": "fresh"
+      }
+    ]
+  },
+  "pae": {
+    "run_dir": "/root/nld/gen_runs/crafter/cal_s0_pae3",
+    "arm": "pae(select=orchestrator,directive=on)",
+    "seed": 0,
+    "env_patches": [
+      "crafter_balance_chunk_sorted",
+      "crafter_seed_pinned_to_episode_seed"
+    ],
+    "attempts": 3,
+    "checkpoints": 23,
+    "committed_steps_max": 164,
+    "total_env_steps": 179,
+    "llm_steps": 178,
+    "attempt1_progression": 0.2727272727272727,
+    "pae_best_progression": 0.2727272727272727,
+    "achievements_unlocked": 6,
+    "achievements_of": 22,
+    "stop_reason": "attempts_exhausted",
+    "input_tokens_total": 247356,
+    "output_tokens_total": 38115,
+    "list_usd": 0.565405,
+    "billed_usd": 0.2264,
+    "billed_over_list": 0.4004,
+    "input_tokens_per_step": {
+      "mean": 1363,
+      "median": 1416,
+      "min": 552,
+      "max": 1695,
+      "first": 552,
+      "last": 1523
+    },
+    "output_tokens_per_step": {
+      "mean": 209,
+      "median": 180,
+      "min": 16,
+      "max": 710,
+      "first": 135,
+      "last": 75
+    },
+    "invalid_action_rate": 0.0,
+    "wall_s": 606.6,
+    "wall_s_per_llm_step": 3.41,
+    "attempts_detail": [
+      {
+        "attempt": 1,
+        "from_checkpoint": null,
+        "start_step": 0,
+        "end_step": 160,
+        "steps_played": 160,
+        "committed_steps": 160,
+        "outcome": "ended",
+        "progression": 0.2727272727272727,
+        "aux_measured": 6.0,
+        "calls": 160,
+        "input_tokens": 214217,
+        "output_tokens": 33156,
+        "directive_kind": "none",
+        "selection_source": "fresh"
+      },
+      {
+        "attempt": 2,
+        "from_checkpoint": "c22",
+        "start_step": 150,
+        "end_step": 164,
+        "steps_played": 14,
+        "committed_steps": 164,
+        "outcome": "ended",
+        "progression": 0.2727272727272727,
+        "aux_measured": 6.0,
+        "calls": 14,
+        "input_tokens": 22243,
+        "output_tokens": 3327,
+        "directive_kind": "orchestrator",
+        "selection_source": "llm"
+      },
+      {
+        "attempt": 3,
+        "from_checkpoint": "c23",
+        "start_step": 160,
+        "end_step": 164,
+        "steps_played": 4,
+        "committed_steps": 164,
+        "outcome": "ended",
+        "progression": 0.2727272727272727,
+        "aux_measured": 6.0,
+        "calls": 4,
+        "input_tokens": 6231,
+        "output_tokens": 744,
+        "directive_kind": "orchestrator",
+        "selection_source": "llm"
+      }
+    ]
+  },
+  "pae_vs_base": {
+    "base_episode_end_step": 278,
+    "base_outcome": "ended",
+    "pae_attempt_end_steps": [
+      160,
+      164,
+      164
+    ],
+    "pae_attempt_outcomes": [
+      "ended",
+      "ended",
+      "ended"
+    ],
+    "pae_kept_agent_alive_longer": false,
+    "longest_committed_trajectory": 278,
+    "base_progression": 0.6363636363636364,
+    "pae_attempt1_progression": 0.2727272727272727,
+    "pae_best_progression": 0.2727272727272727,
+    "progression_delta_pae_best_minus_base": -0.36363636363636365
+  },
+  "measured": {
+    "in_tok_per_step": 1586,
+    "out_tok_per_step": 245,
+    "in_tok_per_step_base": 1712,
+    "out_tok_per_step_base": 266,
+    "in_tok_per_step_pae": 1389,
+    "out_tok_per_step_pae": 214,
+    "base_steps": 278,
+    "resume_steps_mean": 9,
+    "billed_ratio": 0.4121,
+    "billed_ratio_base": 0.4182,
+    "billed_ratio_pae": 0.4004
+  }
+}

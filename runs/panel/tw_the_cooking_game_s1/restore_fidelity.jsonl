@@ -1,0 +1,8 @@
+{"attempt": 2, "checkpoint": "c4", "method": "jericho", "replayed_digest": "8cbe4d8510a15c3b", "saved_digest": "8cbe4d8510a15c3b", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 3, "checkpoint": "c4", "method": "jericho", "replayed_digest": "8cbe4d8510a15c3b", "saved_digest": "8cbe4d8510a15c3b", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 4, "checkpoint": "c3", "method": "jericho", "replayed_digest": "e6460d84307cebae", "saved_digest": "e6460d84307cebae", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 5, "checkpoint": "c15", "method": "jericho", "replayed_digest": "9299793e8cdc127f", "saved_digest": "9299793e8cdc127f", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 6, "checkpoint": "c19", "method": "jericho", "replayed_digest": "881b1d6bddaac2e6", "saved_digest": "881b1d6bddaac2e6", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 7, "checkpoint": "c15", "method": "jericho", "replayed_digest": "9299793e8cdc127f", "saved_digest": "9299793e8cdc127f", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 8, "checkpoint": "c15", "method": "jericho", "replayed_digest": "9299793e8cdc127f", "saved_digest": "9299793e8cdc127f", "identical": true, "text_identical": true, "n_replayed_steps": 0}
+{"attempt": 9, "checkpoint": "c14", "method": "jericho", "replayed_digest": "debaf83daa86bd1a", "saved_digest": "debaf83daa86bd1a", "identical": true, "text_identical": true, "n_replayed_steps": 0}

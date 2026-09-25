@@ -1,0 +1,13 @@
+{
+  "id": "c13",
+  "parent": "c11",
+  "attempt": 2,
+  "step": 60,
+  "reason": "periodic",
+  "progression": 0.2727272727272727,
+  "aux_progress": 6.0,
+  "summary": "step 60, achievements 6: collect_coal, collect_drink, collect_stone, collect_wood, make_wood_pickaxe, place_table",
+  "prev_action": "Move North",
+  "obs_digest": "2ba69cc1ca6e8001",
+  "state_digest": "3cb55999da86282c"
+}

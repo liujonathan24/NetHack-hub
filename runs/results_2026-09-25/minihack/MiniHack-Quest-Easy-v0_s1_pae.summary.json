@@ -1,0 +1,68 @@
+{
+  "game": "minihack",
+  "task": "MiniHack-Quest-Easy-v0",
+  "seed": 1,
+  "arm": "pae(select=orchestrator,directive=on)",
+  "attempts": 10,
+  "checkpoints": 166,
+  "attempt1_progression": 0.0,
+  "pae_best_progression": 0.0,
+  "max_progression": 0.0,
+  "final_progression": 0.0,
+  "aux_label": "distinct (dlvl,x,y) cells seen",
+  "aux_max_measured": 20.0,
+  "committed_steps_max": 100,
+  "total_env_steps": 595,
+  "step_cap": 100,
+  "llm_steps": 513,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [],
+  "stop_reason": "attempts_exhausted",
+  "orchestrator": {
+    "rounds": 9,
+    "directive_rejections": 2,
+    "root_picks": 3
+  },
+  "best": {
+    "progression": 0.0,
+    "attempt": 1
+  },
+  "tokens": {
+    "player": {
+      "calls": 513,
+      "input_tokens": 1990194,
+      "output_tokens": 188559,
+      "cost_usd": 3.977524
+    },
+    "orchestrator": {
+      "calls": 11,
+      "input_tokens": 56963,
+      "output_tokens": 13136,
+      "cost_usd": 0.151301
+    },
+    "total": {
+      "calls": 524,
+      "input_tokens": 2047157,
+      "output_tokens": 201695,
+      "cost_usd": 4.128826
+    },
+    "billed_by_provider_usd": 1.8496,
+    "billed_calls": 524
+  },
+  "wall_s": 4360.4,
+  "run_dir": "/root/nld/gen_runs/panel_minihack/MiniHack-Quest-Easy-v0_s1_pae",
+  "provenance": {
+    "tool_commit": "6cacdfba563826f484d77193d10a612e8121ad2f",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": false,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 3991,
+    "output": 393
+  },
+  "cost_per_llm_step_usd": 0.008048
+}

@@ -1,0 +1,41 @@
+{
+  "game": "crafter",
+  "task": "default",
+  "seed": 4,
+  "attempts": 10,
+  "checkpoint_every": 10,
+  "plateau": 4,
+  "select": "orchestrator",
+  "directive": "on",
+  "blind": false,
+  "max_steps": 400,
+  "model_id": "z-ai/glm-5.2",
+  "temperature": 1.0,
+  "max_tokens": 8192,
+  "run_dir": "/root/nld/gen_runs/panel/crafter_s4",
+  "base_only": false,
+  "verify_restore": true,
+  "balrog_agent": {
+    "type": "naive",
+    "remember_cot": true,
+    "max_text_history": 16,
+    "max_image_history": 0,
+    "max_cot_history": 1,
+    "max_icl_history": 1000,
+    "cache_icl": false
+  },
+  "balrog_client": {
+    "client_name": "openai",
+    "model_id": "z-ai/glm-5.2",
+    "base_url": "https://api.pinference.ai/api/v1",
+    "generate_kwargs": {
+      "temperature": 1.0,
+      "max_tokens": 8192,
+      "thinking_budget": null
+    },
+    "timeout": 600.0,
+    "max_retries": 5,
+    "delay": 2,
+    "alternate_roles": false
+  }
+}
