@@ -1,0 +1,62 @@
+{
+  "game": "minihack",
+  "task": "MiniHack-CorridorBattle-Dark-v0",
+  "seed": 0,
+  "arm": "pae(select=fixed,directive=on)",
+  "attempts": 3,
+  "checkpoints": 8,
+  "attempt1_progression": 0.0,
+  "pae_best_progression": 0.0,
+  "max_progression": 0.0,
+  "final_progression": 0.0,
+  "aux_label": "distinct (dlvl,x,y) cells seen",
+  "aux_max_measured": 9.0,
+  "committed_steps_max": 25,
+  "total_env_steps": 78,
+  "step_cap": 25,
+  "llm_steps": 35,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [],
+  "stop_reason": "attempts_exhausted",
+  "orchestrator": {
+    "rounds": 0,
+    "directive_rejections": 0,
+    "root_picks": 0
+  },
+  "best": {
+    "progression": 0.0,
+    "attempt": 1
+  },
+  "tokens": {
+    "player": {
+      "calls": 35,
+      "input_tokens": 249965,
+      "output_tokens": 105,
+      "cost_usd": 0.385454
+    },
+    "total": {
+      "calls": 35,
+      "input_tokens": 249965,
+      "output_tokens": 105,
+      "cost_usd": 0.385454
+    },
+    "billed_by_provider_usd": 0.0,
+    "billed_calls": 0
+  },
+  "wall_s": 0.1,
+  "run_dir": "/root/nld/gen_runs/panel_minihack/selftest_MiniHack-CorridorBattle-Dark-v0",
+  "provenance": {
+    "tool_commit": "56f46c7e0533c6ecaf2686133f42a6e729a8faab",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": true,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 7142,
+    "output": 3
+  },
+  "cost_per_llm_step_usd": 0.011013
+}

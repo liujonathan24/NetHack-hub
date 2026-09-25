@@ -1,0 +1,68 @@
+{
+  "game": "minihack",
+  "task": "MiniHack-MazeWalk-15x15-v0",
+  "seed": 0,
+  "arm": "pae(select=orchestrator,directive=on)",
+  "attempts": 10,
+  "checkpoints": 52,
+  "attempt1_progression": 0.0,
+  "pae_best_progression": 0.0,
+  "max_progression": 0.0,
+  "final_progression": 0.0,
+  "aux_label": "distinct (dlvl,x,y) cells seen",
+  "aux_max_measured": 30.0,
+  "committed_steps_max": 100,
+  "total_env_steps": 1010,
+  "step_cap": 100,
+  "llm_steps": 610,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [],
+  "stop_reason": "attempts_exhausted",
+  "orchestrator": {
+    "rounds": 9,
+    "directive_rejections": 5,
+    "root_picks": 0
+  },
+  "best": {
+    "progression": 0.0,
+    "attempt": 1
+  },
+  "tokens": {
+    "player": {
+      "calls": 610,
+      "input_tokens": 2003496,
+      "output_tokens": 347751,
+      "cost_usd": 4.768499
+    },
+    "orchestrator": {
+      "calls": 14,
+      "input_tokens": 35208,
+      "output_tokens": 10885,
+      "cost_usd": 0.106904
+    },
+    "total": {
+      "calls": 624,
+      "input_tokens": 2038704,
+      "output_tokens": 358636,
+      "cost_usd": 4.875402
+    },
+    "billed_by_provider_usd": 2.2364,
+    "billed_calls": 625
+  },
+  "wall_s": 5606.5,
+  "run_dir": "/root/nld/gen_runs/panel_minihack/MiniHack-MazeWalk-15x15-v0_s0_pae",
+  "provenance": {
+    "tool_commit": "5d80c3805fa15d564ca62ff556aba37138328daf",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": false,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 3342,
+    "output": 588
+  },
+  "cost_per_llm_step_usd": 0.007992
+}

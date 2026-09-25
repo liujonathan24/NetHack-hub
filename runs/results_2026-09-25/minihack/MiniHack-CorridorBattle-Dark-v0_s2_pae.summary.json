@@ -1,0 +1,68 @@
+{
+  "game": "minihack",
+  "task": "MiniHack-CorridorBattle-Dark-v0",
+  "seed": 2,
+  "arm": "pae(select=orchestrator,directive=on)",
+  "attempts": 10,
+  "checkpoints": 40,
+  "attempt1_progression": 0.0,
+  "pae_best_progression": 0.0,
+  "max_progression": 0.0,
+  "final_progression": 0.0,
+  "aux_label": "distinct (dlvl,x,y) cells seen",
+  "aux_max_measured": 21.0,
+  "committed_steps_max": 50,
+  "total_env_steps": 366,
+  "step_cap": 100,
+  "llm_steps": 231,
+  "invalid_actions": 0,
+  "client_retry_exhausted": 0,
+  "env_patches": [],
+  "stop_reason": "attempts_exhausted",
+  "orchestrator": {
+    "rounds": 9,
+    "directive_rejections": 3,
+    "root_picks": 0
+  },
+  "best": {
+    "progression": 0.0,
+    "attempt": 1
+  },
+  "tokens": {
+    "player": {
+      "calls": 231,
+      "input_tokens": 727662,
+      "output_tokens": 47749,
+      "cost_usd": 1.351705
+    },
+    "orchestrator": {
+      "calls": 12,
+      "input_tokens": 24314,
+      "output_tokens": 9979,
+      "cost_usd": 0.085742
+    },
+    "total": {
+      "calls": 243,
+      "input_tokens": 751976,
+      "output_tokens": 57728,
+      "cost_usd": 1.437447
+    },
+    "billed_by_provider_usd": 0.8699,
+    "billed_calls": 243
+  },
+  "wall_s": 842.5,
+  "run_dir": "/root/nld/gen_runs/panel_minihack/MiniHack-CorridorBattle-Dark-v0_s2_pae",
+  "provenance": {
+    "tool_commit": "63782929ee1cfb78fc95b9e0b02fae296d72cbef",
+    "tool_branch": "pilot/pae-paired-crafter-tw",
+    "tool_dirty": false,
+    "tool_dir": "/root/nld/gen-pilot/tools/balrog_pae",
+    "balrog_commit": "0a65010a580340511f87267c250d636d07bf43c3",
+    "balrog_dir": "/root/nld/gen-pae/BALROG"
+  },
+  "tokens_per_llm_step": {
+    "input": 3255,
+    "output": 250
+  },
+  "cost_per_llm_step_usd": 0.006223
+}
