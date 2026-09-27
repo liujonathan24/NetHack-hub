@@ -1,0 +1,32 @@
+{
+  "rollout": "/tmp/claude-0/-root/3382b9f1-b1ec-4e18-9c3e-4585c4167d08/scratchpad/e16pfx/rollout",
+  "canary": "QUILLFEATHER-7731",
+  "prefix_block_chars": 520,
+  "n_nodes": 41,
+  "Q1_prefix_block_in_served_bytes": [
+    {
+      "node": 7,
+      "role": "tool",
+      "offset_of_prefix_block": 670,
+      "node_chars": 1979,
+      "byte_identical": true
+    }
+  ],
+  "Q2_canary_in_served_bytes": [
+    {
+      "node": 7,
+      "role": "tool",
+      "offset": 785
+    }
+  ],
+  "Q3_model_text_referring_to_it": [],
+  "metrics": {
+    "skill_calls": 12.0,
+    "max_dlvl_reached": 1.0,
+    "died": 0.0,
+    "budget_exhausted": 1.0
+  },
+  "stop_condition": "call_budget_exhausted",
+  "VERDICT": "THE REPLAYED PREFIX REACHES THE MODEL",
+  "verdict_detail": "the prefix block appears byte-identical in 1 served node(s), and the canary -- which exists nowhere else in the harness, the wiki, the ledger table or the directive -- appears in 1 served node(s). Delivery is therefore measured, not inferred from configuration."
+}

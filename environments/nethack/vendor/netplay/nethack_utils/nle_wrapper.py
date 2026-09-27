@@ -122,6 +122,19 @@ class RawKeyPress(enum.IntEnum):
     KEYPRESS_DOUBLE_QUOTATION_MARK = ord("\"")
     KEYPRESS_BACKTICK = ord("`")
     KEYPRESS_PERCENT = ord("%")
+    # Added 2026-08-21 (E10/E11 audit): keys NetHack's own prompts require that
+    # the enum lacked. `-` is the critical one -- "select nothing / bare hands"
+    # in wield/wear prompts and "your fingers" in the engrave prompt, i.e. the
+    # only path to dust-engraving Elbereth; its absence made the model's `E`
+    # then `-` attempt error out ("Unable to press the given key -"). The rest
+    # complete text-entry prompts (naming, wishes).
+    KEYPRESS_MINUS = ord("-")
+    KEYPRESS_APOSTROPHE = ord("'")
+    KEYPRESS_CLOSE_SQUARE_BRACKET = ord("]")
+    KEYPRESS_OPEN_CURLY_BRACKET = ord("{")
+    KEYPRESS_CLOSE_CURLY_BRACKET = ord("}")
+    KEYPRESS_PIPE = ord("|")
+    KEYPRESS_TILDE = ord("~")
 
     # Special Keys
     KEYPRESS_ENTER = 13
@@ -137,8 +150,31 @@ class RawKeyPress(enum.IntEnum):
         }
 
         if len(key) == 1:
-            return RawKeyPress(ord(key))
+            member = RawKeyPress(ord(key))
+            # netplay_telemetry gates the keys c1a0bec ADDED to this enum.
+            # Enum members cannot be removed at runtime, so the gate lives at
+            # the parse boundary: with the flag off, these raise exactly the
+            # ValueError the baseline raised ("Unable to press the given key
+            # -"), which is what made dust-engraving Elbereth impossible then.
+            from nethack_harness import tool_flags as _flags
+            if member in _POST_BASELINE_KEYS and not _flags.enabled("netplay_telemetry"):
+                raise ValueError(f"Cannot parse the given key {key}.")
+            return member
         elif key.lower() in special_keys:
             return special_keys[key.lower()]
         
         raise ValueError(f"Cannot parse the given key {key}.")
+
+
+# The keys c1a0bec added to RawKeyPress. Named here rather than inline so the
+# gate and the additions cannot drift apart: anything listed is unavailable
+# unless `netplay_telemetry` is on.
+_POST_BASELINE_KEYS = frozenset({
+    RawKeyPress.KEYPRESS_MINUS,
+    RawKeyPress.KEYPRESS_APOSTROPHE,
+    RawKeyPress.KEYPRESS_CLOSE_SQUARE_BRACKET,
+    RawKeyPress.KEYPRESS_OPEN_CURLY_BRACKET,
+    RawKeyPress.KEYPRESS_CLOSE_CURLY_BRACKET,
+    RawKeyPress.KEYPRESS_PIPE,
+    RawKeyPress.KEYPRESS_TILDE,
+})

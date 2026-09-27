@@ -1,0 +1,9 @@
+CHECKPOINT ARCHIVE (1 saved state(s); 1 on the Dlvl/XL/score frontier). All numbers below are measured by the harness from the game engine, not written by anyone.
+  id  Dlvl  XL   HP     turn   score  attempts  name / why it was saved
+->   2     1   1   13/16       4      0         0  fountain room | saved mid-plan, to test prefix replay
+
+THE PLAN THAT WAS LIVE WHEN THIS STATE WAS SAVED (quoted from that session, not your own memory):
+(assistant) Plan QUILLFEATHER-7731: the east corridor is a dead end, I checked it twice. Going west along the wall to the room with the fountain, then down.
+(user) You move west. There is a fountain here. The corridor east is unlit.
+(assistant) Confirmed. Sticking to plan QUILLFEATHER-7731: do not re-enter the east corridor, it cost me eleven turns last time.
+(user) You find nothing. Your HP is 14(14). You feel hungry.

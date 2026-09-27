@@ -1,0 +1,86 @@
+{
+  "rollout": "/tmp/claude-0/-root/3382b9f1-b1ec-4e18-9c3e-4585c4167d08/scratchpad/e16sim/rollouts/control_nodirective",
+  "directive": "",
+  "expected_block": "[ORCHESTRATOR DIRECTIVE for this attempt: ]",
+  "served_hits": [],
+  "n_served_nodes_with_directive": 0,
+  "assistant_mentions": [],
+  "skill_calls": [
+    {
+      "node": 7,
+      "skill": "request_map",
+      "args": ""
+    },
+    {
+      "node": 9,
+      "skill": "np_melee_attack",
+      "args": "x=27, y=8"
+    },
+    {
+      "node": 12,
+      "skill": "np_explore_level",
+      "args": ""
+    },
+    {
+      "node": 15,
+      "skill": "np_move_to",
+      "args": "x=47, y=12"
+    },
+    {
+      "node": 17,
+      "skill": "np_move_to",
+      "args": "x=47, y=12"
+    },
+    {
+      "node": 20,
+      "skill": "np_press_key",
+      "args": "key=\",\""
+    },
+    {
+      "node": 22,
+      "skill": "np_move_to",
+      "args": "x=45, y=15"
+    },
+    {
+      "node": 24,
+      "skill": "np_press_key",
+      "args": "key=\",\""
+    },
+    {
+      "node": 26,
+      "skill": "np_press_key",
+      "args": "key=\"W\""
+    },
+    {
+      "node": 29,
+      "skill": "np_press_key",
+      "args": "key=\"g\""
+    },
+    {
+      "node": 31,
+      "skill": "np_press_key",
+      "args": "key=\"P\""
+    }
+  ],
+  "metrics": {
+    "prime_agent_relaunches": 0.0,
+    "skill_calls": 10.0,
+    "parallel_refusals": 0.0,
+    "budget_exhausted": 1.0,
+    "max_dlvl_reached": 1.0,
+    "max_xp_level": 1.0,
+    "descent_count": 0.0,
+    "scout_reward_total": 0.429,
+    "died": 0.0,
+    "terminated": 1.0,
+    "moves_executed": 0.0,
+    "balrog_pct": 0.0,
+    "balrog_min_pct": 0.0,
+    "xp_carried": 0.0,
+    "reasoning_recovered": 4.0,
+    "reasoning_inline": 0.0,
+    "reasoning_unavailable": 6.0
+  },
+  "stop_condition": "call_budget_exhausted",
+  "n_nodes": 32
+}

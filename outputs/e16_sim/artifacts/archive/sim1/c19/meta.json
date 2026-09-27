@@ -1,0 +1,20 @@
+{
+  "id": "c19",
+  "parent": "c15",
+  "name": "d9-post-elf",
+  "note": "Killed the Grey-elf on D9 at 12 HP, then rested to near full. Down staircase is known and two rooms east.",
+  "dlvl": 9,
+  "xl": 5,
+  "hp": 44,
+  "max_hp": 47,
+  "gameturn": 3921,
+  "score": 1904,
+  "balrog": 0.191,
+  "balrog_min": 0.191,
+  "attempts_from": 3,
+  "visits": 1,
+  "created_by": "save",
+  "created_at": 1787905063.7197027,
+  "dungeon_number": 0,
+  "level_number": 9
+}

@@ -1,0 +1,20 @@
+{
+  "id": "c22",
+  "parent": "c21",
+  "name": "d11-stairs-known",
+  "note": "On D11 with the down staircase already mapped. An owlbear has been camping ON the staircase since attempt 19.",
+  "dlvl": 11,
+  "xl": 5,
+  "hp": 11,
+  "max_hp": 47,
+  "gameturn": 4588,
+  "score": 2140,
+  "balrog": 0.233,
+  "balrog_min": 0.233,
+  "attempts_from": 7,
+  "visits": 1,
+  "created_by": "save",
+  "created_at": 1787912263.7563627,
+  "dungeon_number": 0,
+  "level_number": 11
+}

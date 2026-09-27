@@ -365,6 +365,31 @@ def compute_visit_mask(agent: NetHackAgent, door_open_count=4):
                     to_visit |= translate(doors, dy, dx)
     return to_visit
 
+def _melee_target_report(agent, target_glyph, tx, ty):
+    # melee_hints gates the whole stale-target report (c1a0bec). Off = the bare
+    # coordinate the E10 baseline was measured with. Imported lazily so the
+    # vendored package carries no harness dependency at import time.
+    from nethack_harness import tool_flags as _flags
+    if not _flags.enabled("melee_hints"):
+        return f"Unable to reach the target at ({tx}, {ty})."
+    # Added 2026-08-21 (E10/E11 audit): 24% of melee calls failed "Unable to
+    # reach the target" with only the STALE coordinate -- the monster had moved
+    # and the model paid an extra observe+attack round to relocate it. The
+    # tracker can find the same glyph's current position level-wide; report it.
+    # Glyph-value matching cannot distinguish two monsters of the same species,
+    # so the wording is "a matching monster", never a claimed identity.
+    try:
+        now = [(p.x, p.y) for g, p in agent.current_level.get_monsters()
+               if g == target_glyph]
+    except Exception:
+        now = []
+    if not now:
+        return f"Unable to reach the target at ({tx}, {ty}); it is no longer visible."
+    nx, ny = min(now, key=lambda p: abs(p[0] - tx) + abs(p[1] - ty))
+    return (f"Unable to reach the target at ({tx}, {ty}); "
+            f"a matching monster is now at ({nx}, {ny}).")
+
+
 @skill(
     name="melee_attack",
     description="Pursues and attacks a given target using melee attacks until it is dead.",
@@ -377,7 +402,21 @@ def compute_visit_mask(agent: NetHackAgent, door_open_count=4):
 def melee_attack(agent: NetHackAgent, x, y):
     target_glyph = agent.current_level.get_monster_glyph(x, y)
     if target_glyph is None:
-        yield Step.failed(f"There is no monster at ({x},{y}).")
+        # ea8cc15, gated under the same `melee_hints` flag as the stale-target
+        # report (one behaviour, two commits -- see tool_flags._DEFAULTS): this
+        # is the MOST common stale case, the monster moved before the call even
+        # started. Off = the bare baseline message.
+        from nethack_harness import tool_flags as _flags
+        extra = ""
+        if _flags.enabled("melee_hints"):
+            try:
+                mons = [(g, p) for g, p in agent.current_level.get_monsters()]
+                if mons:
+                    g, p = min(mons, key=lambda gp: abs(gp[1].x - x) + abs(gp[1].y - y))
+                    extra = f" Nearest visible monster is at ({p.x}, {p.y})."
+            except Exception:
+                pass
+        yield Step.failed(f"There is no monster at ({x},{y}).{extra}")
         return
 
     tx, ty = x, y
@@ -385,13 +424,17 @@ def melee_attack(agent: NetHackAgent, x, y):
         target_neighbors = agent.current_level.get_neighbors(tx, ty)
         target_neighbors = [(x,y) for (x,y) in target_neighbors if agent.get_path_to(x,y, bump_into_unwalkables=False, avoid_monsters=True) is not None]
         if len(target_neighbors) == 0:
-            yield Step.failed(f"Unable to reach the target at ({tx}, {ty}).")
+            yield Step.failed(_melee_target_report(agent, target_glyph, tx, ty))
+            # Missing `return` (audit finding): only safe before because the
+            # driver stops pulling the generator on a done step.
+            return
 
         nx, ny = min(target_neighbors, key=lambda pos: agent.distance_to(pos[0], pos[1], bump_into_unwalkables=False, avoid_monsters=True))
         move_action = get_move_towards_action(agent, nx, ny, bump=False, avoid_monsters=True)
         # Should not happen because we checked the neighbors already, but safe is safe
         if move_action is None:
-            yield Step.failed(f"Unable to reach the target at ({tx}, {ty}).")
+            yield Step.failed(_melee_target_report(agent, target_glyph, tx, ty))
+            return
 
         if move_action == actions.MiscDirection.WAIT:
             # We reached the target
@@ -416,7 +459,20 @@ def melee_attack(agent: NetHackAgent, x, y):
                 break
 
         if not found:
-            yield Step.failed(f"Lost track of the target")
+            # melee_hints gates the suffix, not just _melee_target_report's body:
+            # that helper self-gates to a BARE "Unable to reach..." string, which
+            # this path then concatenated unconditionally -- so with every flag
+            # off the baseline's `Lost track of the target` became `Lost track of
+            # the target. Unable to reach the target at (x, y).`, a coordinate
+            # the baseline never printed here. Caught by adversarial review of
+            # [base] byte-fidelity, 2026-08-23.
+            from nethack_harness import tool_flags as _flags
+            if _flags.enabled("melee_hints"):
+                yield Step.failed(
+                    "Lost track of the target. " +
+                    _melee_target_report(agent, target_glyph, tx, ty))
+            else:
+                yield Step.failed(f"Lost track of the target")
             return
 
 @skill(
@@ -622,12 +678,34 @@ def zap(agent: NetHackAgent, item_letter, direction):
 )
 @fail_on_popup
 def rest(agent: NetHackAgent, count: int = 5):
-    if count > 1:
-        for step in type_text(agent, str(count)):
-            if step.is_done():
-                break 
-            yield step
-    yield agent.step(actions.MiscDirection.WAIT)
+    # Rewritten 2026-08-21 (E10/E11 audit). The old body typed the count digits
+    # as raw keys and issued ONE WAIT -- a NetHack count-prefixed occupation
+    # that the game aborts on the first delivered message, so ambient dosounds
+    # noise ("You hear a door open") cut every rest to ~3 engine steps
+    # regardless of `count`, with no report of turns actually rested. Measured:
+    # 74 rest calls across 25 games, all truncated, each provoking a blind
+    # re-issue. Now: one WAIT per game turn (the skill-interrupt filter governs
+    # early exit), and the completion says how much rest was delivered.
+    from nethack_harness import tool_flags as _flags
+    if not _flags.enabled("netplay_telemetry"):
+        # The pre-c1a0bec body, verbatim: the count digits typed as raw keys
+        # plus a single WAIT. It under-delivers (a count-prefixed occupation
+        # aborts on the first message), which is exactly what the baseline
+        # measured -- so this branch must stay bug-for-bug identical.
+        if count > 1:
+            for step in type_text(agent, str(count)):
+                if step.is_done():
+                    break
+                yield step
+        yield agent.step(actions.MiscDirection.WAIT)
+        return
+    start = agent.blstats.time
+    for _ in range(max(1, count)):
+        if (agent.blstats.time - start) >= count:
+            break
+        yield agent.step(actions.MiscDirection.WAIT)
+    rested = agent.blstats.time - start
+    yield Step.completed(f"Rested {rested} of {count} requested turns.")
 
 @skill(
     name="pray",

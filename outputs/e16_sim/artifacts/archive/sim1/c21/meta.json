@@ -1,0 +1,20 @@
+{
+  "id": "c21",
+  "parent": "c19",
+  "name": "d10-corridor-cache",
+  "note": "Stashed spare armour in the D10 corridor junction. Nothing hostile in sight; HP not yet topped up.",
+  "dlvl": 10,
+  "xl": 5,
+  "hp": 31,
+  "max_hp": 47,
+  "gameturn": 4302,
+  "score": 2011,
+  "balrog": 0.212,
+  "balrog_min": 0.212,
+  "attempts_from": 0,
+  "visits": 1,
+  "created_by": "auto",
+  "created_at": 1787908663.7197027,
+  "dungeon_number": 0,
+  "level_number": 10
+}

@@ -406,6 +406,32 @@ NO_TEXT_REASONING_UNAVAILABLE = (
 )
 
 
+def _auto_checkpoint_record(state) -> dict:
+    """This turn's view of the E16 automatic-checkpoint bookkeeping.
+
+    ``None`` -- and the caller then omits the key entirely -- when this rollout
+    has no checkpoint archive, i.e. it is not an E16 rollout. Every optional
+    field in a turn record is conditional for the same reason: an
+    unconditional key changes the trace bytes of every arm, including the
+    frozen controls this tree diffs against.
+
+    When there IS an archive the block is always present and carries
+    ``enabled``, so "the feature was off" and "the feature was on and saved
+    nothing" are distinguishable -- which they were not in the GE-wiki pilot,
+    where the archive simply never grew and nothing said why.
+    """
+    auto = state.get("_auto_ck") if hasattr(state, "get") else None
+    if not auto or not auto.get("configured"):
+        return None
+    return {
+        "enabled": bool(auto.get("enabled")),
+        "saved": list(auto.get("saved") or []),
+        "pending": [lbl for lbl, _why in (auto.get("pending") or [])],
+        "deferrals": int(auto.get("deferrals") or 0),
+        "errors": list(auto.get("errors") or []),
+    }
+
+
 def _reasoning_block(assistant_msg, dispatch_route: str) -> dict:
     """The `reasoning` block for a record written live by the harness.
 
@@ -529,6 +555,13 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
             "hp": status.get("hitpoints"),
             "max_hp": status.get("max_hitpoints"),
             "max_dlvl_reached": state.get("max_dlvl_reached"),
+            # E16 automatic checkpointing, per turn. `Trace.metrics` is written
+            # in the DRIVER process from `NetHackState`, which never sees the
+            # env's state dict, so this NDJSON is the only place the harness
+            # can say what its own auto-saves did. Recorded every turn --
+            # including the deferrals, which are the interesting half: a
+            # trigger that fired on a `--More--` and landed two calls later is
+            # a different archive than one that landed on entry.
             "continual_life": state.get("_continual_life", 1),
             "rendered_user_message": obs_text,
             "rendered_user_content": _capture_user_content(
@@ -564,6 +597,26 @@ def _write_trace_entry(env_self, state: dict, assistant_msg, tool_calls,
         # what the teacher changed this turn.
         if state.get("_ch_last_edits"):
             entry["ch_edits"] = state["_ch_last_edits"]
+        # E16 automatic checkpointing, per turn. `Trace.metrics` is written in
+        # the DRIVER process from `NetHackState`, which never sees the env's
+        # state dict, so this NDJSON is the only place the harness can say what
+        # its own auto-saves did -- including the deferrals, which are the
+        # interesting half: a trigger that fired on a `--More--` and landed two
+        # calls later is a different archive than one that landed on entry.
+        # Present only on rollouts that HAVE an archive, so every other arm's
+        # trace stays byte-identical.
+        _auto_ck = _auto_checkpoint_record(state)
+        if _auto_ck is not None:
+            entry["auto_checkpoint"] = _auto_ck
+        # E14 crisis directive: which heuristic fired this turn ("hp" |
+        # "pacing" | "hp+pacing"), stamped on the turn trace by
+        # _apply_tool_call_inner. Gated on `applied` so the end-of-rollout
+        # flush (which reuses the last turn's trace dict) never re-stamps a
+        # stale marker. Absent on every other turn and on every arm running
+        # crisis_directive="off", so existing traces are byte-identical.
+        _cd = (state.get("_turn_trace") or {}).get("crisis_directive")
+        if applied and _cd:
+            entry["crisis_directive"] = _cd
         # Route through the schema helper (NOT a bare json.dumps) so every
         # record carries `schema_version`. The bare dumps is why
         # `TS.record_version()` read 0 on freshly written traces.
@@ -1283,11 +1336,33 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
     import inspect
     from typing import Optional as _Opt
 
-    # Skills the harness owns (never exposed as agent tools). Menu/inventory
-    # selection is auto-dismissed in env_response; eat/quaff/read take an
-    # `item` arg and bundle the selection in-skill. Exposing these as agent
-    # tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
+    # Skills the harness owns (NEVER exposed as agent tools, by any skill_set).
+    # Menu/inventory selection is auto-dismissed in env_response; eat/quaff/read
+    # take an `item` arg and bundle the selection in-skill. Exposing these as
+    # agent tools caused Qwen3.5-9B to spend 42% of turns on spurious menu calls.
     _HARNESS_OWNED = {"inventory_item", "menu_option"}
+
+    # E16 skills: registered and dispatchable, but published by NO PRESET.
+    #
+    # These are a weaker guard than _HARNESS_OWNED and deliberately so. The
+    # danger they defend against is `skill_set="full"` (and every other preset)
+    # publishing every registered skill, which would have added tools to every
+    # existing arm's served prompt the moment `save` was registered -- defeating
+    # the served-bytes comparison against the frozen E14/E15 control with no
+    # error anywhere. So every PRESET branch filters them, exactly as it filters
+    # _HARNESS_OWNED, and no existing tier's bytes move.
+    #
+    # What they must still allow is publication: a comma-separated skill_set
+    # that names one EXPLICITLY gets it. That is the "deliberate tier edit" the
+    # design asks for -- `e16_gewiki`'s
+    # `np_core,request_map,search,rollback,save,wiki` -- and it cannot happen by
+    # accident, because a preset name never expands to these and a typo does not
+    # spell `save`. _HARNESS_OWNED stays absolute: naming `menu_option` in a
+    # comma list still publishes nothing.
+    _E16_UNPUBLISHED_BY_DEFAULT = {"save", "wiki"}
+
+    # What a PRESET must never publish: both sets.
+    _PRESET_EXCLUDED = _HARNESS_OWNED | _E16_UNPUBLISHED_BY_DEFAULT
 
     # Namespace prefix of the vendored NetPlay skills (see tools/netplay_true.py).
     _NETPLAY_TRUE_PREFIX = "np_"
@@ -1317,7 +1392,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         for tname, dir_canon in _DIR_NAMES:
             out.append(_make_fixed_direction_adapter(tname, dir_canon))
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
+            if name in _PRESET_EXCLUDED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
@@ -1343,7 +1418,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         # comma-`skill_set` (e.g. "<netplay tools>,reveal,request_map").
         out = []
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
+            if name in _PRESET_EXCLUDED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
@@ -1359,7 +1434,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
                 "wiki_lookup", "wiki_search"}
         out = []
         for name, schema in skill_registry.all_schemas().items():
-            if name in _HARNESS_OWNED: continue
+            if name in _PRESET_EXCLUDED: continue
             if name not in keep: continue
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
@@ -1471,6 +1546,8 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
                         out.append(adapter)
         keep = {t for t in tokens if t not in presets}
         for name, schema in skill_registry.all_schemas().items():
+            # _HARNESS_OWNED, not _PRESET_EXCLUDED: an EXPLICIT token in a
+            # comma-separated skill_set is how E16 publishes `save`/`wiki`.
             if name in _HARNESS_OWNED: continue
             if name not in keep or name in seen: continue
             params = schema.get("parameters", {}) or {}
@@ -1480,7 +1557,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
     # default 'full'
     out = []
     for name, schema in skill_registry.all_schemas().items():
-        if name in _HARNESS_OWNED:
+        if name in _PRESET_EXCLUDED:
             continue
         # The vendored NetPlay skills register themselves globally the moment
         # nethack_harness.tools.netplay_true is imported (by the

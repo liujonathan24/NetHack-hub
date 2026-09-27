@@ -1,0 +1,20 @@
+{
+  "id": "c12",
+  "parent": "c07",
+  "name": "d5-arrival",
+  "note": "Arrived D5 with the Grey-elf still on D4 behind me. Escape plan: north corridor back to the up-stair.",
+  "dlvl": 5,
+  "xl": 3,
+  "hp": 27,
+  "max_hp": 31,
+  "gameturn": 1893,
+  "score": 702,
+  "balrog": 0.104,
+  "balrog_min": 0.104,
+  "attempts_from": 4,
+  "visits": 2,
+  "created_by": "save",
+  "created_at": 1787897863.7563627,
+  "dungeon_number": 0,
+  "level_number": 5
+}

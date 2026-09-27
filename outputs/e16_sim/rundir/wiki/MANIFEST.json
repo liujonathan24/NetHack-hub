@@ -1,0 +1,19 @@
+{
+  "retrieved": "2026-08-25",
+  "source": "nethackwiki.com MediaWiki extract API (action=query&prop=extracts&explaintext)",
+  "why_api": "The repo's tools/build_wiki_index.py HTML-scrapes and its own docstring calls the markup conversion approximate; it returned 920 and 136 chars for these two pages versus 15524 and 12767 from the API.",
+  "pages": [
+    {
+      "title": "Why do I keep dying?",
+      "file": "why_do_i_keep_dying.md",
+      "chars": 15524,
+      "sha256": "2267cb8c22321ba4"
+    },
+    {
+      "title": "Standard strategy",
+      "file": "standard_strategy.md",
+      "chars": 12767,
+      "sha256": "ca8da1c3b2fe8ba7"
+    }
+  ]
+}

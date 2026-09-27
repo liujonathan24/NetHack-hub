@@ -1,0 +1,20 @@
+{
+  "captured_at": "2026-08-28T11:20:20",
+  "engine_root": "/root/NetHack-engine",
+  "engine_head": "f9d3212acd737123d6a533eb409fa2a2533c53e0",
+  "engine_dirty": false,
+  "submodule_sha": "7a872c400343398af48b70ef5a3d0229c2e67d18",
+  "submodule_pinned_sha": "7a872c400343398af48b70ef5a3d0229c2e67d18",
+  "submodule_matches_pin": true,
+  "submodule_dirty": false,
+  "so_path": "/root/NetHack-engine/third_party/NetHack/src/build/libnethack.so",
+  "so_mtime": 1787909977.1335406,
+  "so_mtime_iso": "2026-08-28T09:39:37",
+  "so_size": 12112000,
+  "newest_source_path": "src/src/nle_fast_reset.c",
+  "newest_source_mtime": 1787909976.8015375,
+  "newest_source_mtime_iso": "2026-08-28T09:39:36",
+  "so_stale": false,
+  "so_stale_by_seconds": 0.0,
+  "errors": []
+}

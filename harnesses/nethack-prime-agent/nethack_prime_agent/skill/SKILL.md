@@ -5,9 +5,8 @@ description: Play NetHack. The only way to act in the game — every move, attac
 
 # NetHack — complete tool API
 
-This file is the authoritative API reference. Everything you need is here —
-do NOT spend calls on `help()`, `list_tools()`, or schema dumps; the JSON
-schemas are empty and `help()` adds nothing.
+This file is the authoritative API reference. Every tool is listed below with
+its exact arguments.
 
 The game runs in a separate process, reached over MCP. One call = one skill
 executed against the live game. Every tool is **async** — always `await`.
@@ -18,7 +17,10 @@ deciding the next call.** It is your only view of the game.
 ## The tools (exact signatures — this is the full set)
 
 Coordinates: `x` is the column (0–78, left to right), `y` is the row (0–20,
-top to bottom), exactly as shown in the map.
+top to bottom) in the MAP frame: row 0 is the FIRST row of the `=== MAP ===`
+block, the same frame `Pos:` and all `VISIBLE FEATURES` coordinates use. Do
+NOT count rows from the raw terminal screen (it has extra message/status
+lines) — that yields an off-by-one that silently misses every target.
 
 ```python
 await nethack.request_map()                 # Show the FULL map + surroundings in this
@@ -61,7 +63,7 @@ await nethack.search(times=10)              # Search adjacent tiles for hidden d
                                             # passages, times consecutive tries (1–20).
 ```
 
-## How to descend (the objective is to go DOWN)
+## How to descend
 
 1. `await nethack.request_map()` — find the down staircase, shown as `>`.
 2. `await nethack.np_move_to(x=..., y=...)` — walk onto that tile.
@@ -81,9 +83,8 @@ open: if the observation looks unchanged, check for an open prompt first.
 ## Discipline
 
 - One call, read the observation, then decide. Never batch blind sequences.
-- There is a hard budget of skill calls for the episode; when it is spent the
-  episode ends. Spend calls on progress, not probing — this file already
-  contains the whole API.
+- This file already contains the whole API, so there is nothing to discover by
+  probing it.
 - A skill that fails says why in its returned message (e.g. "Tile (14, 12) is
   blocked... It's solid stone.") — read it and change plan; don't repeat the
   call unchanged.
