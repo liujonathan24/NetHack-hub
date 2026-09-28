@@ -148,13 +148,21 @@ def _fresh_env():
     return env
 
 
+def _screen(res) -> str:
+    """The terminal text the skill left on screen. Game messages are rendered
+    into the observation, not the skill's feedback string, so read them here."""
+    import numpy as np
+    rows = np.asarray(res.final_obs.tty_chars).astype(np.uint8)
+    return "\n".join(bytes(r).decode("latin-1").rstrip() for r in rows)
+
+
 def test_live_fingers_elbereth_in_one_call():
     env = _fresh_env()
     try:
         res = registry.call("np_press_key", env, None, key="E-Elbereth<ENTER>")
         assert "Pressed all 11 keys" in res.feedback, res.feedback
         res = registry.call("np_press_key", env, None, key=":")
-        assert "Elbereth" in res.feedback, res.feedback
+        assert "Elbereth" in _screen(res), _screen(res)
     finally:
         env.close()
 
@@ -165,7 +173,7 @@ def test_live_single_dash_answers_write_with_prompt():
         registry.call("np_press_key", env, None, key="E")
         res = registry.call("np_press_key", env, None, key="-")
         assert "error" not in res.feedback, res.feedback
-        assert "write in the dust" in res.feedback, res.feedback
+        assert "write in the dust" in _screen(res), _screen(res)
         registry.call("np_press_key", env, None, key="ESC")
     finally:
         env.close()
@@ -177,13 +185,13 @@ def test_live_extended_command_enter_submits():
     env = _fresh_env()
     try:
         res = registry.call("np_press_key", env, None, key="#pray<ENTER>")
-        assert "Are you sure you want to pray" in res.feedback, res.feedback
+        assert "Are you sure you want to pray" in _screen(res), _screen(res)
         registry.call("np_press_key", env, None, key="n")
         # Split over calls, as the play-tester did.
         registry.call("np_press_key", env, None, key="#")
         registry.call("np_press_key", env, None, key="p")
         res = registry.call("np_press_key", env, None, key="ENTER")
-        assert "Are you sure you want to pray" in res.feedback, res.feedback
+        assert "Are you sure you want to pray" in _screen(res), _screen(res)
         registry.call("np_press_key", env, None, key="n")
     finally:
         env.close()
