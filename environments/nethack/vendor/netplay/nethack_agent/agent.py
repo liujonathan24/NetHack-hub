@@ -10,7 +10,8 @@ policy (an LLM scaffold under evaluation) and calls skills one at a time. So
 this module keeps only what the skill layer actually touches:
 
   * `finish_task_skill`     -- reproduced BYTE-FOR-BYTE (upstream lines 38-44).
-  * `_execute_skill`        -- BYTE-FOR-BYTE (upstream lines 215-238).
+  * `_execute_skill`        -- ADAPTED from upstream lines 215-238: the
+    interrupt policy changed, see LOCAL CHANGE below.
   * `_skip_more_messages`   -- BYTE-FOR-BYTE (upstream lines 189-196).
   * `_update_objects`       -- BYTE-FOR-BYTE (upstream lines 198-213).
   * `NetHackAgent.__init__` -- REPLACED (dropped the LLM/descriptor/selector
@@ -19,7 +20,8 @@ this module keeps only what the skill layer actually touches:
 The three `_`-prefixed methods are kept because they are not LLM plumbing --
 they are the *skill execution contract*, and they materially bound behaviour:
 `_execute_skill` stops a skill after `max_skill_gamesteps` (100) in-game turns
-and interrupts it on a level change, teleport, newly-seen glyph or low health.
+and interrupts it on a level change, teleport, low health or (upstream) a
+newly-seen glyph -- locally, a nearby hostile monster instead (see below).
 `explore_level` runs until exploration is provably exhausted, so without this
 cap it would not be the same action NetPlay's agent actually took.
 
@@ -35,6 +37,29 @@ skill semantics.
 Everything else from upstream's agent.py (AgentMemory, _solve_task,
 _skip_more_messages, _update_objects, _execute_skill, the renderers) belongs to
 the agent loop, not the skills, and is not reproduced. See vendor/PROVENANCE.md.
+
+LOCAL CHANGE (interrupt policy) -- `_execute_skill` is NO LONGER byte-verbatim.
+Upstream interrupts on every `NewGlyphEvent`: any monster, object, down-stair,
+altar or fountain glyph that was not on screen a moment ago, anywhere on the
+level. Play-tests showed that makes the closed-loop skills unusable (a kick
+interrupted by a lichen 60 columns away, every shop item and the corpse of the
+monster just killed "appearing", the same werejackal stopping two calls in a
+row with no progress) and that the event text leaked TRUE object identities
+("worthless piece of green glass" for what the game calls a "green gem"),
+because `describe_glyph` names the glyph's actual object type. The level-change
+text also printed the level index within the branch, not the Dlvl the status
+line shows. What changed, and nothing else:
+
+  * `NewGlyphEvent` no longer interrupts. Items and dungeon features never do.
+    Instead `_hostile_monster_interrupt` interrupts for a HOSTILE monster that
+    comes within `HOSTILE_NEAR_RADIUS` squares, or that keeps closing in from
+    within `APPROACH_RADIUS`, once per monster (and not again on the next call
+    while it stays put). Pets and peaceful monsters never interrupt; see that
+    method for how peacefulness is decided. It reads observations only.
+  * Level changes are reported in player-visible terms (`describe_level_change`).
+  * Low HP, teleport and level change still interrupt exactly as upstream.
+  * `last_interrupt` records why the last skill was interrupted (for the
+    harness's "no progress" note).
 """
 
 from netplay.core.agent_base import NethackBaseAgent, Step
@@ -43,8 +68,11 @@ from netplay.nethack_utils.nle_wrapper import RawKeyPress
 import netplay.nethack_agent.tracking as tracking
 
 from nle.nethack import actions
+import nle.nethack as nh
 
-from typing import Any, Dict, Iterator
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
+import numpy as np
 
 
 @skill(
@@ -83,6 +111,16 @@ class NetHackAgent(NethackBaseAgent):
         # (skills._known_peaceful). Lives as long as this agent (one episode).
         self.known_peaceful_glyphs = set()
 
+        # LOCAL (interrupt policy): see the module docstring.
+        # `describe_tile(x, y)` -> what NetHack's farlook (`;`) prints for that
+        # map square, or None when the harness cannot supply it. Set by
+        # nethack_harness.tools.netplay_true.get_agent.
+        self.describe_tile: Optional[Callable[[int, int], Optional[str]]] = None
+        self.last_interrupt: Optional[str] = None
+        self._tracked_monsters: List[dict] = []
+        # Monsters an interrupt already named during the previous skill call.
+        self._reported_last_call: List[dict] = []
+
     # ADDED (fix/netcore-input): agent_base.get_path_to / distance_to compute
     # `avoid_monsters` from their argument and then pass `self.avoid_monsters`
     # instead, so an explicit `avoid_monsters=True` (melee_attack's approach
@@ -100,7 +138,8 @@ class NetHackAgent(NethackBaseAgent):
         return self.last_bfs_results.distance_to(x, y, bump_into_unwalkables, avoid_monsters=avoid_monsters)
 
     # ----------------------------------------------------------------------
-    # Below: upstream netplay/nethack_agent/agent.py, reproduced verbatim.
+    # Below: upstream netplay/nethack_agent/agent.py, reproduced verbatim,
+    # except `_execute_skill` (LOCAL CHANGE, see the module docstring).
     # ----------------------------------------------------------------------
 
     def _skip_more_messages(self, generator: Iterator[Step]) -> Iterator[Step]:
@@ -134,22 +173,276 @@ class NetHackAgent(NethackBaseAgent):
         skill_description = " ".join([skill.name, *kwargs_str])
         yield Step.think(f"Executing skill '{skill_description}'.")
 
+        # LOCAL (interrupt policy): seed monster tracking from what is on
+        # screen as the call starts; the melee target is never an interrupt.
+        self.last_interrupt = None
+        exempt = None
+        if skill.name == "melee_attack":
+            try:
+                exempt = (int(skill_kwargs.get("x")), int(skill_kwargs.get("y")))
+            except (TypeError, ValueError):
+                exempt = None
+        self._begin_monster_tracking(exempt)
+
         start_ingame_time = self.blstats.time
-        for step in skill(self, **skill_kwargs):
-            if step.is_done():
-                thoughts = f"Skill '{skill_description}' {step.status}"
-                thoughts += f": {step.thoughts}" if step.has_thoughts() else ""
-                yield Step(step.status, thoughts, step.thought_type, step.step_data)
-                return
-            yield step
-
-            if (self.blstats.time - start_ingame_time) >= self.max_skill_gamesteps:
-                yield Step.think(f"Skill has been running for {(self.blstats.time - start_ingame_time)} timesteps without interruption. Rethinking.")
-                return
-
-            if step.executed_action():
-                interrupt_event_types = (tracking.DungeonLevelChangeEvent, tracking.TeleportEvent, tracking.NewGlyphEvent, tracking.LowHealthEvent)
-                interrupt_events = [event for event in step.step_data.events if isinstance(event, interrupt_event_types)]
-                if len(interrupt_events) != 0:
-                    yield Step.think(f"Interrupting skill to rethink because '{interrupt_events[0].describe()}'.")
+        prev_blstats = self.blstats
+        try:
+            for step in skill(self, **skill_kwargs):
+                if step.is_done():
+                    thoughts = f"Skill '{skill_description}' {step.status}"
+                    thoughts += f": {step.thoughts}" if step.has_thoughts() else ""
+                    yield Step(step.status, thoughts, step.thought_type, step.step_data)
                     return
+                yield step
+
+                if (self.blstats.time - start_ingame_time) >= self.max_skill_gamesteps:
+                    yield Step.think(f"Skill has been running for {(self.blstats.time - start_ingame_time)} timesteps without interruption. Rethinking.")
+                    return
+
+                if step.executed_action():
+                    # LOCAL: NewGlyphEvent removed from this tuple (see docstring).
+                    interrupt_event_types = (tracking.DungeonLevelChangeEvent, tracking.TeleportEvent, tracking.LowHealthEvent)
+                    interrupt_events = [event for event in step.step_data.events if isinstance(event, interrupt_event_types)]
+                    reason = None
+                    if len(interrupt_events) != 0:
+                        event = interrupt_events[0]
+                        if isinstance(event, tracking.DungeonLevelChangeEvent):
+                            reason = describe_level_change(
+                                prev_blstats.depth, prev_blstats.dungeon_number,
+                                self.blstats.depth, self.blstats.dungeon_number)
+                            self._tracked_monsters = []
+                        else:
+                            reason = event.describe()
+                    else:
+                        reason = self._hostile_monster_interrupt()
+                    if reason:
+                        self.last_interrupt = reason
+                        yield Step.think(f"Interrupting skill to rethink because '{reason}'.")
+                        return
+                prev_blstats = self.blstats
+        finally:
+            self._end_monster_tracking()
+
+    # ----------------------------------------------------------------------
+    # LOCAL (interrupt policy). Not upstream code.
+    # ----------------------------------------------------------------------
+
+    #: A hostile monster this close (Chebyshev squares, i.e. moves) interrupts.
+    #: Why 7: most early monsters move at speed <= 12, the hero's speed, so one
+    #: that is 7 squares away needs ~6 turns to reach melee -- enough for one
+    #: considered decision (throw, retreat, Elbereth, change route) before it
+    #: can attack. It also roughly covers an ordinary lit room around the hero,
+    #: so "a monster entered my room" interrupts while monsters wandering in
+    #: other rooms (the 60-column-away lichen of the play-tests) do not.
+    HOSTILE_NEAR_RADIUS = 7
+    #: A hostile monster further away than HOSTILE_NEAR_RADIUS but within this
+    #: range interrupts only if it is visibly closing in: it moved toward the
+    #: hero on APPROACH_STREAK consecutive moves. (Two was too easy for a
+    #: wandering monster to satisfy by chance in live tests; three is not.)
+    APPROACH_RADIUS = 10
+    APPROACH_STREAK = 3
+    #: How many observations a tracked monster may be out of sight and still be
+    #: recognised as the same monster when it reappears.
+    FORGET_AFTER = 10
+    #: Species that are always generated peaceful (M2_PEACEFUL). Used ONLY
+    #: when there is no farlook description of the monster itself.
+    ALWAYS_PEACEFUL = ("shopkeeper", "guard", "prisoner", "Oracle",
+                       "aligned priest", "high priest", "watchman",
+                       "watch captain")
+
+    def _tile_description(self, x: int, y: int) -> Optional[str]:
+        fn = self.describe_tile
+        if fn is None:
+            return None
+        try:
+            text = fn(int(x), int(y))
+        except Exception:
+            return None
+        return text or None
+
+    def _visible_hostiles(self) -> List[dict]:
+        """Hostile monsters on screen now, from the observation only.
+
+        Pets are recognised from the glyph. Peaceful monsters are recognised
+        from the farlook description of the square ("peaceful gnome",
+        "tame kitten") -- the text a human gets for free with `;`, taken from
+        the engine's per-square screen descriptions without sending a key.
+        Without descriptions, species that are always peaceful are skipped by
+        name. The name reported is the one the player sees: the displayed
+        monster (so a shapeshifter is named by its current form), never
+        anything the glyph does not show.
+        """
+        obs = self.last_observation
+        if obs is None:
+            return []
+        glyphs = np.asarray(obs["glyphs"])
+        hx, hy = int(self.blstats.x), int(self.blstats.y)
+        ys, xs = np.nonzero(nh.glyph_is_monster(glyphs))
+        out = []
+        for y, x in zip(ys.tolist(), xs.tolist()):
+            if (x, y) == (hx, hy):
+                continue
+            g = int(glyphs[y, x])
+            if nh.glyph_is_pet(g):
+                continue
+            mon = int(nh.glyph_to_mon(g))
+            species = nh.permonst(mon).mname or "monster"
+            descr = self._tile_description(x, y)
+            low = (descr or "").lower()
+            if low.startswith(("peaceful ", "tame ")):
+                continue
+            # Is the farlook text about this monster? Either it names the
+            # species ("gnome lord", "invisible stalker") or it is a proper
+            # name (an angry shopkeeper is just "Asidonhopo").
+            if species.lower() in low or (descr and descr[:1].isupper()):
+                name = descr.split(",")[0].strip() or species
+            else:
+                # No description, or one that is about the square rather than
+                # the monster (the map can show a monster the hero cannot look
+                # at, e.g. one in a dark area): name the species on the map.
+                if species in self.ALWAYS_PEACEFUL:
+                    continue
+                name = species
+            out.append({"mon": mon, "x": x, "y": y, "name": name,
+                        "d": max(abs(x - hx), abs(y - hy))})
+        return out
+
+    @staticmethod
+    def _match(m: dict, candidates: List[dict], max_dist: int, consume: bool = True) -> Optional[dict]:
+        best, best_d = None, None
+        for c in candidates:
+            if c.get("_taken") or c["mon"] != m["mon"]:
+                continue
+            d = max(abs(c["x"] - m["x"]), abs(c["y"] - m["y"]))
+            if d <= max_dist + c.get("missing", 0) and (best is None or d < best_d):
+                best, best_d = c, d
+        if best is not None and consume:
+            best["_taken"] = True
+        return best
+
+    def _begin_monster_tracking(self, exempt=None):
+        try:
+            carried = [dict(c) for c in self._reported_last_call]
+            tracked = []
+            for m in self._visible_hostiles():
+                # Not consumed: with two of a species close together the
+                # identities are ambiguous, and repeating is the worse error.
+                prev = self._match(m, carried, max_dist=2, consume=False)
+                m.update(reported=prev is not None,
+                         exempt=exempt is not None and (m["x"], m["y"]) == tuple(exempt),
+                         inside=m["d"] <= self.HOSTILE_NEAR_RADIUS,
+                         adjacent=m["d"] <= 1, streak=0, missing=0)
+                tracked.append(m)
+            self._tracked_monsters = tracked
+        except Exception:
+            self._tracked_monsters = []
+
+    def _end_monster_tracking(self):
+        self._reported_last_call = [
+            {"mon": m["mon"], "x": m["x"], "y": m["y"]}
+            for m in self._tracked_monsters if m.get("reported") and not m.get("missing")
+        ]
+
+    def _hostile_monster_interrupt(self) -> Optional[str]:
+        """Update monster tracking after one engine step; return the interrupt
+        reason, or None. Never raises (a bug here must not break a skill)."""
+        try:
+            return self._hostile_monster_interrupt_unsafe()
+        except Exception:
+            return None
+
+    def _hostile_monster_interrupt_unsafe(self) -> Optional[str]:
+        hx, hy = int(self.blstats.x), int(self.blstats.y)
+        prev_list = self._tracked_monsters
+        for p in prev_list:
+            p.pop("_taken", None)
+        carried = [dict(c) for c in self._reported_last_call]
+        current = self._visible_hostiles()
+        # Match the closest current monsters first, so a monster next to the
+        # hero keeps its identity when two of a species are on screen.
+        current.sort(key=lambda m: m["d"])
+        reason = None
+        for m in current:
+            d = m["d"]
+            p = self._match(m, prev_list, max_dist=2)
+            if p is None:
+                c = self._match(m, carried, max_dist=2, consume=False)
+                m.update(reported=c is not None, exempt=False, streak=0,
+                         inside=False, adjacent=False)
+                if reason is None and not m["reported"] and d <= self.HOSTILE_NEAR_RADIUS:
+                    reason = f"A hostile {m['name']} came into view at ({m['x']},{m['y']}), {d} squares away"
+                    m["reported"] = True
+            else:
+                moved = (m["x"], m["y"]) != (p["x"], p["y"])
+                was_d = max(abs(p["x"] - hx), abs(p["y"] - hy))
+                if moved and d < was_d:
+                    streak = p.get("streak", 0) + 1
+                elif moved:
+                    streak = 0
+                else:
+                    streak = p.get("streak", 0)
+                m.update(reported=p.get("reported", False), exempt=p.get("exempt", False),
+                         streak=streak, inside=p.get("inside", False),
+                         adjacent=p.get("adjacent", False))
+                if reason is None and not m["exempt"]:
+                    if m["reported"]:
+                        if d <= 1 and not m["adjacent"]:
+                            reason = f"The hostile {m['name']} is now next to you at ({m['x']},{m['y']})"
+                    elif d <= self.HOSTILE_NEAR_RADIUS and not m["inside"]:
+                        reason = f"A hostile {m['name']} is {d} squares away at ({m['x']},{m['y']})"
+                    elif (d <= self.APPROACH_RADIUS and d > self.HOSTILE_NEAR_RADIUS
+                          and streak >= self.APPROACH_STREAK):
+                        reason = f"A hostile {m['name']} at ({m['x']},{m['y']}) is approaching you, {d} squares away"
+                    if reason is not None:
+                        m["reported"] = True
+            m["inside"] = d <= self.HOSTILE_NEAR_RADIUS
+            m["adjacent"] = d <= 1
+            m["missing"] = 0
+        # Keep monsters that just went out of sight for a while, so one that
+        # steps behind a wall and back is not "new" again.
+        for p in prev_list:
+            if not p.get("_taken") and p.get("missing", 0) < self.FORGET_AFTER:
+                q = dict(p)
+                q["missing"] = p.get("missing", 0) + 1
+                current.append(q)
+        for p in prev_list:
+            p.pop("_taken", None)
+        for q in current:
+            q.pop("_taken", None)
+        self._tracked_monsters = current
+        return reason
+
+
+#: Dungeon branch names, indexed by `u.uz.dnum` (blstats dungeon_number), in
+#: the order of NetHack 3.6's dat/dungeon.def. These are the names the game's
+#: own dungeon overview (Ctrl-O) shows the player.
+BRANCH_NAMES = {
+    0: "the Dungeons of Doom",
+    1: "Gehennom",
+    2: "the Gnomish Mines",
+    3: "the Quest",
+    4: "Sokoban",
+    5: "Fort Ludios",
+    6: "Vlad's Tower",
+    7: "the Elemental Planes",
+}
+
+
+def describe_level_change(old_depth, old_dnum, new_depth, new_dnum) -> str:
+    """LOCAL: a level change in the terms the player sees.
+
+    Uses the depth the status line shows as `Dlvl:` (blstats depth), not the
+    level index within the branch, and names the branch only when it changes.
+    """
+    old_depth, new_depth = int(old_depth), int(new_depth)
+    old_dnum, new_dnum = int(old_dnum), int(new_dnum)
+    if new_depth > old_depth:
+        text = f"You went down from Dlvl {old_depth} to Dlvl {new_depth}"
+    elif new_depth < old_depth:
+        text = f"You went up from Dlvl {old_depth} to Dlvl {new_depth}"
+    else:
+        text = f"You are now on a different level at Dlvl {new_depth}"
+    if new_dnum != old_dnum:
+        branch = BRANCH_NAMES.get(new_dnum)
+        text += f" and entered {branch}" if branch else " and entered a different dungeon branch"
+    return text

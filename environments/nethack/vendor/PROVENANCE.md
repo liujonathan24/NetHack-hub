@@ -85,7 +85,10 @@ We reuse NetPlay's *skill layer*, not its agent loop — our harness supplies th
 policy (the LLM scaffold under evaluation) and calls skills one at a time. Kept:
 
 - `finish_task_skill` — byte-for-byte (upstream 38–44)
-- `_execute_skill` — byte-for-byte (upstream 215–238)
+- `_execute_skill` — adapted from upstream 215–238: the interrupt policy is
+  local (nearby hostile monsters instead of any newly-seen glyph, no item or
+  feature interrupts, player-visible level-change text); see the module
+  docstring's LOCAL CHANGE note
 - `_skip_more_messages` — byte-for-byte (upstream 189–196)
 - `_update_objects` — byte-for-byte (upstream 198–213)
 

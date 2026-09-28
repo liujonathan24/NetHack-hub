@@ -290,13 +290,60 @@ def get_agent(core_env) -> NetHackAgent:
         # (other tools, --More-- dismissal). Refresh the tracker's view without
         # discarding the persistent per-level exploration memory.
         agent.last_observation = entry[1].reset()[0]
+        agent.describe_tile = _tile_describer(core_env)
         return agent
 
     wrapped = NetPlayEngineEnv(core_env)
     agent = NetHackAgent(env=wrapped, log_folder="", render=False)
     agent.init()
+    agent.describe_tile = _tile_describer(core_env)
     _AGENTS[cache_id] = (key, wrapped, agent)
     return agent
+
+
+def _screen_descriptions_buffer(core_env):
+    """The engine's per-square farlook text buffer, or None.
+
+    NLE-style engines fill `screen_descriptions` on every step with exactly
+    what NetHack's `;` (farlook) command would print for each map square --
+    "tame kitten", "peaceful gnome", "green gem". `CoreObservation` does not
+    carry it, so it is read from the ctypes engine wrapper's own buffer. That
+    is a read of what the player can already look at for free; it sends no
+    key and so cannot affect the recorded trace.
+    """
+    obj = core_env
+    for _ in range(4):
+        buf = getattr(obj, "_screen_descriptions", None)
+        if isinstance(buf, np.ndarray) and buf.size:
+            return buf
+        obj = getattr(obj, "_engine", None)
+        if obj is None:
+            return None
+    return None
+
+
+def _tile_describer(core_env):
+    """`(x, y) -> farlook text or None` for the interrupt policy
+    (NetHackAgent.describe_tile). None when the engine has no descriptions."""
+    try:
+        buf = _screen_descriptions_buffer(core_env)
+        if buf is None:
+            return None
+        rows, cols = 21, 79
+        if buf.size % (rows * cols):
+            return None
+        view = buf.reshape(rows, cols, -1)
+    except Exception as exc:
+        _swallowed("_tile_describer", exc)
+        return None
+
+    def describe(x: int, y: int):
+        if not (0 <= y < rows and 0 <= x < cols):
+            return None
+        raw = bytes(view[y, x])
+        return raw.split(b"\0", 1)[0].decode("latin-1").strip() or None
+
+    return describe
 
 
 def reset_agent_cache() -> None:
@@ -477,14 +524,35 @@ def _refuse_attack(core_env, kwargs):
     return None
 
 
+#: Skills whose job is to move the hero; an interrupt before the first move is
+#: "no progress" for them.
+_MOVEMENT_SKILLS = ("move_to", "explore_level", "go_to", "explore")
+
+
+def _where(raw):
+    """`(x, y, depth, dnum)` from an observation's blstats, or None.
+
+    depth is what the status line shows as Dlvl (NLE blstats 12), dnum the
+    dungeon branch (blstats 23)."""
+    try:
+        bl = getattr(raw, "blstats", None)
+        if bl is None:
+            return None
+        return (int(bl[0]), int(bl[1]), int(bl[12]), int(bl[23]))
+    except Exception:
+        return None
+
+
 def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillResult:
     """Drive one NetPlay skill to completion against the live engine.
 
     Mirrors upstream's own execution pipeline (`agent.py::_solve_task`, lines
     165-168): `_execute_skill` -> `_skip_more_messages` -> `_update_objects`.
-    All three are vendored verbatim, so the bounding behaviour (100 in-game
-    turns per skill, interrupt on level change / teleport / new glyph / low HP)
-    is NetPlay's, not ours.
+    The 100-in-game-turn cap and the level-change / teleport / low-HP
+    interrupts are NetPlay's. Upstream's interrupt on ANY newly-seen glyph is
+    replaced locally by a nearby-hostile-monster interrupt (see the LOCAL
+    CHANGE note in vendor/netplay/nethack_agent/agent.py); the HP-drop and
+    spoiling-food interrupts below are ours.
     """
     agent = get_agent(core_env)
     wrapped: NetPlayEngineEnv = agent.env
@@ -529,6 +597,8 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
             return None, None
 
     hp_start, _mx = _hp_now()
+    _where_start = _where(wrapped.last_raw)
+    _harness_interrupt = False
     try:
         strategy = agent._execute_skill(skill, kwargs)
         strategy = agent._skip_more_messages(strategy)
@@ -552,6 +622,7 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                 thoughts.append(
                     "[INTERRUPTED: " + "; ".join(_urgent) +
                     ". Stopped early so you can eat before it spoils.]")
+                _harness_interrupt = True
                 break
             # --- HP-drop interrupt (exp4 fix 2) --------------------------
             # The exp3b death autopsy's clearest artifact: HP tails like
@@ -602,6 +673,7 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
                         f"during this skill. Something is hitting you.{_threat} "
                         f"Decide now: fight back, retreat, pray, or engrave "
                         f"Elbereth.]")
+                    _harness_interrupt = True
                     break
     except Exception as e:  # a skill raising must not kill the rollout
         thoughts.append(f"Skill raised {type(e).__name__}: {e}")
@@ -655,35 +727,44 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     except Exception as exc:
         _swallowed("run_netplay_skill.game_message", exc)
 
-    # Two cleanups on the vendored event text before the agent sees it.
-    #
-    # (a) numpy scalars repr as `np.int64(2)` under numpy 2.x, and the event
-    #     formats tuples of blstats values straight into the message -- so the
-    #     agent read `Changed dungeon level from (np.int64(0), np.int64(2))`.
-    #
-    # (b) that tuple is `(dnum, dlevel)` -- the DUNGEON BRANCH id and the level
-    #     within it (winrl.cc:1088-1089, from `u.uz`). The branch is not a seed;
-    #     it distinguishes the Dungeons of Doom from the Gnomish Mines, Sokoban
-    #     and so on (src/dat/dungeon.def). Almost always it is unchanged, and
-    #     printing it as half of an unexplained pair just obscured the number
-    #     that matters. Render the level plainly, and mention the branch only on
-    #     the rare turn it actually changes.
+    # Cleanup on the event text before the agent sees it: numpy scalars repr
+    # as `np.int64(2)` under numpy 2.x.
     try:
         import re as _re
         feedback = _re.sub(r"np\.(?:int|uint|float)\d+\(([-\d.]+)\)", r"\1", feedback)
-
-        def _lvl(m):
-            d0, l0, d1, l1 = (int(m.group(i)) for i in (1, 2, 3, 4))
-            if d0 == d1:
-                return f"Changed dungeon level from {l0} to {l1}"
-            return (f"Changed dungeon level from {l0} to {l1} "
-                    f"(and entered a different dungeon branch, {d0} -> {d1})")
-
-        feedback = _re.sub(
-            r"Changed dungeon level from \((\d+),\s*(\d+)\) to \((\d+),\s*(\d+)\)",
-            _lvl, feedback)
     except Exception as exc:
         _swallowed("run_netplay_skill.feedback_cleanup", exc)
+
+    # Level changes the vendored interrupt cannot see. The agent reports a
+    # level change it observes inside the skill, in Dlvl terms. But the dig
+    # that goes through the floor ("You dig a hole through the floor ...
+    # --More--") and a fall through a trap door or hole only land on the new
+    # level after `_skip_more_messages` dismisses the --More--, outside the
+    # interrupt check -- so they used to produce no note at all. Compare where
+    # the call started with where it ended, in the depth the status line shows.
+    _where_end = _where(wrapped.last_raw)
+    try:
+        if (_where_start is not None and _where_end is not None
+                and _where_start[2:] != _where_end[2:]):
+            from netplay.nethack_agent.agent import describe_level_change
+            _note = describe_level_change(_where_start[2], _where_start[3],
+                                          _where_end[2], _where_end[3])
+            if _note not in feedback:
+                feedback = f"{feedback} [{_note}.]".strip()
+    except Exception as exc:
+        _swallowed("run_netplay_skill.level_change", exc)
+
+    # An interrupted movement skill that did not move says so plainly: the
+    # play-tests had two explore calls in a row stop on the same monster with
+    # nothing to show for it, and the text did not make that obvious.
+    try:
+        _interrupted = _harness_interrupt or bool(getattr(agent, "last_interrupt", None))
+        if (_interrupted and getattr(skill, "name", "") in _MOVEMENT_SKILLS
+                and _where_start is not None and _where_start == _where_end):
+            feedback = (f"{feedback} [No progress: interrupted before moving; "
+                        f"you are still at ({_where_end[0]},{_where_end[1]}).]")
+    except Exception as exc:
+        _swallowed("run_netplay_skill.no_progress", exc)
 
     # NOTE: a `_fight_fallback` used to sit here, silently converting the
     # "There is no monster at (x,y)" failure into an `F<dir>` attack. It is
