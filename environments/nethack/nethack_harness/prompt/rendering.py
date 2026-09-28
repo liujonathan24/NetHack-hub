@@ -773,10 +773,6 @@ def _format_obs_summarize_reset(structured, journal, state, journal_max_chars: i
 _DEATH_SCREEN_MARKERS = (
     "You die",
     "You died",
-    "killed by",
-    "starved to death",
-    "petrified by",
-    "drowned",
     "Do you want your possessions identified",
     "Do you want to see your attributes",
     "Goodbye ",

@@ -188,8 +188,17 @@ def find_window(obs) -> Optional[TtyWindow]:
         ind = [len(b) - len(b.lstrip()) for b in body if b.strip()]
         cut = min(ind) if ind else 0
         body = [b[cut:] for b in body]
-        return TtyWindow(lines=body, terminator=m.group(1), col=col, end_row=r,
-                         entries=_entries(body), rows=body_rows)
+        win = TtyWindow(lines=body, terminator=m.group(1), col=col, end_row=r,
+                        entries=_entries(body), rows=body_rows)
+        # A text window waits for its dismissal key, so the engine's
+        # xwaitforspace is set for as long as it is open. Its text can stay
+        # on screen after it closes (the Quest entry text did, for the rest of
+        # the game), and the cursor-inside test passes whenever the hero
+        # stands inside that remnant; with the flags all clear it is gone.
+        flags = misc_flags(obs)
+        if not win.is_menu and flags is not None and not any(flags):
+            continue
+        return win
     return None
 
 

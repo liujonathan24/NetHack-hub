@@ -254,6 +254,15 @@ class NethackBaseAgent:
     
     @property
     def showing_more_message(self) -> bool:
+        # LOCAL: ask the engine. Upstream scanned every tty row for "--More--",
+        # which a text window (the Quest entry text) leaves on screen after
+        # it is answered, so every later skill pressed SPACE at a prompt that
+        # was gone and failed as stuck. The engine's `waiting_for_space` is
+        # set exactly while it waits on that key; the scan remains for an env
+        # that does not expose it.
+        unwrapped = self.env.unwrapped
+        if hasattr(unwrapped, "waiting_for_space"):
+            return bool(unwrapped.waiting_for_space)
         # Seems like this is the only way to detect --More-- messages
         # As last_observation["message"] does not contain this
         for line in self.last_observation["tty_chars"]:

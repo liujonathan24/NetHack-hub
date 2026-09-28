@@ -1171,11 +1171,13 @@ _ASCENSION_MARKERS = (
     "with the Amulet",
     "offered the Amulet",
 )
+#: Only phrases NetHack prints about the player. "killed by", "drowned",
+#: "petrified by" and "starved to death" also end messages about monsters ("The
+#: gnome is killed by the magic missile!"), and scanning for them ended live
+#: games with the character alive. The tombstone that carries them comes after
+#: the prompt below, and by then the engine's own terminated flag, the fallback
+#: after this scan, has ended the game anyway.
 _DEATH_MARKERS = (
-    "killed by",
-    "starved to death",
-    "petrified by",
-    "drowned",
     "quit the game",
     "Do you want your possessions identified",
 )
