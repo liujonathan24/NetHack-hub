@@ -29,7 +29,10 @@ cd /root/nld/e16_runs || exit 1
 #   the MODEL env override is overwritten by the tier registry, so it played
 #   glm-5.2 -- a duplicate seed-1 replica, not a Gemini arm. A real Gemini run
 #   needs a declared tier; there is no env path that sets the player model.
-RUNS="treesmoke8 treesmoke11 treesmoke11_r2 treesmoke11_r3 e16_s0_r1 e16_s2_r1 e16_s3_r1 e16_s4_r1"
+#   e16_fog_s*_r1: the fog-of-war sweep (reveal_map=0.0), one replica per
+#   seed, all finished 2026-09-05: s0/s3/s4 at the 30-attempt cap, s1 stalled
+#   at 26, s2 stalled at 21.
+RUNS="treesmoke8 treesmoke11 treesmoke11_r2 treesmoke11_r3 e16_s0_r1 e16_s2_r1 e16_s3_r1 e16_s4_r1 e16_fog_s0_r1 e16_fog_s1_r1 e16_fog_s2_r1 e16_fog_s3_r1 e16_fog_s4_r1"
 
 "$PY" "$SP/gen_e16_data.py" $RUNS > "$SP/e16_data.json" 2>"$SP/.gen_data.err" || {
   echo "[refresh] FAILED generating e16_data.json"; tail -3 "$SP/.gen_data.err"; exit 1; }

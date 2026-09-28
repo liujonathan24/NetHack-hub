@@ -1,0 +1,107 @@
+{
+ "e16_fog_s0_r1": {
+  "attempts": 30,
+  "stop_reason": "max_attempts",
+  "attempts_died": 30,
+  "attempts_censored": 0,
+  "checkpoints": 181,
+  "cumulative_calls": 3177,
+  "wall_clock_s": 29283.4,
+  "best_state": {
+   "attempts_to_reach": 23,
+   "balrog": 0.3249071349317381,
+   "balrog_min": 0.0507583712345433,
+   "calls_to_reach": 3024,
+   "dlvl": 16,
+   "dungeon_number": 0,
+   "id": "169",
+   "score": 4999,
+   "spend_to_reach_usd": 315.38,
+   "xl": 7
+  }
+ },
+ "e16_fog_s1_r1": {
+  "attempts": 26,
+  "stop_reason": "no_new_frontier",
+  "attempts_died": 24,
+  "attempts_censored": 2,
+  "checkpoints": 266,
+  "cumulative_calls": 4379,
+  "wall_clock_s": 34582.9,
+  "best_state": {
+   "attempts_to_reach": 14,
+   "balrog": 0.40832255575976223,
+   "balrog_min": 0.07453595273884014,
+   "calls_to_reach": 2740,
+   "dlvl": 22,
+   "dungeon_number": 0,
+   "id": "178",
+   "score": 12195,
+   "spend_to_reach_usd": 411.3925,
+   "xl": 8
+  }
+ },
+ "e16_fog_s2_r1": {
+  "attempts": 21,
+  "stop_reason": "no_new_frontier",
+  "attempts_died": 21,
+  "attempts_censored": 0,
+  "checkpoints": 134,
+  "cumulative_calls": 2137,
+  "wall_clock_s": 16137.1,
+  "best_state": {
+   "attempts_to_reach": 9,
+   "balrog": 0.12558597019922987,
+   "balrog_min": 0.0507583712345433,
+   "calls_to_reach": 1677,
+   "dlvl": 10,
+   "dungeon_number": 0,
+   "id": "108",
+   "score": 4646,
+   "spend_to_reach_usd": 170.0046,
+   "xl": 7
+  }
+ },
+ "e16_fog_s3_r1": {
+  "attempts": 30,
+  "stop_reason": "max_attempts",
+  "attempts_died": 30,
+  "attempts_censored": 0,
+  "checkpoints": 150,
+  "cumulative_calls": 2549,
+  "wall_clock_s": 21404.1,
+  "best_state": {
+   "attempts_to_reach": 13,
+   "balrog": 0.37895667923256743,
+   "balrog_min": 0.0507583712345433,
+   "calls_to_reach": 1748,
+   "dlvl": 20,
+   "dungeon_number": 0,
+   "id": "111",
+   "score": 4956,
+   "spend_to_reach_usd": 170.9703,
+   "xl": 5
+  }
+ },
+ "e16_fog_s4_r1": {
+  "attempts": 30,
+  "stop_reason": "max_attempts",
+  "attempts_died": 30,
+  "attempts_censored": 0,
+  "checkpoints": 301,
+  "cumulative_calls": 5111,
+  "wall_clock_s": 47821.3,
+  "best_state": {
+   "attempts_to_reach": 27,
+   "balrog": 0.30881240110986263,
+   "balrog_min": 0.07453595273884014,
+   "calls_to_reach": 4630,
+   "dlvl": 15,
+   "dungeon_number": 0,
+   "id": "258",
+   "score": 9906,
+   "spend_to_reach_usd": 672.7796,
+   "xl": 8
+  }
+ }
+}
