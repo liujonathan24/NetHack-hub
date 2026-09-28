@@ -507,6 +507,9 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
             return _refusal
 
     step_observations: list = []
+    # What was on screen before the skill's first key: its message is old news
+    # for the kill-log harvest below.
+    _baseline_obs = wrapped.last_raw
     original_step = wrapped.step
 
     def _tracking_step(action):
@@ -612,18 +615,21 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     # last message, so a 100-step macro surfaces one line and `You kill the X!`
     # is usually lost -- which is why the corpse-age kill log missed 25% of
     # kills. These observations already exist (`step_observations`); we read
-    # them for the log ONLY. Nothing here reaches the model: surfacing a
-    # macro's whole message stream would flood the observation, which is the
-    # opposite of what the encoding work is for.
+    # them for the log ONLY (the agent sees the call's messages through the
+    # harness's per-call log, `prompt/tty_screen.py`).
+    #
+    # Only NEWLY printed messages are fed. This engine keeps the last message
+    # on the message line until something else is printed, so feeding every
+    # step's message re-stamped one kill with each later step's turn and made
+    # the corpse look fresher than it was.
     try:
-        from nethack_core.observations import shape as _shape
         from nethack_harness.prompt.corpse_age import note_kills
-        _log_state = core_env
-        for _o in step_observations:
+        from nethack_harness.prompt.tty_screen import new_messages_per_step
+        for _o, _new in new_messages_per_step(step_observations, _baseline_obs):
+            if not _new:
+                continue
             try:
-                _so = _shape(_o, getattr(core_env, "_character", None))
-                note_kills({"env": core_env}, _so.messages or [],
-                           (_so.status or {}).get("time"))
+                note_kills({"env": core_env}, _new, int(np.asarray(_o.blstats)[20]))
             except Exception as exc:
                 _swallowed("run_netplay_skill.kill_log.step", exc)
                 continue
@@ -632,28 +638,16 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
 
     feedback = " ".join(t for t in thoughts if t).strip() or "No effect."
 
-    # Report what the GAME said, not just that the skill returned.
-    # `create_position_command` / `create_inventory_command` yield
-    # `Step.completed()` unconditionally without reading the result, so a kick
-    # that bounced and a kick that smashed the door open produce the identical
-    # string `Skill 'kick 43 5' completed`. NetHack's own message is the only
-    # thing that distinguishes them, and it is right there in the final
-    # observation -- appending it costs nothing and turns an unfalsifiable
-    # "completed" into a fact the agent can act on.
-    try:
-        from nethack_core.observations import shape as _shp
-        _rv = _raw_view(core_env)
-        _last = None
-        if step_observations:
-            _last = step_observations[-1]
-        elif _rv is not None:
-            _last = getattr(core_env, "_last_observation", None)
-        if _last is not None:
-            _msgs = [m for m in (_shp(_last, getattr(core_env, "_character", None)).messages or []) if m]
-            if _msgs and _msgs[-1] not in feedback:
-                feedback = f"{feedback} GAME: {_msgs[-1]}".strip()
-    except Exception as exc:
-        _swallowed("run_netplay_skill.game_message", exc)
+    # What the GAME said is no longer appended here. This used to add
+    # "GAME: <message of the final observation>", which (a) kept only the LAST
+    # message of the call -- a thrown dagger's hit, "You dig a hole through
+    # the floor", auto-pickup lines and "You die..." were all lost -- and (b)
+    # when the skill took no step, read the message still on screen from an
+    # EARLIER call ("You kill the newt!" came back on four later move_to
+    # calls; this engine never clears the message line). The harness now logs
+    # every message printed during the call, from every engine step, and
+    # renders them in order (`prompt/tty_screen.py::CallScreenLog`, rendered
+    # by `NetHackEnv._render_obs_text`).
 
     # Two cleanups on the vendored event text before the agent sees it.
     #

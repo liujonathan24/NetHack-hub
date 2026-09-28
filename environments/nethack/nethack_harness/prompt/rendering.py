@@ -465,6 +465,35 @@ def _glyph_run_encode(map_view: str, min_run: int = 5) -> str:
     return "\n".join(pattern.sub(_sub, row) for row in map_view.splitlines())
 
 
+def _note_kills_seen(state, structured, game_turn) -> None:
+    """Feed the corpse-age kill log from the messages of this observation.
+
+    On raw-prompt surfaces the message on screen is often OLD (this engine
+    never clears the message line), and `note_kills` stamps the CURRENT turn
+    -- so a "You kill the jackal!" still on screen twenty turns later made the
+    corpse look twenty turns fresher, which is exactly the wrong direction for
+    a food-poisoning warning. There, only the messages printed during this call
+    (`tty_screen.CallScreenLog`) are fed, once per call, and a kill the skill
+    layer already timed during this call keeps that (earlier, exact) turn.
+    """
+    from nethack_harness.prompt.corpse_age import kill_log, note_kills
+    cl = state.get("_call_log") if (state is not None
+                                    and state.get("_auto_dismiss") is False) else None
+    if cl is None:
+        note_kills(state, getattr(structured, "messages", None) or [], game_turn)
+        return
+    if getattr(cl, "_kills_noted", False):
+        return
+    cl._kills_noted = True
+    log = kill_log(state)
+    before = dict(log)
+    note_kills(state, cl.lines, game_turn)
+    start = cl.start_turn
+    for species, turn in before.items():
+        if start is not None and turn >= start and species in log:
+            log[species] = turn
+
+
 def _inventory_fingerprint(inventory) -> tuple:
     """Cheap hashable signature so we can diff inventories across turns."""
     return tuple((it.letter, it.description) for it in inventory)
@@ -544,8 +573,8 @@ def _format_obs_balrog(structured, journal, state, journal_max_chars: int) -> st
         _gt = None
         try:
             _gt = (getattr(structured, "status", None) or {}).get("time")
-            from nethack_harness.prompt.corpse_age import note_kills, annotate_corpse
-            note_kills(state, getattr(structured, "messages", None) or [], _gt)
+            from nethack_harness.prompt.corpse_age import annotate_corpse
+            _note_kills_seen(state, structured, _gt)
         except Exception:
             annotate_corpse = None
         for item in structured.inventory:
@@ -1442,8 +1471,8 @@ def format_observation_as_chat(
             _gt2 = (getattr(structured, "status", None) or {}).get("time")
             _ann = None
             try:
-                from nethack_harness.prompt.corpse_age import note_kills, annotate_corpse as _ann
-                note_kills(state, getattr(structured, "messages", None) or [], _gt2)
+                from nethack_harness.prompt.corpse_age import annotate_corpse as _ann
+                _note_kills_seen(state, structured, _gt2)
             except Exception:
                 _ann = None
             for item in structured.inventory:
@@ -1816,24 +1845,52 @@ def format_observation_as_chat(
 
         except Exception:
             pass
-    # MESSAGES is withheld under `minimal` like the other context blocks, but
-    # with less lost than it looks: the harness's action-feedback prefix
-    # (`[Executing skill ... GAME: <message>]`) already carries the last game
-    # message of the turn, so `minimal` drops only the earlier messages of
-    # multi-message turns.
+    # MESSAGES is withheld under `minimal` like the other context blocks. On
+    # raw-prompt surfaces nothing is lost by that: `NetHackEnv._render_obs_text`
+    # prepends a GAME MESSAGES block with every message printed during the
+    # call (tty_screen.CallScreenLog).
+    _raw_ui = state is not None and state.get("_auto_dismiss") is False
+    _call_log = state.get("_call_log") if _raw_ui else None
     if structured.messages and not minimal:
-        lines.append("=== MESSAGES ===")
         msgs = _run_length_encode_messages(structured.messages) if compact else list(structured.messages)
-        for m in msgs:
-            lines.append(f"  {m}")
-        lines.append("")
+        if _call_log is None:
+            lines.append("=== MESSAGES ===")
+            for m in msgs:
+                lines.append(f"  {m}")
+            lines.append("")
+        elif not any(m in _call_log.lines for m in structured.messages):
+            # This engine keeps the last message on the message line until
+            # something new is printed, so the line on screen is usually OLD
+            # news. Messages printed during this call are already listed in
+            # the GAME MESSAGES block; anything else is labelled as earlier.
+            lines.append("=== LAST MESSAGE ON SCREEN (from an earlier call, not new) ===")
+            for m in msgs:
+                lines.append(f"  {m}")
+            lines.append("")
+    # A menu / text window drawn on the terminal right now. On raw-prompt
+    # surfaces the waiting-for-input banner (`interactive_state`) renders it
+    # in full from the tty -- all rows, real letters, selection marks -- so
+    # the `shape()`-parsed MENU block (which kept only the rows below the
+    # last class header) is not repeated here.
+    #
+    # `inventory_prompt` is likewise parsed from the message line, which this
+    # engine does not clear -- after the prompt is answered it can still be
+    # there. So whenever the observation carries a cursor, the banner (which
+    # decides from the cursor whether anything is really open) owns both.
+    _banner_owns_ui = False
+    if _raw_ui and state.get("raw_obs") is not None:
+        try:
+            from nethack_harness.prompt.tty_screen import tty_cursor
+            _banner_owns_ui = tty_cursor(state["raw_obs"]) is not None
+        except Exception:
+            _banner_owns_ui = False
     # Raw-prompt surfaces (auto_dismiss=False, e7): the harness will NOT close
     # this UI -- labelling it "harness will auto-dismiss; ignore" is a lie that
     # leaves the agent waiting for a dismissal that never comes (16 such blocks
     # rendered across the first NPFULL cell). Default (flag absent) keeps the
     # historical wording byte-identical.
     _auto = True if state is None else bool(state.get("_auto_dismiss", True))
-    if structured.menu:
+    if structured.menu and not _banner_owns_ui:
         if _auto:
             # Menus are auto-dismissed by the harness via ESC after each step;
             # if you see this block, dismissal didn't fully clear (rare).
@@ -1841,9 +1898,10 @@ def format_observation_as_chat(
         else:
             lines.append("=== MENU (answer it: press a choice key, or esc to cancel) ===")
         for i, opt in enumerate(structured.menu):
-            lines.append(f"  [{i}] {opt.description}")
+            _l = None if _auto else getattr(opt, "letter", None)
+            lines.append(f"  {_l} - {opt.description}" if _l else f"  [{i}] {opt.description}")
         lines.append("")
-    if structured.inventory_prompt:
+    if structured.inventory_prompt and not _banner_owns_ui:
         p = structured.inventory_prompt
         if _auto:
             # Inventory prompts are auto-dismissed; eat/quaff/read take an `item`
@@ -1852,8 +1910,14 @@ def format_observation_as_chat(
             lines.append(f"=== PROMPT: {p['action']} (harness will auto-dismiss; pass `item` to eat/quaff/read) ===")
         else:
             lines.append(f"=== PROMPT: {p['action']} (answer it: press the item's letter, or esc to cancel) ===")
-        for i, item in enumerate(p["items"]):
-            lines.append(f"  [{i}] {item.description}")
+        if _auto:
+            for i, item in enumerate(p["items"]):
+                lines.append(f"  [{i}] {item.description}")
+        else:
+            # The inventory letter IS the answer; `[0] [1]` indices were not
+            # keys the game accepts.
+            for item in p["items"]:
+                lines.append(f"  {item.letter}: {item.description}")
         lines.append("")
     return "\n".join(lines)
 

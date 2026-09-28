@@ -1002,6 +1002,27 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         forever. Measured: 3 of 5 `b80_b0` seeds burned 2,499 calls each at
         game time 1 this way. See `prompt/interactive_state.py`.
         """
+        if state.get("_auto_dismiss") is False and state.get("raw_obs") is not None:
+            # ADJACENT around the hero's real position (blstats), with monsters
+            # named by species. `shape()` finds the hero as the first `@` on
+            # the terminal, which is wrong whenever a human monster is on the
+            # map (see `features.adjacent_tiles`). Raw-prompt (NetCore)
+            # surfaces only, so the auto-dismiss arms render as before.
+            try:
+                from nethack_harness.prompt.features import adjacent_tiles
+                _adj = adjacent_tiles(state["raw_obs"])
+                if _adj:
+                    state["structured_obs"].adjacent = _adj
+            except Exception:
+                pass
+            # Inventory text as the game's own `i` listing shows it, while the
+            # engine's `inv_strs` has not caught up (tty_screen).
+            try:
+                from nethack_harness.prompt.tty_screen import apply_inventory_listing
+                apply_inventory_listing(state, state["structured_obs"].inventory,
+                                        state.get("_call_log"))
+            except Exception:
+                pass
         obs_text = self.spec.turn_template(
             state["structured_obs"],
             state["journal"] if journal is None else journal,
@@ -1009,9 +1030,54 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             compact=self.compact_obs,
             journal_max_chars=self.journal_render_max_chars,
         )
+        raw_surface = state.get("_auto_dismiss") is False
+        _any_log = state.get("_call_log")
+        # Raw-prompt surfaces, plus any NetPlay (`np_*`) call: those used to
+        # carry "GAME: <last message>" in their feedback, now replaced by this.
+        call_log = _any_log if (
+            raw_surface or str(state.get("_last_skill_name") or "").startswith("np_")
+        ) else None
+        getpos_pending = bool(
+            _any_log is not None and _any_log.getpos_step
+            and _any_log.getpos_step == _any_log.steps)
+        so = state.get("structured_obs")
+        _bkw = {}
+        if _any_log is not None:
+            # The window as tracked over every step of the call: a menu whose
+            # entry was just toggled is only partly repainted on the tty.
+            _bkw["window"] = _any_log.window
         warning = detect_blocking_ui(
-            state.get("raw_obs"), published_tools=state.get("_published_tools"))
+            state.get("raw_obs"), published_tools=state.get("_published_tools"),
+            inventory=getattr(so, "inventory", None),
+            getpos_pending=getpos_pending, **_bkw)
+        if warning and raw_surface:
+            # Once HP is 0 the end-of-game screens (possessions list, ...) are
+            # up, but nothing the agent sends reaches the game: GAME OVER says
+            # so. A "waiting for input" banner beside it would contradict it.
+            try:
+                if int((getattr(so, "status", None) or {}).get("hitpoints", 1)) <= 0:
+                    warning = None
+            except (TypeError, ValueError):
+                pass
         text = f"{warning}\n{obs_text}" if warning else obs_text
+        if call_log is not None:
+            # Every message the game printed during THIS call, in order
+            # (`--More--` chains, text windows such as "Things that are
+            # here:", the death sequence). The skill feedback used to carry
+            # only the LAST observation's message, which lost thrown-weapon
+            # hits, "You dig a hole through the floor", auto-pickup lines and
+            # "You die...", and -- because this engine keeps the old message
+            # on screen -- re-reported "You kill the newt!" on later calls.
+            from nethack_harness.prompt.tty_screen import bound_lines
+            if call_log.lines:
+                block = ["=== GAME MESSAGES (printed during this call, in order) ==="]
+                block += [f"  {m}" for m in bound_lines(call_log.lines)]
+            elif call_log.steps:
+                block = ["=== GAME MESSAGES === (none: the game printed nothing new during this call)"]
+            else:
+                block = []
+            if block:
+                text = "\n".join(block) + "\n\n" + text
         # E9b awareness probe: append the reflection questions to every turn.
         if self.reflect:
             from nethack_harness.prompt.reflection import REFLECT_BLOCK
@@ -1067,8 +1133,17 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         }
         clock_before = _game_clock(state)
         rec = TurnRecorder(state.get("env"), capture_frames=self.record_step_frames)
+        # Per-call screen log: every message / text window the game printed
+        # during this call, for `_render_obs_text`. Nested inside the recorder
+        # (installed after it, removed before it). Observation-only: it never
+        # steps the engine, so the recorded keystrokes are unchanged.
+        from nethack_harness.prompt.tty_screen import CallScreenLog
+        call_log = CallScreenLog(state.get("env"), baseline_obs=state.get("raw_obs"),
+                                 prev_window=getattr(state.get("_call_log"), "window", None))
+        state["_call_log"] = call_log
         with rec:
-            content = await self._apply_tool_call_inner(state, skill_name, skill_args)
+            with call_log:
+                content = await self._apply_tool_call_inner(state, skill_name, skill_args)
         clock_after = _game_clock(state)
         # Echo the correlation id into the RESULT payload -- the one channel
         # that reaches the model transcript verbatim in every scaffold (an MCP
@@ -1957,7 +2032,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # (never raises). Mutates raw_obs.tty_chars, then re-shape so the map
         # view reflects the cleaned tty.
         if state.get("_standard_tier", True):
-            _scrub_intro_banner(state["raw_obs"])
+            _scrub_intro_banner(state["raw_obs"],
+                                window=getattr(state.get("_call_log"), "window", None))
             state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
 
         # Build the per-turn user message from the spec's turn template.
@@ -2212,7 +2288,7 @@ def _obs_tty_has_more(obs) -> bool:
 _INTRO_BANNER_MARKERS = (b"Copyright", b"Stichting", b"Version 3.6", b"See license")
 
 
-def _scrub_intro_banner(obs) -> None:
+def _scrub_intro_banner(obs, window=None) -> None:
     """Strip the stale intro/copyright banner from a CoreObservation's tty.
 
     The authoritative dungeon map lives in ``obs.chars`` (one row above the
@@ -2234,9 +2310,23 @@ def _scrub_intro_banner(obs) -> None:
             return
         space = ord(" ")
         n_cols = min(tty.shape[1], chars.shape[1])
+        # An open menu / text window is drawn over cells that `chars` reports
+        # blank, so the rule below would erase it too: the inventory rendered
+        # as "an uncur         ration" because every character of the window
+        # that sat over blank map was scrubbed. Leave the window's rectangle
+        # alone (it starts at row 0, column `win.col`, down to its terminator).
+        win_col, win_end = n_cols, -1
+        try:
+            from nethack_harness.prompt.tty_screen import find_window
+            _win = window if window is not None else find_window(obs)
+            if _win is not None:
+                win_col, win_end = _win.col, _win.end_row
+        except Exception:
+            pass
         # tty row r (1..21) corresponds to chars row r-1, same columns.
         for r in range(1, min(tty.shape[0], chars.shape[0] + 1)):
-            for x in range(n_cols):
+            cols = min(n_cols, win_col) if r <= win_end else n_cols
+            for x in range(cols):
                 if tty[r, x] != chars[r - 1, x] and chars[r - 1, x] == space:
                     tty[r, x] = space
     except Exception:
