@@ -2283,8 +2283,9 @@ def reveal(env: NetHackCoreEnv, obs: StructuredObservation,
     "description": (
         "Force the FULL map (plus surroundings) back into this turn's "
         "observation. Under map-withholding observation modes the map is "
-        "otherwise not pushed; call this to see it on demand. Consumes NO "
-        "game turn."
+        "otherwise not pushed; call this to see it on demand. Costs one "
+        "command from your command budget but no game time (the game clock "
+        "does not advance)."
     ),
     "parameters": {},
 })

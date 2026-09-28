@@ -3,6 +3,7 @@ import netplay.nethack_agent.describe as describe
 from netplay.nethack_agent.agent import NetHackAgent
 from netplay.core.skill import skill, SkillParameter, Step
 from netplay.nethack_utils.nle_wrapper import RawKeyPress
+from netplay.nethack_agent.pathfinding import LevelPathfinder, nethack_bfs
 
 from nle.env import NLE
 from nle.nethack import actions, glyph_is_pet
@@ -82,6 +83,94 @@ def set_avoid_monster_flag(agent: NetHackAgent, value: bool):
     agent.avoid_monsters = value
     yield Step.completed(f"Set avoid_monsters flag to {value}")
 
+# ADDED (fix/netcore-input): peaceful monsters are obstacles for pathing.
+# Upstream move_to walked straight into peaceful monsters. NetHack then asks
+# "Really attack <shopkeeper>? [yn] (n)", `fail_on_popup` aborted the skill
+# with the prompt still open, and the next call walked into it again. Now:
+#   * monsters known to be peaceful are removed from the walkable map, so the
+#     path goes around them, or the skill waits (search) for them to move;
+#   * a monster is known peaceful when it belongs to an always-peaceful role
+#     (shopkeeper, watchman, temple priest, ...: the species is what `;`
+#     shows on screen) or when walking into it raised "Really attack?";
+#   * if the prompt still appears it is answered `n` at once, never `y`.
+# Everything is decided from observations; every key goes through agent.step.
+PEACEFUL_WAIT_LIMIT = 5
+PEACEFUL_PROMPT_LIMIT = 3
+_ALWAYS_PEACEFUL_SPECIES = (
+    "shopkeeper", "watchman", "watch captain", "aligned priest", "high priest",
+    "Oracle", "guard",
+)
+
+
+def _monster_species(glyph) -> str:
+    try:
+        from nethack_core import glyphs as _g
+        return _g.monster_name(_g.glyph_to_mon(int(glyph))) or ""
+    except Exception:
+        return ""
+
+
+def _known_peaceful(agent: NetHackAgent, glyph) -> bool:
+    if glyph is None or glyph_is_pet(glyph):
+        return False
+    if int(glyph) in getattr(agent, "known_peaceful_glyphs", ()):
+        return True
+    return _monster_species(glyph) in _ALWAYS_PEACEFUL_SPECIES
+
+
+def _peaceful_mask(agent: NetHackAgent, extra_positions=()) -> np.ndarray:
+    level = agent.current_level
+    mask = np.zeros(level.shape, dtype=bool)
+    for glyph, pos in level.get_monsters():
+        if _known_peaceful(agent, glyph):
+            mask[pos.y, pos.x] = True
+    for (px, py) in extra_positions:
+        if level.get_monster_glyph(px, py) is not None:
+            mask[py, px] = True
+    return mask
+
+
+def _path_avoiding(agent: NetHackAgent, x, y, blocked: np.ndarray, bump_into_unwalkables=True):
+    """Like agent.get_path_to, but never through a tile in `blocked`."""
+    level = agent.current_level
+    walkable = level.get_walkable_mask() & ~blocked
+    diagonal = level.get_diagonal_walkable_mask() & ~blocked
+    bfs = nethack_bfs(agent.blstats.x, agent.blstats.y, walkable, diagonal, agent.can_squeeze)
+    return LevelPathfinder(level, bfs, bfs).get_path_to(x, y, bump_into_unwalkables=bump_into_unwalkables)
+
+
+def _really_attack_prompt(agent: NetHackAgent) -> bool:
+    if not agent.env.unwrapped.waiting_for_yn:
+        return False
+    return "really attack" in (agent.current_game_message + _screen_text(agent)[:80]).lower()
+
+
+def _step_declining_attack(agent: NetHackAgent, action, nx: int, ny: int, thoughts=None):
+    """Step `action` (a move onto (nx, ny)). If NetHack asks "Really attack?",
+    answer `n` straight away and remember the monster as peaceful.
+    Yields the steps; returns True when an attack was declined."""
+    step = agent.step(action, thoughts=thoughts)
+    if not _really_attack_prompt(agent):
+        yield step
+        return False
+    glyph = agent.current_level.get_monster_glyph(nx, ny)
+    if glyph is not None:
+        if not hasattr(agent, "known_peaceful_glyphs"):
+            agent.known_peaceful_glyphs = set()
+        agent.known_peaceful_glyphs.add(int(glyph))
+    # Answer before yielding, so `fail_on_popup` never sees the prompt open.
+    answer = agent.step(RawKeyPress.KEYPRESS_n, thoughts=f"Declined to attack the peaceful monster at ({nx}, {ny}).")
+    yield step
+    yield answer
+    return True
+
+
+def _peaceful_name_at(agent: NetHackAgent, px, py) -> str:
+    glyph = agent.current_level.get_monster_glyph(px, py)
+    name = _monster_species(glyph) if glyph is not None else ""
+    return f"peaceful {name}" if name else "peaceful monster"
+
+
 @skill(
     name="move_to",
     description="Move to the specified position using pathfinding.",
@@ -93,16 +182,41 @@ def set_avoid_monster_flag(agent: NetHackAgent, value: bool):
 @fail_on_popup
 def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
     last_move_count = 0
+    waits = 0
+    declined = 0
+    declined_at = set()  # tiles whose occupant answered "Really attack?" this call
     while True:
         if (agent.blstats.x == x and agent.blstats.y == y):
             yield Step.completed(f"Reached position {x, y}.")
             return
 
-        path = agent.get_path_to(x, y, avoid_monsters=avoid_monsters)
+        peaceful = _peaceful_mask(agent, declined_at)
+        if peaceful.any():
+            path = _path_avoiding(agent, x, y, peaceful)
+            if path is None and agent.get_path_to(x, y, avoid_monsters=avoid_monsters) is not None:
+                # Only a peaceful monster is in the way: wait for it to move.
+                blockers = [f"{_peaceful_name_at(agent, px, py)} at ({px}, {py})"
+                            for py, px in zip(*np.nonzero(peaceful))]
+                if waits >= PEACEFUL_WAIT_LIMIT:
+                    yield Step.failed(f"Every route to {x, y} is blocked by a peaceful monster "
+                                      f"({'; '.join(blockers)}); waited {waits} turns and it has not moved.")
+                    return
+                waits += 1
+                yield agent.step(actions.Command.SEARCH,
+                                 thoughts=f"Waiting for {blockers[0]} to move out of the way." if waits == 1 else None)
+                continue
+        else:
+            path = agent.get_path_to(x, y, avoid_monsters=avoid_monsters)
         if path is None:
             yield Step.failed(f"No valid path found to reach position {x, y}.")
             return
-        
+
+        next_x, next_y = path[1] # Skip first position since its our own position
+        if (next_x, next_y) == (x, y) and peaceful[y, x]:
+            yield Step.completed(f"Tile {x, y} is occupied by a {_peaceful_name_at(agent, x, y)}, "
+                                 f"stopping adjacent to it.")
+            return
+
         # We are executing the last action, which might lead into an unmovable object like a door or a wall
         # We track this so we only try moving into it once
         if last_move_count == 1:
@@ -111,8 +225,16 @@ def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
         if len(path) == 2:
             last_move_count += 1
 
-        next_x, next_y = path[1] # Skip first position since its our own position
-        yield agent.step(get_move_action(agent.blstats.x, agent.blstats.y, next_x, next_y))
+        was_declined = yield from _step_declining_attack(
+            agent, get_move_action(agent.blstats.x, agent.blstats.y, next_x, next_y), next_x, next_y)
+        if was_declined:
+            declined += 1
+            declined_at.add((next_x, next_y))
+            if len(path) == 2:
+                last_move_count -= 1  # the bump was cancelled, it did not count
+            if declined >= PEACEFUL_PROMPT_LIMIT:
+                yield Step.failed(f"A peaceful monster keeps blocking the way to {x, y}; did not attack it.")
+                return
 
 @skill(
     name="explore",
@@ -248,17 +370,86 @@ def search_room(agent: NetHackAgent, room_id: int, max_search_count=3):
 
         yield agent.step(actions.Command.SEARCH)
 
+# CHANGED (fix/netcore-input): press_key takes a SEQUENCE of keys.
+# Upstream pressed exactly one key and could not press `-`, `|`, `{`, `}`, `]`,
+# `~`, `'`, TAB or any Ctrl key (RawKeyPress lacked them), so e.g. engraving
+# with fingers ("write with? [- ...]") was impossible. Now `key` is parsed by
+# RawKeyPress.parse_sequence: a single key or named special behaves exactly as
+# before; longer strings are sent key by key, each through `agent.step` (the
+# normal engine step, so every key is recorded and replays). ENTER on the
+# extended-command prompt is sent as LF instead of CR -- see
+# `_on_extended_command_prompt`.
+PRESS_KEY_MAX_KEYS = 200
+
+
+def _screen_text(agent: NetHackAgent) -> str:
+    try:
+        rows = agent.last_observation["tty_chars"]
+        return "\n".join("".join(chr(c) for c in row) for row in rows)
+    except Exception:
+        return ""
+
+
+def _on_extended_command_prompt(agent: NetHackAgent) -> bool:
+    """True while the `#` extended-command prompt is reading input.
+
+    The engine reads that prompt with tty_get_ext_cmd, which (unlike getlin)
+    does not raise the in_getlin flag, so `misc` is all zero exactly as when
+    the game waits for a normal command. The harness drops a CR in that state
+    as a stray `Unknown command '^M'` (netplay_true.NetPlayEngineEnv.step), so
+    ENTER never reached the prompt and `#loot` could not be submitted. The
+    prompt is recognised from what is on screen: cursor on the top line and
+    the top line starting with `#`. getline.c accepts LF as well as CR to end
+    the line, so ENTER is sent as LF there.
+    """
+    try:
+        obs = agent.last_observation
+        misc = [int(v) for v in np.asarray(obs["misc"]).reshape(-1)]
+        cursor = np.asarray(obs["tty_cursor"]).reshape(-1)
+        top = "".join(chr(c) for c in obs["tty_chars"][0])
+        return (not any(misc)) and int(cursor[0]) == 0 and top.startswith("#")
+    except Exception:
+        return False
+
+
+def _character_died(agent: NetHackAgent) -> bool:
+    try:
+        if int(agent.blstats.hitpoints) <= 0:
+            return True
+    except Exception:
+        pass
+    screen = _screen_text(agent)
+    return "You die..." in screen or "possessions identified?" in screen
+
+
+def _key_label(key: int) -> str:
+    names = {27: "<ESC>", 13: "<ENTER>", 10: "<ENTER>", 32: "<SPACE>", 9: "<TAB>", 8: "<BACKSPACE>"}
+    if key in names:
+        return names[key]
+    if 1 <= key <= 26:
+        return f"<C-{chr(key + 96)}>"
+    return chr(key)
+
+
 @skill(
     name="press_key",
-    # Truthful key surface (was: "only ESC, SPACE, and ENTER are supported" --
-    # a lie that told the model the descend key `>` would not work; RawKeyPress
-    # accepts letters, digits and most punctuation including `>` and `<`).
     description=(
-        "Presses a single key, exactly as if typed at the NetHack prompt: "
-        "letters (both cases), digits, and punctuation such as > < , . # $ are "
-        "all supported, plus the named specials ESC, SPACE and ENTER. Use this "
-        "to answer the game's own prompts and menus, and to descend (press '>' "
-        "while standing on a > staircase) or ascend ('<')."
+        "Types keys at the NetHack prompt, exactly as if typed on the keyboard. "
+        "`key` is one key or a sequence of keys sent in order in this one call, "
+        "e.g. 'E-Elbereth<ENTER>' (engrave Elbereth with fingers), 'qf' (quaff "
+        "item f), '#loot<ENTER>', '>' (descend on a > staircase). Every printable "
+        "character is its own key. Special keys go in angle brackets, any case: "
+        "<ESC> <ENTER> <SPACE> <TAB> <BACKSPACE>, <C-d> for Ctrl+d (any letter), "
+        "<LT> and <GT> for a literal < or > inside a sequence. A single character "
+        "such as > < , or the word ESC, ENTER or SPACE on its own is that one key. "
+        "--More-- prompts that appear between keys are dismissed automatically. "
+        "In a list that only displays information (e.g. inventory), ENTER does "
+        "not close it; SPACE or ESC does. Each key costs whatever game time the "
+        "game itself charges for it. The result says 'Pressed all N keys.' when "
+        "every key of a sequence was sent. If the game ends or the character "
+        "dies partway, the remaining keys are not sent and the result says so; "
+        "a sequence also stops early when the skill is interrupted (the result "
+        "then gives the reason and does not say 'Pressed all N keys.')."
     ),
     parameters=[
         SkillParameter.string("key")
@@ -266,10 +457,47 @@ def search_room(agent: NetHackAgent, room_id: int, max_search_count=3):
 )
 def press_key(agent: NetHackAgent, key: str):
     try:
-        yield agent.step(RawKeyPress.parse(key), thoughts=f"Pressing key '{key}'.")
-        yield Step.completed()
-    except ValueError:
-        yield Step.error(f"Unable to press the given key {key}.")
+        keys = RawKeyPress.parse_sequence(key)
+    except ValueError as e:
+        yield Step.error(f"Unable to press the given key {key}: {e} No key was sent.")
+        return
+    if len(keys) > PRESS_KEY_MAX_KEYS:
+        yield Step.error(f"Too many keys ({len(keys)}); at most {PRESS_KEY_MAX_KEYS} per call. No key was sent.")
+        return
+
+    total = len(keys)
+    for i, k in enumerate(keys):
+        code = k
+        if k == RawKeyPress.KEYPRESS_ENTER and _on_extended_command_prompt(agent):
+            code = RawKeyPress.KEYPRESS_LINEFEED
+        if total == 1:
+            thoughts = f"Pressing key '{key}'."
+        elif i == 0:
+            thoughts = f"Pressing {total} keys '{key}'."
+        else:
+            thoughts = None
+        if total > 1 and i == total - 1:
+            # On the last key's own step, so it is reported even when the
+            # skill is interrupted right after that step.
+            thoughts = f"{thoughts} Pressed all {total} keys." if thoughts else f"Pressed all {total} keys."
+        step = agent.step(code, thoughts=thoughts)
+        remaining = total - i - 1
+        ended = bool(step.step_data.done)
+        if remaining and (ended or _character_died(agent)):
+            what = "The game ended" if ended else "The character died"
+            note = (f"{what} after key {i + 1} of {total} ({_key_label(int(code))}); "
+                    f"the remaining {remaining} keys were not sent.")
+            if ended:
+                # The harness stops at a terminal step, so the note rides on it.
+                step.thoughts = f"{thoughts} {note}" if thoughts else note
+                yield step
+                return
+            yield step
+            yield Step.failed(note)
+            return
+        yield step
+
+    yield Step.completed()
 
 @skill(
     name="type_text",
@@ -279,12 +507,19 @@ def press_key(agent: NetHackAgent, key: str):
     ]
 )
 def type_text(agent: NetHackAgent, text: str):
-    try:
-        for i, key in enumerate(text):
-            yield agent.step(RawKeyPress.parse(key))
-        yield Step.completed()
-    except ValueError:
-        yield Step.error(f"Failed to press the {i}th key '{key}'.")
+    # CHANGED (fix/netcore-input): validate every character before sending any,
+    # so an unpressable character no longer leaves half the text typed.
+    # (RawKeyPress now covers every printable ASCII key.)
+    keys = []
+    for i, key in enumerate(text):
+        try:
+            keys.append(RawKeyPress.parse(key))
+        except ValueError:
+            yield Step.error(f"Failed to press the {i}th key '{key}'. No key was sent.")
+            return
+    for key in keys:
+        yield agent.step(key)
+    yield Step.completed()
 
 def translate(data, dx, dy, constant=0):
     """
@@ -381,6 +616,7 @@ def melee_attack(agent: NetHackAgent, x, y):
         return
 
     tx, ty = x, y
+    declined_walks = 0
     while True:
         target_neighbors = agent.current_level.get_neighbors(tx, ty)
         target_neighbors = [(x,y) for (x,y) in target_neighbors if agent.get_path_to(x,y, bump_into_unwalkables=False, avoid_monsters=True) is not None]
@@ -402,7 +638,15 @@ def melee_attack(agent: NetHackAgent, x, y):
                 yield Step.completed(f"Killed the target.")
                 return
         else:
-            yield agent.step(move_action)
+            # CHANGED (fix/netcore-input): a walking step that bumps a peaceful
+            # monster answers "Really attack?" with `n` instead of leaving it open.
+            path = agent.get_path_to(nx, ny, bump_into_unwalkables=False, avoid_monsters=True)
+            px, py = path[1] if path is not None and len(path) > 1 else (nx, ny)
+            if (yield from _step_declining_attack(agent, move_action, px, py)):
+                declined_walks += 1
+                if declined_walks >= PEACEFUL_PROMPT_LIMIT:
+                    yield Step.failed(f"A peaceful monster blocks the way to the target at ({tx}, {ty}); did not attack it.")
+                    return
 
         # Check if target has moved
         if agent.current_level.get_monster_glyph(tx, ty) == target_glyph:

@@ -1313,10 +1313,12 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Gate the descent ACTION, not one tool name: np_core has no np_down —
         # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
         # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
+        # np_press_key takes a key SEQUENCE, so a '>' anywhere in it (or <GT>)
+        # counts as a descent, not only key == ">".
         _is_descent = (
             skill_name == "np_down"
             or (skill_name == "np_press_key"
-                and str((skill_args or {}).get("key", "")).strip() == ">")
+                and _press_key_sends_gt((skill_args or {}).get("key", "")))
         )
         # E9a hard enforcement: descent is REFUSED while underleveled, with no
         # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
@@ -2166,6 +2168,25 @@ def _native_tool_call_id(calls):
     tc = calls[0]
     tid = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
     return str(tid) if tid else None
+
+
+def _press_key_sends_gt(key) -> bool:
+    """True when an np_press_key `key` argument would send a '>' keystroke.
+
+    np_press_key accepts a key sequence ("s>", "<ESC>>", "<GT>"), so the
+    descent gate cannot compare the argument with ">" alone. Parsed with the
+    skill's own parser; an unparseable argument sends nothing, so it is not
+    a descent (the old exact check is kept as a fallback).
+    """
+    key = str(key or "")
+    try:
+        from nethack_harness.tools import netplay_true as _npt  # noqa: F401  (puts vendor/ on sys.path)
+        from netplay.nethack_utils.nle_wrapper import RawKeyPress
+        return any(int(k) == ord(">") for k in RawKeyPress.parse_sequence(key))
+    except ValueError:
+        return False
+    except Exception:
+        return key.strip() == ">"
 
 
 def _game_clock(state) -> Optional[int]:

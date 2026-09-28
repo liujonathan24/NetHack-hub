@@ -14,10 +14,33 @@
 # PIL. Nothing in the skill layer imports it -- skills.py imports only
 # RawKeyPress from this module.
 #
-# No behavioural line of RawKeyPress was changed; only the now-unused
-# sys/numpy/PIL/gymnasium/nle/minihack imports were dropped.
+# Only the now-unused sys/numpy/PIL/gymnasium/nle/minihack imports were
+# dropped from upstream. RawKeyPress itself was then EXTENDED (marked
+# "ADDED (fix/netcore-input)" below); every upstream member and every input
+# upstream's parse() accepted still maps to the same key code:
+#   * members for the printable ASCII keys upstream omitted (- | { } ] ~ '),
+#     TAB, BACKSPACE, LINEFEED and Ctrl+A..Ctrl+Z. Upstream's enum made
+#     `np_press_key --key -` fail, so the fingers answer to "What do you want
+#     to write with? [- ...]" (and #force's `|`, the `{`/`}`/`]` commands,
+#     ...) was unreachable.
+#   * parse() also accepts "tab" / "backspace" by name.
+#   * parse_sequence(): a string of keys with <NAME> specials, used by the
+#     multi-key press_key skill.
 
 import enum
+
+# ADDED (fix/netcore-input): names usable inside angle brackets in
+# RawKeyPress.parse_sequence, e.g. "E-Elbereth<ENTER>". Module-level because
+# a dict inside the IntEnum body would become an enum member.
+_SEQUENCE_NAMES = {
+    "esc": 27,
+    "enter": 13,
+    "space": 32,
+    "tab": 9,
+    "backspace": 8,
+    "lt": ord("<"),
+    "gt": ord(">"),
+}
 
 class RawKeyPress(enum.IntEnum):
     """
@@ -128,12 +151,57 @@ class RawKeyPress(enum.IntEnum):
     KEYPRESS_ESC = 27
     KEYPRESS_SPACE = 32
 
+    # ADDED (fix/netcore-input): the printable ASCII keys upstream left out,
+    # so that every printable key can be pressed.
+    KEYPRESS_MINUS = ord("-")
+    KEYPRESS_PIPE = ord("|")
+    KEYPRESS_OPEN_CURLY_BRACKET = ord("{")
+    KEYPRESS_CLOSE_CURLY_BRACKET = ord("}")
+    KEYPRESS_CLOSE_SQUARE_BRACKET = ord("]")
+    KEYPRESS_TILDE = ord("~")
+    KEYPRESS_APOSTROPHE = ord("'")
+
+    # ADDED (fix/netcore-input): control keys. Ctrl+I, Ctrl+J, Ctrl+M are the
+    # same codes as TAB, LINEFEED and ENTER, so IntEnum makes them aliases.
+    KEYPRESS_BACKSPACE = 8
+    KEYPRESS_TAB = 9
+    KEYPRESS_LINEFEED = 10
+    KEYPRESS_CTRL_A = 1
+    KEYPRESS_CTRL_B = 2
+    KEYPRESS_CTRL_C = 3
+    KEYPRESS_CTRL_D = 4
+    KEYPRESS_CTRL_E = 5
+    KEYPRESS_CTRL_F = 6
+    KEYPRESS_CTRL_G = 7
+    KEYPRESS_CTRL_H = 8
+    KEYPRESS_CTRL_I = 9
+    KEYPRESS_CTRL_J = 10
+    KEYPRESS_CTRL_K = 11
+    KEYPRESS_CTRL_L = 12
+    KEYPRESS_CTRL_M = 13
+    KEYPRESS_CTRL_N = 14
+    KEYPRESS_CTRL_O = 15
+    KEYPRESS_CTRL_P = 16
+    KEYPRESS_CTRL_Q = 17
+    KEYPRESS_CTRL_R = 18
+    KEYPRESS_CTRL_S = 19
+    KEYPRESS_CTRL_T = 20
+    KEYPRESS_CTRL_U = 21
+    KEYPRESS_CTRL_V = 22
+    KEYPRESS_CTRL_W = 23
+    KEYPRESS_CTRL_X = 24
+    KEYPRESS_CTRL_Y = 25
+    KEYPRESS_CTRL_Z = 26
+
     @staticmethod
     def parse(key: str) -> "RawKeyPress":
         special_keys = {
             "enter": RawKeyPress.KEYPRESS_ENTER,
             "space": RawKeyPress.KEYPRESS_SPACE,
-            "esc": RawKeyPress.KEYPRESS_ESC
+            "esc": RawKeyPress.KEYPRESS_ESC,
+            # ADDED (fix/netcore-input)
+            "tab": RawKeyPress.KEYPRESS_TAB,
+            "backspace": RawKeyPress.KEYPRESS_BACKSPACE,
         }
 
         if len(key) == 1:
@@ -142,3 +210,61 @@ class RawKeyPress(enum.IntEnum):
             return special_keys[key.lower()]
         
         raise ValueError(f"Cannot parse the given key {key}.")
+
+    # ADDED (fix/netcore-input): multi-key parsing for the press_key skill.
+    @staticmethod
+    def parse_sequence(key: str) -> "list[RawKeyPress]":
+        """Parse a press_key argument into the keys to send, in order.
+
+        * A single character is that key (so "<", ">" and "," alone work).
+        * ESC, ENTER, SPACE, TAB or BACKSPACE alone (any case) is that key.
+        * Anything else is a sequence: each character is one key, and
+          <ESC> <ENTER> <SPACE> <TAB> <BACKSPACE> <LT> <GT> <C-x> (Ctrl+x)
+          in angle brackets, any case, are special keys. A "<" that does not
+          start one of those is the literal "<" key; <NAME> with an unknown
+          NAME is an error.
+
+        Raises ValueError (nothing is sent) on an empty string, an unknown
+        <NAME>, or a character that is not an ASCII key.
+        """
+        import re
+        if not isinstance(key, str) or key == "":
+            raise ValueError("No key given.")
+        if len(key) == 1:
+            return [RawKeyPress._from_char(key)]
+        if key.strip().lower() in ("esc", "enter", "space", "tab", "backspace"):
+            return [RawKeyPress.parse(key.strip().lower())]
+
+        keys = []
+        i = 0
+        while i < len(key):
+            ch = key[i]
+            if ch == "<":
+                m = re.match(r"<([A-Za-z][A-Za-z0-9_-]*|[Cc]-.)>", key[i:])
+                if m:
+                    name = m.group(1)
+                    low = name.lower()
+                    if low.startswith("c-") and len(name) == 3:
+                        letter = name[2].lower()
+                        if not ("a" <= letter <= "z"):
+                            raise ValueError(f"Unknown special key <{name}>: Ctrl works with letters, e.g. <C-d>.")
+                        keys.append(RawKeyPress(ord(letter) & 0x1F))
+                    elif low in _SEQUENCE_NAMES:
+                        keys.append(RawKeyPress(_SEQUENCE_NAMES[low]))
+                    else:
+                        raise ValueError(
+                            f"Unknown special key <{name}>. Known: <ESC> <ENTER> <SPACE> "
+                            f"<TAB> <BACKSPACE> <LT> <GT> <C-x>.")
+                    i += m.end()
+                    continue
+            keys.append(RawKeyPress._from_char(ch))
+            i += 1
+        return keys
+
+    @staticmethod
+    def _from_char(ch: str) -> "RawKeyPress":
+        code = ord(ch)
+        try:
+            return RawKeyPress(code)
+        except ValueError:
+            raise ValueError(f"Cannot press {ch!r}: not a key on the NetHack keyboard.") from None

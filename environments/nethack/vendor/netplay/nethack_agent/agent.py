@@ -78,6 +78,26 @@ class NetHackAgent(NethackBaseAgent):
         super().__init__(env=env, log_folder=log_folder, render=render)
         self.max_skill_gamesteps = max_skill_gamesteps
         self.update_hidden_objects = update_hidden_objects
+        # ADDED (fix/netcore-input): monster glyphs that answered "Really
+        # attack?" when walked into, so pathing treats them as obstacles
+        # (skills._known_peaceful). Lives as long as this agent (one episode).
+        self.known_peaceful_glyphs = set()
+
+    # ADDED (fix/netcore-input): agent_base.get_path_to / distance_to compute
+    # `avoid_monsters` from their argument and then pass `self.avoid_monsters`
+    # instead, so an explicit `avoid_monsters=True` (melee_attack's approach
+    # walk) was silently ignored and the walk went through other monsters,
+    # peaceful ones included. These overrides pass the resolved value on.
+    # (get_distance_map in agent_base already does this correctly.)
+    def get_path_to(self, x, y, bump_into_unwalkables=True, avoid_monsters=None):
+        if not avoid_monsters:
+            avoid_monsters = self.avoid_monsters
+        return self.last_bfs_results.get_path_to(x, y, bump_into_unwalkables, avoid_monsters=avoid_monsters)
+
+    def distance_to(self, x, y, bump_into_unwalkables=True, avoid_monsters=None):
+        if not avoid_monsters:
+            avoid_monsters = self.avoid_monsters
+        return self.last_bfs_results.distance_to(x, y, bump_into_unwalkables, avoid_monsters=avoid_monsters)
 
     # ----------------------------------------------------------------------
     # Below: upstream netplay/nethack_agent/agent.py, reproduced verbatim.

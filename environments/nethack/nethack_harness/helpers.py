@@ -1551,7 +1551,8 @@ _TYPE_MAP = {
 # matches the system prompt: x = column 0-78, y = row 0-20.
 _ARG_HINTS = {
     "x": "column 0-78", "y": "row 0-20",
-    "key": "one key; '>' descend, '<' ascend, 's' search, ESC/SPACE/ENTER by name",
+    "key": "one key or a sequence sent in order, e.g. '>' or 'E-Elbereth<ENTER>'; "
+           "specials in angle brackets: <ESC> <ENTER> <SPACE> <TAB> <BACKSPACE> <C-d> <LT> <GT>",
     "item_letter": "inventory letter (a-z, A-Z), e.g. 'f'",
     "direction": "n/e/s/w or ne/se/sw/nw (or 'self' for np_zap)",
     "count": "number of turns",
