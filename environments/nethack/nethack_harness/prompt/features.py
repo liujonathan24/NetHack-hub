@@ -449,3 +449,78 @@ def remembered_monsters(state, raw_obs, game_turn, dlvl) -> list[str]:
         out.append(f"{name} last seen at ({x},{y}), {age} game turns ago "
                    f"- NOT visible now, may have moved")
     return out[:MONSTER_CAP]
+
+
+# ---------------------------------------------------------------------------
+# ADJACENT: the hero's 8 neighbours, around the hero's REAL position.
+# ---------------------------------------------------------------------------
+
+_ADJ_ORDER = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+_ADJ_OFFSETS = {
+    "N": (0, -1), "NE": (1, -1), "E": (1, 0), "SE": (1, 1),
+    "S": (0, 1), "SW": (-1, 1), "W": (-1, 0), "NW": (-1, -1),
+}
+_ADJ_TERRAIN = {
+    ">": ">(stairs DOWN)",
+    "<": "<(stairs UP)",
+    "_": "_(altar)",
+    "{": "{(fountain)",
+    "}": "}(water)",
+    "\\": "\\(throne)",
+    "#": "#",
+}
+
+
+def adjacent_tiles(raw_obs) -> dict[str, str]:
+    """`{"N": ..., ..., "NW": ...}` for the 8 tiles around the hero.
+
+    Replaces `nethack_core.observations.extract_adjacent` for rendering. That
+    one locates the hero as the FIRST `@` on the terminal, so whenever a human
+    or elf (`@`: the Oracle, a shopkeeper, a watchman) is drawn above the hero
+    it described that monster's surroundings: on the Oracle level it listed
+    the Oracle's fountains while hill orcs stood next to the hero. It also named
+    monsters by class letter only (every `G` became "gnome lord").
+
+    Here the hero is `blstats` (x, y), tiles are read from the map-frame
+    `chars`/`glyphs` planes (no menu overlay can bleed in), and a monster is
+    named by its species from the glyph -- the name the game's own farlook
+    (`;`) gives. Peacefulness is not in the glyph, so it is not claimed.
+    """
+    chars = getattr(raw_obs, "chars", None)
+    glyphs = getattr(raw_obs, "glyphs", None)
+    blstats = getattr(raw_obs, "blstats", None)
+    if chars is None or blstats is None:
+        return {}
+    from nethack_core.glyphs import (
+        glyph_is_monster, glyph_is_object, glyph_is_pet, glyph_is_statue,
+        glyph_to_mon, monster_name,
+    )
+    px, py = int(blstats[0]), int(blstats[1])
+    h, w = chars.shape
+    out: dict[str, str] = {}
+    for d in _ADJ_ORDER:
+        dx, dy = _ADJ_OFFSETS[d]
+        x, y = px + dx, py + dy
+        if not (0 <= x < w and 0 <= y < h):
+            out[d] = " "
+            continue
+        c = _ch(chars, y, x)
+        g = int(glyphs[y, x]) if glyphs is not None else -1
+        try:
+            if g >= 0 and glyph_is_monster(g):
+                name = monster_name(glyph_to_mon(g)) or c
+                out[d] = (f"{c}({name})[PET — don't attack]" if glyph_is_pet(g)
+                          else f"{c}({name})")
+                continue
+            if g >= 0 and glyph_is_statue(g):
+                name = monster_name(glyph_to_mon(g)) or "creature"
+                out[d] = f"{c}(statue of a {name}; not a monster)"
+                continue
+            if g >= 0 and glyph_is_object(g):
+                label = SPELLBOOK if c == "+" else FEATURE_LABELS.get(c, "object")
+                out[d] = f"{c}({label})"
+                continue
+        except Exception:
+            pass
+        out[d] = _ADJ_TERRAIN.get(c, c)
+    return out
