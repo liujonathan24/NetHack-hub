@@ -409,3 +409,99 @@ reveal_map = 0.0
 netplay_telemetry = false
 melee_hints = false
 skill_doc_coords = false
+
+# ---------------------------------------------------------------------------
+# E14 DIVERSITY (2026-08-31). One tier per model. THE ONLY DELTA FROM [base] IS
+# `model` -- plus `max_relaunches`, which is explained below and is not a free
+# choice.
+#
+# The arm these are measured against is outputs/e14_uncapped/base_r{1,2,3}
+# (mean BALROG 9.96 +/- 2.19 SE, median 6.96, ceiling Dlvl 13, died 15/15).
+# It is the ONLY arm: E10 capped is superseded and is not a comparator. Because
+# the arm already ran z-ai/glm-5.2 on these seeds, glm-5.2 has no tier here --
+# re-running it would produce a second base arm, which is the thing this
+# registry exists to prevent.
+#
+# max_relaunches = 0, NOT the contract's 2. The contract raised it to 2 in E15
+# so that an empty completion (model returns finish=stop with no text and no
+# tool call) would not end a LIVE run as `agent_completed`. But the arm was
+# measured at 0 -- verified in all three of its config.toml files, and flagged
+# in the contract's own E15 note. Launching at 2 would vary a second factor
+# against the arm, so every cell here pins 0 and `agent_completed` is reported
+# per cell as a first-class outcome instead of being repaired away.
+#
+# If a candidate turns out to lose a large share of its cell to empty
+# completions, the fix is a deliberate follow-up at max_relaunches = 2 WITH a
+# matched glm-5.2 control -- not a quiet edit to these lines.
+#
+# Everything else -- skill_set (np_core,request_map,search: no save, no wiki,
+# no rollback), variant BBOX_MIN, map_detail full, tune.reveal_map = 1.0,
+# auto_dismiss, character, task_spec, max_calls = 0 (uncapped), allow_batching,
+# and all three fix flags -- is inherited from [contract] and [base]. Verify a
+# cell before trusting it:
+#     tool_tiers.py flags base | diff - <(tool_tiers.py flags e14div_luna)
+# which must show ONLY the --model line and the tier provenance lines.
+
+[e14div_luna]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e14div_luna.contract]
+model = "openai/gpt-5.6-luna"
+max_relaunches = 0
+
+[e14div_dsv4flash]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e14div_dsv4flash.contract]
+model = "deepseek/deepseek-v4-flash-0731"
+max_relaunches = 0
+
+[e14div_gemini37]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e14div_gemini37.contract]
+model = "google/gemini-3.7-flash"
+max_relaunches = 0
+
+[e14div_qwen38]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e14div_qwen38.contract]
+model = "qwen/qwen3.8-max"
+max_relaunches = 0
+
+[e14div_kimik3]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e14div_kimik3.contract]
+model = "moonshotai/kimi-k3"
+max_relaunches = 0
+
+# ANTHROPIC MODELS ARE NOT IN THIS SWEEP. Measured, not assumed: the seed-1
+# pilot recorded `cached_input_tokens` of EXACTLY ZERO for claude-fable-5
+# (11.82M fresh input over 222 calls) and claude-sonnet-5 (15.28M over 252),
+# where every other model on Prime cached 87-99% of its input. A NetHack
+# rollout re-sends the whole conversation every call, so with no cache one
+# fable-5 rollout billed $120.04 -- confirmed to the cent against a wallet row,
+# and 4x the remaining balance for a single 15-rollout cell. Sonnet 5 is $462 a
+# cell on the same mechanism. Both reached D4.
+#
+# This is a billing property, not a capability judgement, and it is reversible:
+# Prime exposes `prompt_tokens_details.cache_write_tokens`, so explicit
+# cache-control breakpoints on the Anthropic path would cut these by roughly an
+# order of magnitude. Scope that deliberately before adding these tiers back.
+#
+# [e14div_sol] stays: gpt-5.6-sol caches at 95.8% and cost $0.32 for its pilot
+# rollout.
+[e14div_sol]
+netplay_telemetry = false
+melee_hints = false
+skill_doc_coords = false
+[e14div_sol.contract]
+model = "openai/gpt-5.6-sol"
+max_relaunches = 0
