@@ -148,8 +148,21 @@ class NetHackAgent(NethackBaseAgent):
             if step.is_done():
                 return
 
-            while self.showing_more_message:
+            # LOCAL: bounded. Upstream pressed SPACE for as long as the screen
+            # showed --More--; a screen that SPACE never clears (reached by applying
+            # a nonsense inventory letter) looped forever and grew until the kernel
+            # killed the game server. Give up after MORE_PRESS_LIMIT presses, try
+            # ESC once, and otherwise leave the screen for the agent to answer.
+            presses = 0
+            while self.showing_more_message and presses < self.MORE_PRESS_LIMIT:
                 yield self.step(RawKeyPress.KEYPRESS_SPACE)
+                presses += 1
+            if self.showing_more_message:
+                yield self.step(RawKeyPress.KEYPRESS_ESC)
+                if self.showing_more_message:
+                    yield Step.failed(f"A --More-- screen did not clear after {presses} presses and ESC; "
+                                      "it is left open for you to answer.")
+                    return
 
     def _update_objects(self, generator: Iterator[Step]) -> Iterator[Step]:
         for step in generator:
@@ -186,6 +199,15 @@ class NetHackAgent(NethackBaseAgent):
 
         start_ingame_time = self.blstats.time
         prev_blstats = self.blstats
+        # LOCAL (no-progress guard): the cap below counts in-game turns, so a skill
+        # that keeps sending keys the game rejects without spending a turn (a move
+        # into a doorway diagonal, a wall) looped forever and wedged the game
+        # server. Stop once this many keys in a row leave the clock where it was.
+        # press_key is exempt: its key count is bounded by what the agent typed.
+        idle_keys, idle_since = 0, self.blstats.time
+        # A skill can also loop while yielding only thoughts, sending no key at all;
+        # count every step, and stop that the same way.
+        idle_steps = 0
         try:
             for step in skill(self, **skill_kwargs):
                 if step.is_done():
@@ -194,6 +216,25 @@ class NetHackAgent(NethackBaseAgent):
                     yield Step(step.status, thoughts, step.thought_type, step.step_data)
                     return
                 yield step
+
+                idle_steps = idle_steps + 1 if self.blstats.time == idle_since else 0
+                if idle_steps >= self.MAX_IDLE_STEPS and skill.name != "press_key":
+                    yield Step.failed(f"Skill '{skill_description}' stopped: {idle_steps} steps in a row "
+                                      "without the game clock advancing, so it was making no progress.")
+                    return
+
+                if step.executed_action() and skill.name != "press_key":
+                    if self.blstats.time == idle_since:
+                        idle_keys += 1
+                    else:
+                        idle_keys, idle_since = 0, self.blstats.time
+                    if idle_keys >= self.MAX_IDLE_KEYS:
+                        message = self.current_game_message.strip()
+                        yield Step.failed(
+                            f"Skill '{skill_description}' stopped: {idle_keys} keys in a row did not advance "
+                            f"the game clock, so it was making no progress"
+                            + (f" (the game said: {message!r})" if message else "") + ".")
+                        return
 
                 if (self.blstats.time - start_ingame_time) >= self.max_skill_gamesteps:
                     yield Step.think(f"Skill has been running for {(self.blstats.time - start_ingame_time)} timesteps without interruption. Rethinking.")
@@ -235,6 +276,15 @@ class NetHackAgent(NethackBaseAgent):
     #: so "a monster entered my room" interrupts while monsters wandering in
     #: other rooms (the 60-column-away lichen of the play-tests) do not.
     HOSTILE_NEAR_RADIUS = 7
+    #: Keys in a row that may leave the game clock unchanged before a skill is
+    #: stopped as making no progress (see `_execute_skill`). Menus, prompts and
+    #: `--More--` screens legitimately take a few keys without a turn passing;
+    #: fifty is far above that and far below "forever".
+    MAX_IDLE_KEYS = 50
+    #: Steps of any kind (thoughts included) in a row without the clock moving.
+    MAX_IDLE_STEPS = 200
+    #: SPACE presses spent dismissing one run of --More-- screens.
+    MORE_PRESS_LIMIT = 20
     #: A hostile monster further away than HOSTILE_NEAR_RADIUS but within this
     #: range interrupts only if it is visibly closing in: it moved toward the
     #: hero on APPROACH_STREAK consecutive moves. (Two was too easy for a

@@ -102,6 +102,10 @@ _ALWAYS_PEACEFUL_SPECIES = (
 )
 
 
+#: LOCAL: refused moves in a row after which move_to gives up (see move_to).
+MOVE_REFUSED_LIMIT = 3
+
+
 def _monster_species(glyph) -> str:
     try:
         from nethack_core import glyphs as _g
@@ -185,6 +189,7 @@ def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
     waits = 0
     declined = 0
     declined_at = set()  # tiles whose occupant answered "Really attack?" this call
+    refused = 0  # moves in a row the game refused without a turn passing
     while True:
         if (agent.blstats.x == x and agent.blstats.y == y):
             yield Step.completed(f"Reached position {x, y}.")
@@ -225,8 +230,23 @@ def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
         if len(path) == 2:
             last_move_count += 1
 
+        before = (agent.blstats.x, agent.blstats.y, agent.blstats.time)
         was_declined = yield from _step_declining_attack(
             agent, get_move_action(agent.blstats.x, agent.blstats.y, next_x, next_y), next_x, next_y)
+        # LOCAL: a move the game refuses ("You can't move diagonally out of an
+        # intact doorway") leaves the hero in place without a turn passing, and
+        # the recomputed path asks for the same move again -- upstream looped
+        # here forever. Give up after a few refusals and say why.
+        if not was_declined and (agent.blstats.x, agent.blstats.y, agent.blstats.time) == before:
+            refused += 1
+            if refused >= MOVE_REFUSED_LIMIT:
+                said = agent.current_game_message.strip()
+                yield Step.failed(f"Could not move from {agent.blstats.x, agent.blstats.y} toward {next_x, next_y}"
+                                  + (f": the game said {said!r}" if said else ": the move was refused")
+                                  + f", {refused} times in a row.")
+                return
+        else:
+            refused = 0
         if was_declined:
             declined += 1
             declined_at.add((next_x, next_y))
