@@ -2296,7 +2296,11 @@ def _obs_tty_has_more(obs) -> bool:
         tty = obs.get("tty_chars") if isinstance(obs, dict) else getattr(obs, "tty_chars", None)
         if tty is None:
             return False
-        return any(b"--More--" in bytes(int(c) for c in row) for row in tty[:3])
+        # Rows joined, not searched one by one: a long first message wraps and
+        # splits the marker across rows ("...--" / "More--..."), which a per-row
+        # search misses (the Archeologist's welcome line does this). The replay
+        # grader in residency-environments mirrors this check exactly.
+        return b"--More--" in b"".join(bytes(int(c) for c in row) for row in tty[:3])
     except Exception:
         return False
 
