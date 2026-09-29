@@ -99,6 +99,9 @@ class _FakeAgent:
 
 def test_press_key_sends_one_step_per_key_and_reports_all_sent():
     agent = _FakeAgent()
+    # The engraving text prompt reads a line (in_getlin); a CR with every flag
+    # clear would be dropped as stray (see test_enter_prompt.py).
+    agent.last_observation["misc"] = np.array([0, 1, 0])
     steps = _run(skills.press_key, agent, key="E-Elbereth<ENTER>")
     assert agent.sent == _codes("E-Elbereth<ENTER>")
     assert steps[-1].has_completed()

@@ -432,6 +432,30 @@ def _on_extended_command_prompt(agent: NetHackAgent) -> bool:
         return False
 
 
+#: What the agent is told when an ENTER is not sent (see `_enter_would_be_dropped`).
+ENTER_NOT_SENT = (
+    "ENTER was not sent: the game is not reading a typed line or an answer here, so it would do nothing. "
+    "At the command prompt ENTER is not a command. At a 'Where do you want to ...' or 'Pick ...' cursor "
+    "prompt, move the cursor and press '.' or ',' to pick the spot, or <ESC> to cancel."
+)
+
+
+def _enter_would_be_dropped(agent: NetHackAgent) -> bool:
+    """True when the harness would drop an ENTER right now.
+
+    NetPlayEngineEnv.step drops a CR while the game is not reading input (the
+    `misc` flags all clear) and the `#` prompt is not open, because NetHack would
+    only answer `Unknown command '^M'`. Cursor (getpos) prompts also leave the
+    flags clear, so an ENTER there is dropped too. The skill checks the same
+    condition first so it can say so instead of reporting the key as pressed.
+    """
+    try:
+        misc = [int(v) for v in np.asarray(agent.last_observation["misc"]).reshape(-1)]
+        return not any(misc) and not _on_extended_command_prompt(agent)
+    except Exception:
+        return False
+
+
 def _character_died(agent: NetHackAgent) -> bool:
     try:
         if int(agent.blstats.hitpoints) <= 0:
@@ -486,17 +510,22 @@ def press_key(agent: NetHackAgent, key: str):
         return
 
     total = len(keys)
+    skipped = []
     for i, k in enumerate(keys):
         code = k
         if k == RawKeyPress.KEYPRESS_ENTER and _on_extended_command_prompt(agent):
             code = RawKeyPress.KEYPRESS_LINEFEED
+        elif k == RawKeyPress.KEYPRESS_ENTER and _enter_would_be_dropped(agent):
+            # LOCAL: the harness would drop this ENTER without a word; skip it and say so.
+            skipped.append(i + 1)
+            continue
         if total == 1:
             thoughts = f"Pressing key '{key}'."
         elif i == 0:
             thoughts = f"Pressing {total} keys '{key}'."
         else:
             thoughts = None
-        if total > 1 and i == total - 1:
+        if total > 1 and i == total - 1 and not skipped:
             # On the last key's own step, so it is reported even when the
             # skill is interrupted right after that step.
             thoughts = f"{thoughts} Pressed all {total} keys." if thoughts else f"Pressed all {total} keys."
@@ -517,6 +546,10 @@ def press_key(agent: NetHackAgent, key: str):
             return
         yield step
 
+    if skipped:
+        where = "" if total == 1 else f" (key {', '.join(str(n) for n in skipped)} of {total})"
+        yield Step.failed(ENTER_NOT_SENT.replace("ENTER was not sent", f"ENTER was not sent{where}", 1))
+        return
     yield Step.completed()
 
 @skill(

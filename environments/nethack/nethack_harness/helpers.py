@@ -1084,16 +1084,40 @@ def _cr_would_be_unknown_command(obs) -> bool:
         getlin ("write what?")    -> (0, 1, 0)
         inventory menu, "(end)"   -> (0, 0, 1)
 
-    So a CR is stray iff every flag is clear. Anything else -- including a state
-    we cannot read -- is treated as "a prompt might be open", and the CR is sent
-    unchanged. Never raises: a detector failure must not break a rollout, and
-    failing open only restores the previous behaviour.
+    So a CR is stray iff every flag is clear -- except at the `#` extended-command
+    prompt, which the engine reads without raising any flag (see
+    `_ext_cmd_prompt_open`); there the CR submits the command. Anything else --
+    including a state we cannot read -- is treated as "a prompt might be open",
+    and the CR is sent unchanged. Never raises: a detector failure must not break
+    a rollout, and failing open only restores the previous behaviour.
     """
     try:
         misc = obs.get("misc") if isinstance(obs, dict) else getattr(obs, "misc", None)
         if misc is None:
             return False
-        return all(int(v) == 0 for v in misc)
+        return all(int(v) == 0 for v in misc) and not _ext_cmd_prompt_open(obs)
+    except Exception:
+        return False
+
+
+def _ext_cmd_prompt_open(obs) -> bool:
+    """True while the `#` extended-command prompt is reading input.
+
+    The engine reads that prompt with tty_get_ext_cmd, which (unlike getlin)
+    raises none of the `misc` flags, so it looks exactly like the command
+    prompt. It is recognised from the screen: the flags all clear, the cursor
+    on the top line, and the top line starting with `#`. Never raises.
+    """
+    try:
+        get = obs.get if isinstance(obs, dict) else (lambda name: getattr(obs, name, None))
+        misc, cursor, tty = get("misc"), get("tty_cursor"), get("tty_chars")
+        if misc is None or cursor is None or tty is None:
+            return False
+        if any(int(v) for v in misc):
+            return False
+        if int(list(cursor)[0]) != 0:
+            return False
+        return bytes(int(c) for c in tty[0]).startswith(b"#")
     except Exception:
         return False
 
