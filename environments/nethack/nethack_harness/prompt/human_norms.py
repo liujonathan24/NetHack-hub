@@ -29,6 +29,22 @@ def norm_xl_for_leaving(dlvl: int) -> int:
     return best
 
 
+def norm_xl_for_arriving(dlvl: int) -> int:
+    """Median XL human winners have on FIRST ARRIVAL at dlvl (nearest lower).
+
+    The pacing directive compares against THIS on arrival. Using the leaving
+    norm there (one depth ahead) made the directive fire on 100% of arrivals
+    at depth >= 3 in E15 P2 r1 — an agent exactly on the human arrival pace
+    was still told it was lagging.
+    """
+    t = _table()
+    best = 1
+    for d in sorted(t):
+        if d <= dlvl:
+            best = t[d]
+    return best
+
+
 MECHANIC_HINT_BLOCKS = {
     "prayer": (
         "=== PRAYER (game mechanic) ===\n"

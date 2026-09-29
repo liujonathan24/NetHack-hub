@@ -145,5 +145,29 @@ rollout = 7200.0
 # (it allows only stop|length|tool_calls|content_filter|function_call); pydantic
 # raises inside the interception server and the harness exits 1. Measured: 1 of
 # 20 rollouts lost this way. The default is max_retries=0, so one hiccup is fatal.
+#
+# ONE RETRY, NOT TWO -- THIS IS A COST MULTIPLIER. `run_with_retry`
+# (verifiers/v1/retries.py) replays the ENTIRE trajectory from turn 1, and the
+# discarded attempts' token usage never reaches `traces.jsonl`, so a retried
+# rollout is billed but not costed. Measured (E16 method test): a `429 Rate
+# limit reached` storm drove `retry 1/2` then `retry 2/2` and billed $31.43 for
+# one attempt that still ended `censored:harness_error`.
+#
+# The failure this knob exists for -- the `finish_reason` schema rejection -- is
+# a FIRST-CALL fault, costs nothing to replay, and is independent per attempt,
+# so retry 1 recovers essentially all of it. Retry 2 only pays off on a failure
+# CORRELATED in time, and the headline correlated failure is a rate-limit storm,
+# which `run_with_retry` re-enters immediately: unlike the framework's shared
+# `retrying()` policy it passes no `wait=`, so there is NO backoff between
+# attempts. Retry 2 therefore buys a third full rollout at the one moment
+# retrying cannot work. Worst case per attempt: 2x, not 3x.
+#
+# `exclude` names failures a whole-trajectory replay can never fix -- an
+# over-long prompt hits the same context wall, and task/user code raising is
+# deterministic. Retrying those is pure cost. `ProviderError` is deliberately
+# NOT excluded: it is the transient this knob was bought for.
+#
+# Override per launch with `ROLLOUT_MAX_RETRIES` (launch_cell.sh, hard-capped).
 [retries.rollout]
-max_retries = 2
+max_retries = 1
+exclude = ["OverlongPromptError", "TaskError", "UserError"]

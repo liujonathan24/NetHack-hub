@@ -427,3 +427,147 @@ def test_a_seed_count_that_contradicts_the_contract_is_refused(tmp_path):
     _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "pf"), "3", "1"],
                    {"TOOL_TIER": "base", "TIER_SHORT_BUDGET": "1", **_tier_env()})
     assert _pairs(argv)["--taskset.env_args.tier_short_budget"] == "true"
+
+
+# --------------------------------------------------------------------------- #
+# E16_ARGS: the whitelisted knob, and the multi-line value that broke it
+# --------------------------------------------------------------------------- #
+
+#: What an E16 attempt actually sends. `ledger_text` is the rendered archive
+#: table plus the checkpoint's lessons plus its quoted conversation prefix, so
+#: it is MULTI-LINE by construction -- there is no E16 attempt whose ledger is
+#: one line.
+_E16_LEDGER = (
+    "CHECKPOINT ARCHIVE (2 saved state(s); 1 on the Dlvl/XL/score frontier).\n"
+    "  id  Dlvl  XL   HP     turn   score  attempts  name / why it was saved\n"
+    "->   2     1   1  13/16      4      0         0  fountain room\n"
+    "\n"
+    "THE PLAN THAT WAS LIVE WHEN THIS STATE WAS SAVED (quoted from that "
+    "session, not your own memory):\n"
+    "(assistant) Plan: the east corridor is a dead end.\n"
+    "(user) You move west. There is a fountain here."
+)
+
+
+def test_e16_args_survives_a_multi_line_ledger_as_one_argv_item(tmp_path):
+    """THE BUG THAT WOULD HAVE KILLED THE RUN, as a regression test.
+
+    `mapfile -t` over newline-separated records splits ONE multi-line value into
+    one array element per LINE. Every line after the first then reaches the eval
+    CLI as a bare positional argument, and the run dies at boot with
+    "Unrecognized arguments: id Dlvl XL HP turn score ...".
+
+    Nothing upstream caught it. The 4-attempt no-inference dry run uses a stub
+    player and never goes through this script; the model-in-the-loop sims passed
+    only a single-line `directive`. The first real resumed rollout hit it
+    immediately, which is to say: EVERY E16 attempt would have.
+    """
+    e16 = json.dumps({
+        "resume_checkpoint": str(tmp_path / "archive" / "c2"),
+        "checkpoint_archive": str(tmp_path / "archive"),
+        "wiki_dir": str(tmp_path / "wiki"),
+        "ledger_text": _E16_LEDGER,
+        "fidelity_log": str(tmp_path / "fid.jsonl"),
+        "directive": "Follow the plan quoted from the earlier session.",
+    })
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "12", "1"],
+                        {"TOOL_TIER": "e16_gewiki", "SEEDS": "[1]",
+                         "TIER_SHORT_BUDGET": "1", "E16_ARGS": e16,
+                         **_tier_env()})
+    assert result.returncode == 0, result.stderr[-2000:]
+    got = _pairs(argv)
+    # ONE argv item, byte-identical, newlines and all.
+    assert got["--taskset.env_args.ledger_text"] == _E16_LEDGER
+    assert "\n" in got["--taskset.env_args.ledger_text"]
+    # And no fragment of it leaked out as a bare positional.
+    for stray in ("id", "Dlvl", "(user)", "fountain"):
+        assert stray not in argv, (
+            f"{stray!r} reached the eval CLI as a bare positional argument; "
+            f"the multi-line value was split")
+    assert got["--taskset.env_args.directive"] == \
+        "Follow the plan quoted from the earlier session."
+
+
+def test_e16_args_still_refuses_a_key_no_tier_could_ever_write(tmp_path):
+    """The whitelist is the reason this knob is allowed next to TOOL_TIER."""
+    result, _ = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "12", "1"],
+                     {"TOOL_TIER": "e16_gewiki", "SEEDS": "[1]",
+                      "TIER_SHORT_BUDGET": "1",
+                      "E16_ARGS": json.dumps({"skill_set": "full"}),
+                      **_tier_env()})
+    assert result.returncode == 2
+    assert "not allowed" in result.stderr
+
+
+def test_e16_args_carries_the_reseed_pair(tmp_path):
+    """`--reseed` reaches the player as a scalar, and is ABSENT by default.
+
+    Absent matters as much as present: an attempt that was not asked to reseed
+    must be handed no reseed argument at all, rather than a zero pair, which
+    would be a third stochastic semantics no provenance field describes.
+    """
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "on"), "12", "1"],
+                   {"TOOL_TIER": "e16_gewiki", "SEEDS": "[1]",
+                    "TIER_SHORT_BUDGET": "1",
+                    "E16_ARGS": json.dumps({"reseed": "[424242, 99]"}),
+                    **_tier_env()})
+    assert _pairs(argv)["--taskset.env_args.reseed"] == "[424242, 99]"
+
+    _, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "off"), "12", "1"],
+                   {"TOOL_TIER": "e16_gewiki", "SEEDS": "[1]",
+                    "TIER_SHORT_BUDGET": "1",
+                    "E16_ARGS": json.dumps({"directive": "descend"}),
+                    **_tier_env()})
+    assert "--taskset.env_args.reseed" not in _pairs(argv)
+
+
+# --------------------------------------------------------------------------
+# ROLLOUT RETRIES ARE A COST MULTIPLIER, SO THEY ARE BOUNDED
+# --------------------------------------------------------------------------
+#
+# `verifiers/v1/retries.py:run_with_retry` replays the WHOLE trajectory, so
+# `max_retries = N` means one attempt can bill N+1 full rollouts. Measured in
+# the E16 method test: a `429 Rate limit reached` storm drove `retry 1/2` then
+# `retry 2/2` and billed $31.43 for an attempt that ended
+# `censored:harness_error`. The knob has to be settable per launch AND capped,
+# because a typo here is the unbounded-cost failure itself.
+
+
+def test_rollout_retries_are_not_overridden_unless_asked(tmp_path):
+    """Unset means "whatever the arm config pins" — the launcher must not
+    silently inject a retry policy the config did not choose."""
+    _result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"])
+    assert "--retries.rollout.max_retries" not in argv
+
+
+def test_rollout_max_retries_reaches_the_eval_cli(tmp_path):
+    _result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                         env_extra={"ROLLOUT_MAX_RETRIES": "0"})
+    assert argv[argv.index("--retries.rollout.max_retries") + 1] == "0"
+
+
+def test_rollout_max_retries_above_the_cap_is_refused(tmp_path):
+    """The cap is the whole point: 5 retries is a 6x bill, and nothing else in
+    this pipeline would notice until the invoice arrived."""
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                        env_extra={"ROLLOUT_MAX_RETRIES": "5"})
+    assert result.returncode == 2, result.stdout
+    assert "exceeds the cap" in result.stderr
+    assert argv is None, "the eval CLI must never be reached"
+
+
+def test_rollout_max_retries_must_be_an_integer(tmp_path):
+    result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                        env_extra={"ROLLOUT_MAX_RETRIES": "2; rm -rf /"})
+    assert result.returncode == 2
+    assert "non-negative integer" in result.stderr
+    assert argv is None
+
+
+def test_the_cap_itself_can_be_raised_deliberately(tmp_path):
+    """Bounded, not forbidden: a deliberate override must still be possible, and
+    must have to say so."""
+    _result, argv = _run(tmp_path, ["prime_agent", str(tmp_path / "out"), "0", "1"],
+                         env_extra={"ROLLOUT_MAX_RETRIES": "4",
+                                    "ROLLOUT_MAX_RETRIES_CAP": "4"})
+    assert argv[argv.index("--retries.rollout.max_retries") + 1] == "4"

@@ -41,6 +41,16 @@ _HARNESS_SIDE = {"skill_doc_coords"}
 _PRIME_AGENT_ARMS = {"prime_agent", "prime_agent_b80"}
 
 
+def _cli_value(v) -> str:
+    """A scalar as the eval CLI expects it: strings RAW (json.dumps would ship
+    the quotes into the config -- a tier key `descent_gate = "norm"` must reach
+    the env as norm, not "norm"), everything else JSON so 1.0/true coerce.
+    Same contract as launch_cell.sh's ENV_ARGS flattener. The existing tiers
+    carry only booleans, which json.dumps identically -- byte-identical output
+    for [base]/[human]/[continual]."""
+    return v if isinstance(v, str) else json.dumps(v)
+
+
 def load(path: Path = TIER_FILE) -> dict:
     return tomllib.load(open(path, "rb"))
 
@@ -66,6 +76,25 @@ def tiers(cfg: dict) -> list[str]:
     return [k for k in cfg if k not in ("contract",)]
 
 
+def contract_for(tier: str | None, cfg: dict | None = None,
+                 *, path: Path = TIER_FILE) -> dict:
+    """The cell contract as `tier` runs it: the global [contract] with the
+    tier's own [<tier>.contract] overrides merged over it (one level deep for
+    sub-tables such as `tune`, so an experiment tier can add a generation knob
+    without restating -- or accidentally dropping -- reveal_map). No tier, or a
+    tier without overrides, returns the global contract unchanged: every
+    pre-existing caller behaves byte-identically."""
+    cfg = cfg or load(path)
+    base = dict(cfg["contract"])
+    if tier and tier in cfg:
+        for k, v in (cfg[tier].get("contract") or {}).items():
+            if isinstance(v, dict) and isinstance(base.get(k), dict):
+                base[k] = {**base[k], **v}
+            else:
+                base[k] = v
+    return base
+
+
 def flags(tier: str, arm: str = "prime_agent", cfg: dict | None = None,
           *, path: Path = TIER_FILE) -> list[str]:
     """The eval-CLI override flags for `tier` on `arm`, ready to splice into argv."""
@@ -75,11 +104,17 @@ def flags(tier: str, arm: str = "prime_agent", cfg: dict | None = None,
             f"tool_tiers: unknown tier {tier!r} (have: {', '.join(tiers(cfg))}). "
             "A new tier needs a section in tool_tiers.toml, not a launcher edit."
         )
-    contract = cfg["contract"]
+    contract = contract_for(tier, cfg)
     out: list[str] = [
         "--taskset.env_args.skill_set", contract["skill_set"],
         "--taskset.env_args.auto_dismiss", contract["auto_dismiss"],
-        "--taskset.env_args.tune.reveal_map", json.dumps(contract["tune"]["reveal_map"]),
+    ]
+    # EVERY tune leaf, not just reveal_map: an experiment tier's contract can
+    # add generation knobs (locked_door, room_density), and dotted leaves merge
+    # into the config's table where a whole-object override would replace it.
+    for k in sorted(contract["tune"]):
+        out += [f"--taskset.env_args.tune.{k}", json.dumps(contract["tune"][k])]
+    out += [
         # model / character / task_spec were declared in the contract but never
         # emitted -- they only happened to match configs/prime_agent.toml, so a
         # change to that file would have moved the "baseline" without touching
@@ -98,13 +133,22 @@ def flags(tier: str, arm: str = "prime_agent", cfg: dict | None = None,
             "--harness.max_relaunches", json.dumps(contract["max_relaunches"]),
         ]
     for name, value in cfg[tier].items():
+        if name == "contract":
+            continue  # per-tier contract overrides, consumed by contract_for()
         if name in _HARNESS_SIDE:
             # Silently skipping would give the wrong doc; the launcher refuses
             # the combination instead (see launch_cell.sh).
             if arm in _PRIME_AGENT_ARMS:
                 out += [f"--harness.{name}", json.dumps(value)]
+        elif isinstance(value, dict):
+            # Flatten to dotted leaves: a dict value would reach the CLI as one
+            # JSON blob and REPLACE the whole sub-table (dropping e.g.
+            # tune.reveal_map); dotted scalars merge, same as the launcher's
+            # ENV_ARGS flattener.
+            for k in sorted(value):
+                out += [f"--taskset.env_args.{name}.{k}", _cli_value(value[k])]
         else:
-            out += [f"--taskset.env_args.{name}", json.dumps(value)]
+            out += [f"--taskset.env_args.{name}", _cli_value(value)]
     # Provenance, into the run's own config.toml.
     out += [
         "--taskset.env_args.tool_tier", tier,
@@ -122,7 +166,10 @@ def main() -> int:
     cfg = load()
 
     if cmd == "contract":
-        print(json.dumps(cfg["contract"]))
+        # `contract [tier]`: with a tier, its [<tier>.contract] overrides are
+        # merged in (variant, skill_set, tune knobs); bare `contract` is the
+        # global table, unchanged for existing callers.
+        print(json.dumps(contract_for(sys.argv[2] if len(sys.argv) > 2 else None, cfg)))
         return 0
     if cmd == "show":
         print(f"registry : {TIER_FILE}")

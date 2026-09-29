@@ -492,3 +492,99 @@ def test_explore_level_plus_down_descends_past_dlvl_1():
         )
     finally:
         env.close()
+
+
+# --------------------------------------------------------------------------
+# The livelock guard: a refused action costs zero in-game turns, and in-game
+# turns are the only bound upstream's skill loop has.
+# --------------------------------------------------------------------------
+
+def test_refused_action_does_not_livelock_the_skill_loop():
+    """A skill that keeps issuing an action the game refuses must terminate.
+
+    THE BUG THIS EXISTS FOR, measured on E16 run `treesmoke`. Upstream's skill
+    loop (and our `_execute_skill_filtered`) stop when
+    `blstats.time - start_ingame_time >= agent.max_skill_gamesteps`. NetHack
+    charges NO game time for an action it refuses, so that delta can stay 0
+    forever: a skill re-issuing one refused action runs without bound. The
+    engine env accepts a `no_progress_timeout` but never reads it, so nothing
+    underneath stops it either.
+
+    Live consequence: resuming checkpoint `c2` left the hero on an intact
+    doorway, `explore_level` chose a diagonal first leg, NetHack answered "You
+    can't move diagonally out of an intact doorway", and the rollout spun
+    18,000+ engine steps at 100% CPU inside one tool call until the agent's MCP
+    client abandoned it at 300s. Nothing raised, nothing logged: the operator
+    saw a rollout that produced one turn and then stopped forever.
+
+    ESC in command context is the same shape of action -- accepted, refused,
+    zero game time -- without needing a doorway to stand on. The generator is
+    capped so that a REGRESSION FAILS rather than hangs the suite.
+    """
+    from netplay.core.skill import Skill
+    from nethack_harness.tools import netplay_true as npt
+
+    hard_cap = npt.NO_PROGRESS_STEP_LIMIT * 20
+    issued = {"n": 0}
+
+    def _never_progresses(agent):
+        while issued["n"] < hard_cap:
+            issued["n"] += 1
+            yield agent.step(27)  # ESC: accepted, refused, costs zero game time
+
+    skill = Skill(fn=_never_progresses, name="_test_livelock",
+                  description="", parameters=[])
+
+    env = _fresh_env()
+    try:
+        before = env.last_observation[env.observation_keys.index("blstats")]
+        start = (int(before[20]), int(before[0]), int(before[1]))
+
+        res = npt.run_netplay_skill(env, skill, {})
+
+        assert issued["n"] < hard_cap, (
+            f"the skill loop never stopped on its own: it issued all "
+            f"{hard_cap} refused actions the test was willing to supply. "
+            f"Without a no-progress bound this is an infinite loop."
+        )
+        assert issued["n"] <= npt.NO_PROGRESS_STEP_LIMIT + 5, (
+            f"guard fired late: {issued['n']} actions for a limit of "
+            f"{npt.NO_PROGRESS_STEP_LIMIT}"
+        )
+        assert "INTERRUPTED" in res.feedback and "clock" in res.feedback, (
+            f"the break must be reported to the agent, not silent: {res.feedback!r}"
+        )
+
+        after = env.last_observation[env.observation_keys.index("blstats")]
+        end = (int(after[20]), int(after[0]), int(after[1]))
+        assert end == start, (
+            f"the premise of the test is that nothing changed: {start} -> {end}"
+        )
+    finally:
+        env.close()
+
+
+def test_progressing_skill_is_not_cut_short_by_the_livelock_guard():
+    """The guard must not touch a skill that is actually making progress.
+
+    `explore_level` legitimately takes hundreds of engine steps per call --
+    many of them (menu paging, `--More--` acknowledgement) at a frozen clock.
+    Only a CONSECUTIVE no-progress run may trip the guard, so a real explore
+    must still run to its normal in-game-turn bound.
+    """
+    from nethack_harness.tools import netplay_true as npt
+
+    env = _fresh_env()
+    try:
+        before = env.last_observation[env.observation_keys.index("blstats")]
+        start_time = int(before[20])
+
+        res = registry.call("np_explore_level", env, None)
+
+        after = res.final_obs.blstats
+        assert int(after[20]) > start_time, "explore must still advance the clock"
+        assert "without the game clock advancing" not in res.feedback, (
+            f"livelock guard fired on a healthy explore: {res.feedback!r}"
+        )
+    finally:
+        env.close()

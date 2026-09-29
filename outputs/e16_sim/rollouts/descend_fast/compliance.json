@@ -1,0 +1,70 @@
+{
+  "rollout": "/tmp/claude-0/-root/3382b9f1-b1ec-4e18-9c3e-4585c4167d08/scratchpad/e16sim/rollouts/descend_fast",
+  "rubric": "descend_fast",
+  "directive": "Descend as fast as possible. Find the down staircase and take it immediately. Do not explore, do not fight anything you can walk around.",
+  "label": "prevented",
+  "why": "the attempt ended on call budget with the directive's goal check still unmet, and the behaviour shows it was being pursued (moved toward or tried to take the down staircase). Scored `prevented`, not `ignored`.",
+  "by_clause_kind": {
+    "prohibition": {
+      "label": "partially",
+      "checks": [
+        "no_fighting",
+        "no_exploring"
+      ],
+      "n_satisfied": 1,
+      "n_violated": 1
+    },
+    "goal": {
+      "label": "prevented",
+      "checks": [
+        "did_descend"
+      ],
+      "n_satisfied": 0,
+      "n_violated": 1
+    }
+  },
+  "pursued": true,
+  "pursued_desc": "moved toward or tried to take the down staircase",
+  "checks": [
+    {
+      "name": "did_descend",
+      "result": "violated",
+      "why": "descent_count=0"
+    },
+    {
+      "name": "no_fighting",
+      "result": "satisfied",
+      "why": "no attack skill calls"
+    },
+    {
+      "name": "no_exploring",
+      "result": "violated",
+      "why": "7 np_explore_level call(s)"
+    }
+  ],
+  "n_satisfied": 1,
+  "n_violated": 2,
+  "n_no_evidence": 0,
+  "flag_no_positive_evidence": false,
+  "metrics": {
+    "descent_count": 0.0,
+    "max_dlvl_reached": 1.0,
+    "max_xp_level": 1.0,
+    "skill_calls": 10.0,
+    "died": 0.0,
+    "budget_exhausted": 1.0
+  },
+  "skill_calls": [
+    "request_map()",
+    "np_move_to(x=8, y=4)",
+    "np_explore_level()",
+    "np_explore_level()",
+    "np_explore_level()",
+    "request_map()",
+    "np_move_to(x=8, y=4)",
+    "np_explore_level()",
+    "np_explore_level()",
+    "np_explore_level()",
+    "np_explore_level()"
+  ]
+}

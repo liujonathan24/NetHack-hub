@@ -1,0 +1,10 @@
+# Verification OUTPUT, not source. The parity runs produce ~60 MB of raw engine
+# dumps (two full observation streams plus 10 MB tty captures per engine). They
+# are what the diff was computed FROM, they regenerate from the scripts here,
+# and their identity is already recorded by checksum in the reports that are
+# tracked. Keeping them out of git keeps the repo usable.
+*.ndjson
+*.tty.bin
+*.log
+reproA_*/
+reproB_*/

@@ -1,0 +1,14 @@
+Round 20. Attempt 19 ran from the checkpoint you chose, under the directive you
+wrote. Player summary:
+
+"Restored on D11 at 29/47. I engraved Elbereth in the corridor and rested to
+44/47 over 210 game turns, exactly as instructed. Descended to D12 at 44 HP.
+A soldier ant attacked immediately; I killed it at 31 HP. Then a second soldier
+ant came from the same side room and killed me on game turn 4903."
+
+Answer briefly, from memory -- no files, no code:
+1. Name your strategy's codename again and say whether attempt 19 confirmed or
+   falsified it. Be specific about which part.
+2. Was the directive followed? Quote the part of the summary that decides it.
+3. Choose the next checkpoint and say whether you are changing course from what
+   you decided last round, and why.

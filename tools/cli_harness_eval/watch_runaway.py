@@ -96,7 +96,13 @@ def zombie_checks(rows: list[dict], window: int = 12) -> list[str]:
 def scan(run_dir: pathlib.Path, calls_max: int, stall_min: float):
     now = time.time()
     out = []
-    for f in sorted(run_dir.glob("round*/corpus__prime_agent/turns/*.ndjson")):
+    # Layout-agnostic. This used to hardcode E13's `round*/corpus__prime_agent/`
+    # shape, so pointing it at a plain cell tree (the base/human arms, which are
+    # `<tier>_r<n>__prime_agent/`) matched ZERO files and reported a clean bill
+    # of health for rollouts it had never looked at. A detector that finds
+    # nothing must say so, not imply everything is fine -- see the empty-scan
+    # warning in main().
+    for f in sorted(run_dir.glob("**/turns/*.ndjson")):
         m = TURN_RE.match(f.name)
         if not m:
             continue
@@ -156,6 +162,13 @@ def main() -> int:
     ap.add_argument("--kill-runaway", action="store_true",
                     help="also terminate rollouts flagged only for length or stall")
     a = ap.parse_args()
+    # An empty scan is ambiguous -- no rollouts, or a path that matches nothing --
+    # and the two look identical from the exit code. Say which.
+    n_turns = len(list(a.run_dir.glob("**/turns/*.ndjson")))
+    if n_turns == 0:
+        print(f"[runaway] WARNING: no turn files under {a.run_dir} -- nothing was "
+              f"checked. This is not an all-clear.")
+        return 0
     hits = scan(a.run_dir, a.calls, a.stall_min)
     for h in hits:
         tag = "ZOMBIE" if h.get("zombie") else "runaway"
@@ -165,8 +178,21 @@ def main() -> int:
         killable = (a.kill and h.get("zombie")) or (a.kill_runaway and not h.get("zombie"))
         if killable and h["alive"]:
             try:
+                # Escalate. A tool server spinning at 100% CPU inside a
+                # NetPlay skill call does not service signals, so SIGTERM alone
+                # leaves it running -- observed repeatedly: the same pid was
+                # re-flagged minutes after a "successful" TERM. Give it a short
+                # grace period to exit cleanly, then SIGKILL.
                 os.kill(h["pid"], signal.SIGTERM)
-                print(f"[runaway]   SIGTERM -> {h['pid']}")
+                for _ in range(20):          # up to 2s
+                    time.sleep(0.1)
+                    if not os.path.isdir(f"/proc/{h['pid']}"):
+                        break
+                if os.path.isdir(f"/proc/{h['pid']}"):
+                    os.kill(h["pid"], signal.SIGKILL)
+                    print(f"[runaway]   SIGTERM ignored -> SIGKILL {h['pid']}")
+                else:
+                    print(f"[runaway]   SIGTERM -> {h['pid']}")
             except OSError as e:
                 print(f"[runaway]   could not signal {h['pid']}: {e}")
     return 1 if hits else 0
