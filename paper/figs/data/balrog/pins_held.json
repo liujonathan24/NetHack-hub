@@ -1,0 +1,5 @@
+{"GLM-5.2 base": [-8, 6, "right", "bottom"],
+ "Mistral-Nemo": [6, -6, "left", "top"],
+ "Gem-3.1-Pro-T": [9, 5, "left", "bottom"],
+ "Gem-3-Pro": [-8, 5, "right", "bottom"],
+ "Gem-3.1-Pro": [9, -2, "left", "center"]}

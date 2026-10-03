@@ -1,0 +1,114 @@
+[
+ {
+  "game": "Crafter",
+  "n": 10,
+  "base_prog": 0.5455,
+  "pae_prog": 0.6591,
+  "base_cost_per_run": 0.1238,
+  "pae_cost_per_run": 1.003,
+  "total": 10.03,
+  "ctl_prog": 0.7227,
+  "ctl_cost_per_run": 3.9395
+ },
+ {
+  "game": "TextWorld treasure_hunter",
+  "n": 10,
+  "base_prog": 0.1,
+  "pae_prog": 0.9,
+  "base_cost_per_run": 0.0244,
+  "pae_cost_per_run": 0.0782,
+  "total": 0.782,
+  "ctl_prog": 0.9,
+  "ctl_cost_per_run": 0.1304
+ },
+ {
+  "game": "TextWorld the_cooking_game",
+  "n": 10,
+  "base_prog": 0.5588,
+  "pae_prog": 0.9,
+  "base_cost_per_run": 0.0475,
+  "pae_cost_per_run": 0.2326,
+  "total": 2.326,
+  "ctl_prog": 0.8059,
+  "ctl_cost_per_run": 0.4334
+ },
+ {
+  "game": "TextWorld coin_collector",
+  "n": 10,
+  "base_prog": 0.6,
+  "pae_prog": 1.0,
+  "base_cost_per_run": 0.0809,
+  "pae_cost_per_run": 0.1375,
+  "total": 1.375,
+  "ctl_prog": 1.0,
+  "ctl_cost_per_run": 0.1759
+ },
+ {
+  "game": "MiniHack CorridorBattle-Dark",
+  "n": 5,
+  "base_prog": 0.0,
+  "pae_prog": 0.8,
+  "base_cost_per_run": 0.1064,
+  "pae_cost_per_run": 0.4044,
+  "total": 2.022,
+  "ctl_prog": 0.6,
+  "ctl_cost_per_run": 0.6145
+ },
+ {
+  "game": "MiniHack Corridor-R3",
+  "n": 5,
+  "base_prog": 0.2,
+  "pae_prog": 0.6,
+  "base_cost_per_run": 0.377,
+  "pae_cost_per_run": 1.8849,
+  "total": 9.424,
+  "ctl_prog": 0.6,
+  "ctl_cost_per_run": 2.7022
+ },
+ {
+  "game": "MiniHack MazeWalk-15x15",
+  "n": 5,
+  "base_prog": 0.0,
+  "pae_prog": 0.2,
+  "base_cost_per_run": 0.246,
+  "pae_cost_per_run": 2.1644,
+  "total": 10.822
+ },
+ {
+  "game": "MiniHack MazeWalk-9x9",
+  "n": 5,
+  "base_prog": 1.0,
+  "pae_prog": 1.0,
+  "base_cost_per_run": 0.0341,
+  "pae_cost_per_run": 0.0341,
+  "total": 0.171
+ },
+ {
+  "game": "MiniHack Quest-Easy",
+  "n": 4,
+  "base_prog": 0.0,
+  "pae_prog": 0.0,
+  "base_cost_per_run": 0.0765,
+  "pae_cost_per_run": 0.7654,
+  "total": 3.062
+ },
+ {
+  "game": "MiniHack Quest-Medium",
+  "n": 1,
+  "base_prog": 0.0,
+  "pae_prog": 0.0,
+  "base_cost_per_run": 0.1145,
+  "pae_cost_per_run": 1.1453,
+  "total": 1.145
+ },
+ {
+  "game": "MiniHack Boxoban-Medium",
+  "n": 0,
+  "note": "EXCLUDED: 35.1% of steps defaulted by provider truncation (0% on all other tasks); not protocol-comparable"
+ },
+ {
+  "game": "MiniHack Boxoban-Hard",
+  "n": 0,
+  "note": "NOT RUN: held behind the Medium gate, which closed"
+ }
+]

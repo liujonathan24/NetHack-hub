@@ -1,0 +1,206 @@
+{
+ "all4_balmax": [
+  {
+   "label": "gpt-6-astra",
+   "kind": "lb",
+   "prog": 0.523925,
+   "cost": 910.0749999999999
+  },
+  {
+   "label": "claude-opus-5",
+   "kind": "lb",
+   "prog": 0.461375,
+   "cost": 1110.92625
+  },
+  {
+   "label": "gpt-5.6-sol",
+   "kind": "lb",
+   "prog": 0.41290000000000004,
+   "cost": 589.3539999999999
+  },
+  {
+   "label": "gemini-3.1-pro-preview-thinking",
+   "kind": "lb",
+   "prog": 0.401975,
+   "cost": 601.745
+  },
+  {
+   "label": "gemini-3.1-pro-preview",
+   "kind": "lb",
+   "prog": 0.37829999999999997,
+   "cost": 261.425
+  },
+  {
+   "label": "gpt-5.6-terra",
+   "kind": "lb",
+   "prog": 0.30920000000000003,
+   "cost": 509.1215
+  },
+  {
+   "label": "gemini-3-flash-preview",
+   "kind": "lb",
+   "prog": 0.3229,
+   "cost": 76.997
+  },
+  {
+   "label": "gpt-5.6-luna",
+   "kind": "lb",
+   "prog": 0.244775,
+   "cost": 67.602
+  },
+  {
+   "label": "gemini-2.5-flash",
+   "kind": "lb",
+   "prog": 0.20725,
+   "cost": 18.617
+  },
+  {
+   "label": "base",
+   "kind": "base",
+   "prog": 0.3064,
+   "cost": 14.751166666666668
+  },
+  {
+   "label": "pae",
+   "kind": "pae",
+   "prog": 0.556675,
+   "cost": 301.94449999999995
+  }
+ ],
+ "all4_balmin": [
+  {
+   "label": "gpt-6-astra",
+   "kind": "lb",
+   "prog": 0.5009,
+   "cost": 910.0749999999999
+  },
+  {
+   "label": "claude-opus-5",
+   "kind": "lb",
+   "prog": 0.4496,
+   "cost": 1110.92625
+  },
+  {
+   "label": "gpt-5.6-sol",
+   "kind": "lb",
+   "prog": 0.40922500000000006,
+   "cost": 589.3539999999999
+  },
+  {
+   "label": "gemini-3.1-pro-preview-thinking",
+   "kind": "lb",
+   "prog": 0.39795,
+   "cost": 601.745
+  },
+  {
+   "label": "gemini-3.1-pro-preview",
+   "kind": "lb",
+   "prog": 0.37542499999999995,
+   "cost": 261.425
+  },
+  {
+   "label": "gpt-5.6-terra",
+   "kind": "lb",
+   "prog": 0.30345,
+   "cost": 509.1215
+  },
+  {
+   "label": "gemini-3-flash-preview",
+   "kind": "lb",
+   "prog": 0.313925,
+   "cost": 76.997
+  },
+  {
+   "label": "gpt-5.6-luna",
+   "kind": "lb",
+   "prog": 0.241525,
+   "cost": 67.602
+  },
+  {
+   "label": "gemini-2.5-flash",
+   "kind": "lb",
+   "prog": 0.20707499999999998,
+   "cost": 18.617
+  },
+  {
+   "label": "base",
+   "kind": "base",
+   "prog": 0.2827,
+   "cost": 14.751166666666668
+  },
+  {
+   "label": "pae",
+   "kind": "pae",
+   "prog": 0.494425,
+   "cost": 301.94449999999995
+  }
+ ],
+ "heldout3": [
+  {
+   "label": "gpt-6-astra",
+   "kind": "lb",
+   "prog": 0.6544333333333333,
+   "cost": 406.214
+  },
+  {
+   "label": "claude-opus-5",
+   "kind": "lb",
+   "prog": 0.5908333333333333,
+   "cost": 452.42999999999995
+  },
+  {
+   "label": "gpt-5.6-sol",
+   "kind": "lb",
+   "prog": 0.5398000000000001,
+   "cost": 321.329
+  },
+  {
+   "label": "gemini-3.1-pro-preview-thinking",
+   "kind": "lb",
+   "prog": 0.5273,
+   "cost": 40.162
+  },
+  {
+   "label": "gemini-3.1-pro-preview",
+   "kind": "lb",
+   "prog": 0.49429999999999996,
+   "cost": 39.318
+  },
+  {
+   "label": "gpt-5.6-terra",
+   "kind": "lb",
+   "prog": 0.40113333333333334,
+   "cost": 204.22400000000002
+  },
+  {
+   "label": "gemini-3-flash-preview",
+   "kind": "lb",
+   "prog": 0.41733333333333333,
+   "cost": 10.212
+  },
+  {
+   "label": "gpt-5.6-luna",
+   "kind": "lb",
+   "prog": 0.3206333333333333,
+   "cost": 19.358
+  },
+  {
+   "label": "gemini-2.5-flash",
+   "kind": "lb",
+   "prog": 0.2737,
+   "cost": 6.107
+  },
+  {
+   "label": "base",
+   "kind": "base",
+   "prog": 0.3717,
+   "cost": 7.4445
+  },
+  {
+   "label": "pae",
+   "kind": "pae",
+   "prog": 0.6391333333333333,
+   "cost": 49.2345
+  }
+ ]
+}

@@ -1,0 +1,426 @@
+{
+ "MiniHack (8-task mean, Boxoban=0)": {
+  "pts": [
+   {
+    "label": "gpt-6-astra",
+    "cost": 213.708,
+    "prog": 0.65,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "claude-opus-5",
+    "cost": 365.465,
+    "prog": 0.375,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-sol",
+    "cost": 261.57,
+    "prog": 0.425,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview-thinking",
+    "cost": 24.059,
+    "prog": 0.275,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview",
+    "cost": 26.674,
+    "prog": 0.35,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-terra",
+    "cost": 148.651,
+    "prog": 0.375,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3-flash-preview",
+    "cost": 6.701,
+    "prog": 0.3,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-luna",
+    "cost": 13.944,
+    "prog": 0.225,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-2.5-flash",
+    "cost": 4.256,
+    "prog": 0.125,
+    "eps": 40,
+    "kind": "lb"
+   },
+   {
+    "label": "ours base",
+    "cost": 4.406,
+    "prog": 0.15,
+    "eps": 8,
+    "kind": "base"
+   },
+   {
+    "label": "ours PAE",
+    "cost": 29.376,
+    "prog": 0.325,
+    "eps": 8,
+    "kind": "pae"
+   }
+  ],
+  "note": "8 tasks; Boxoban Medium and Hard entered at 0; Quest-Medium n=1"
+ },
+ "TextWorld (3-game mean)": {
+  "pts": [
+   {
+    "label": "gpt-6-astra",
+    "cost": 42.443,
+    "prog": 0.5451,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "claude-opus-5",
+    "cost": 21.155,
+    "prog": 0.7157,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-sol",
+    "cost": 18.111,
+    "prog": 0.6353,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview-thinking",
+    "cost": 5.272,
+    "prog": 0.7569,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview",
+    "cost": 5.028,
+    "prog": 0.6647,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-terra",
+    "cost": 14.666,
+    "prog": 0.2784,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3-flash-preview",
+    "cost": 1.51,
+    "prog": 0.502,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-luna",
+    "cost": 1.412,
+    "prog": 0.1824,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-2.5-flash",
+    "cost": 0.894,
+    "prog": 0.2961,
+    "eps": 30,
+    "kind": "lb"
+   },
+   {
+    "label": "ours base",
+    "cost": 1.434,
+    "prog": 0.4196,
+    "eps": 3,
+    "kind": "base"
+   },
+   {
+    "label": "ours PAE",
+    "cost": 4.482,
+    "prog": 0.9333,
+    "eps": 3,
+    "kind": "pae"
+   },
+   {
+    "label": "control best-of-10",
+    "cost": 7.398,
+    "prog": 0.902,
+    "eps": 3,
+    "kind": "ctl"
+   }
+  ],
+  "note": "3 games, 10 seeds each"
+ },
+ "Crafter (10 seeds)": {
+  "pts": [
+   {
+    "label": "gpt-6-astra",
+    "cost": 150.063,
+    "prog": 0.7682,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "claude-opus-5",
+    "cost": 65.81,
+    "prog": 0.6818,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-sol",
+    "cost": 41.648,
+    "prog": 0.5591,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview-thinking",
+    "cost": 10.831,
+    "prog": 0.55,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview",
+    "cost": 7.616,
+    "prog": 0.4682,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-terra",
+    "cost": 40.907,
+    "prog": 0.55,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3-flash-preview",
+    "cost": 2.001,
+    "prog": 0.45,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-luna",
+    "cost": 4.002,
+    "prog": 0.5545,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-2.5-flash",
+    "cost": 0.957,
+    "prog": 0.4,
+    "eps": 10,
+    "kind": "lb"
+   },
+   {
+    "label": "ours base",
+    "cost": 1.238,
+    "prog": 0.5455,
+    "eps": 10,
+    "kind": "base"
+   },
+   {
+    "label": "ours PAE",
+    "cost": 10.03,
+    "prog": 0.6591,
+    "eps": 10,
+    "kind": "pae"
+   },
+   {
+    "label": "control best-of-10",
+    "cost": 39.395,
+    "prog": 0.7227,
+    "eps": 10,
+    "kind": "ctl"
+   }
+  ],
+  "note": "single BALROG task, 10 seeds"
+ },
+ "NetHack (BALmax %)": {
+  "pts": [
+   {
+    "label": "gpt-6-astra",
+    "cost": 503.861,
+    "prog": 13.24,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "claude-opus-5",
+    "cost": 526.797,
+    "prog": 7.3,
+    "eps": 4,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-sol",
+    "cost": 268.025,
+    "prog": 3.22,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview-thinking",
+    "cost": 561.583,
+    "prog": 2.6,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview",
+    "cost": 222.107,
+    "prog": 3.03,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-terra",
+    "cost": 243.918,
+    "prog": 3.34,
+    "eps": 4,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3-flash-preview",
+    "cost": 66.785,
+    "prog": 3.96,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-luna",
+    "cost": 48.244,
+    "prog": 1.72,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-2.5-flash",
+    "cost": 12.51,
+    "prog": 0.79,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "ours base, 15 single lives",
+    "cost": 21.92,
+    "prog": 11.05,
+    "eps": 15,
+    "kind": "base"
+   },
+   {
+    "label": "ours PAE fog, 30 attempts",
+    "cost": 252.71,
+    "prog": 30.93,
+    "eps": 5,
+    "kind": "pae"
+   }
+  ],
+  "note": "Our two arms are priced at GLM-5.2 input $1.54/M, cached input $0.154/M, output $4.84/M, plus the orchestrator's provider-reported cost. That rate card reproduces the three wallet-measured 30-attempt PAE runs within 6% ($293.50 predicted vs $292.54 wallet). PAE fog: 5 seeds, 137 attempts, $252.71 total. Base: 15 single lives, $21.92 total. Leaderboard points are list price from their published token counts (no cache data in the submissions). Leaderboard BALmax recomputed from the per-episode dlvl/xp lists equals the published progression for all 9 models."
+ },
+ "NetHack (BALmin %)": {
+  "pts": [
+   {
+    "label": "gpt-6-astra",
+    "cost": 503.861,
+    "prog": 4.03,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "claude-opus-5",
+    "cost": 526.797,
+    "prog": 2.59,
+    "eps": 4,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-sol",
+    "cost": 268.025,
+    "prog": 1.75,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview-thinking",
+    "cost": 561.583,
+    "prog": 0.99,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3.1-pro-preview",
+    "cost": 222.107,
+    "prog": 1.88,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-terra",
+    "cost": 243.918,
+    "prog": 1.04,
+    "eps": 4,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-3-flash-preview",
+    "cost": 66.785,
+    "prog": 0.37,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gpt-5.6-luna",
+    "cost": 48.244,
+    "prog": 0.42,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "gemini-2.5-flash",
+    "cost": 12.51,
+    "prog": 0.72,
+    "eps": 5,
+    "kind": "lb"
+   },
+   {
+    "label": "ours base, 15 single lives",
+    "cost": 21.92,
+    "prog": 1.57,
+    "eps": 15,
+    "kind": "base"
+   },
+   {
+    "label": "ours PAE fog, 30 attempts",
+    "cost": 252.71,
+    "prog": 6.03,
+    "eps": 5,
+    "kind": "pae"
+   }
+  ],
+  "note": "y is BALmin percent (min over the dungeon-level and experience-level axes); same costs as the BALmax panel."
+ }
+}
