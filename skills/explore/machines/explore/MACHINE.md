@@ -16,8 +16,8 @@ earlier player's conversation at the save (`fork_from`), and its game is
 its own (`mcp_servers`). After each player, the orchestrator runs again.
 The orchestrator keeps its memory across rounds (`fork_from: "self"`).
 
-The run ends when the orchestrator answers `next: null`, or when the
-player state reaches its run limit.
+The run ends when the orchestrator answers a decision without `next`
+(`explore.stop()`), or when the player state reaches its run limit.
 
 ## How to run it
 

@@ -218,8 +218,9 @@ def select(
 
 
 def stop(reason: str = "") -> dict[str, Any]:
-    """End the run: the machine's guard ``decision.next exists`` fails."""
-    return {"decision": {"next": None, "reason": reason}, "directive": ""}
+    """End the run. The decision has NO ``next`` key, so the machine's guard
+    ``decision.next exists`` fails (a ``null`` value would still exist)."""
+    return {"decision": {"stop": True, "reason": reason}, "directive": ""}
 
 
 def answer(result: dict[str, Any]) -> str:

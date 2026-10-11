@@ -166,7 +166,8 @@ class SelectTest(unittest.TestCase):
             fresh = explore.select("c1", "Explore.", run_dir=run, adapter=explore.ScriptedAdapter())
             self.assertIsNone(fresh["decision"]["next"]["session_ref"])
             self.assertIn("no player session recorded", fresh["decision"]["next"]["memory"]["reason"])
-            self.assertEqual(explore.stop("done")["decision"], {"next": None, "reason": "done"})
+            self.assertEqual(explore.stop("done")["decision"], {"stop": True, "reason": "done"})
+            self.assertNotIn("next", explore.stop()["decision"])
 
     def test_fixed_rule_takes_the_previous_attempts_latest_checkpoint(self) -> None:
         with TemporaryDirectory() as temp:
