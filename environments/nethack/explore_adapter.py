@@ -108,11 +108,19 @@ class NetHackAdapter:
         server was already gone)."""
         run_dir = pathlib.Path(run_dir)
         config = self.config(run_dir)
+        trace = run_dir / "servers" / "settle.log"
+
+        def log(message: str) -> None:
+            with open(trace, "a", encoding="utf-8") as handle:
+                handle.write(f"{time.strftime('%H:%M:%S')} pid {os.getpid()} attempt {attempt}: {message}\n")
+
+        log("settle entered")
         quiet_s = float(quiet_s if quiet_s is not None else config.get("settle_quiet_s", SETTLE_QUIET_S))
         timeout_s = float(timeout_s if timeout_s is not None else config.get("settle_timeout_s", SETTLE_TIMEOUT_S))
         ready = _read_json(self.ready_path(run_dir, attempt))
         pid = ready.get("pid")
         if not isinstance(pid, int) or not _alive(pid):
+            log(f"no live server (pid {pid!r}); nothing to settle")
             return {}
         state_path = self.ready_path(run_dir, attempt).with_suffix(".state.json")
         started = time.time()
@@ -132,9 +140,12 @@ class NetHackAdapter:
             if time.time() - started > timeout_s:
                 break
             if not _alive(pid):
+                log("server died while waiting")
                 return state
             time.sleep(2.0)
+        log(f"game over by '{reason}' after {int(time.time() - started)} s (calls {last_calls}); finalizing")
         self.finalize(run_dir, attempt, reason=reason)
+        log("finalized; settle returns")
         return state
 
     # -- servers -----------------------------------------------------------------

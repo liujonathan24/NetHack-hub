@@ -296,6 +296,9 @@ def main(argv=None) -> int:
             # from explore.json through the adapter.
             "EXPLORE_ADAPTER": f"{ENV_DIR / 'explore_adapter.py'}:NetHackAdapter",
             "NETHACK_MCP_TOKEN": server["headers"]["Authorization"].split(" ", 1)[1],
+            # Diagnostic: the daemon logs each RLM child settle verdict with
+            # the state snapshot it rests on (an opt-in trace in our fork).
+            "PRIME_AGENT_RLM_SETTLE_TRACE": "1",
         }
     )
     env.pop("PYTHONPATH", None)
