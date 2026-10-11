@@ -19,6 +19,12 @@ The orchestrator keeps its memory across rounds (`fork_from: "self"`).
 The run ends when the orchestrator answers a decision without `next`
 (`explore.stop()`), or when the player state reaches its run limit.
 
+What each role sees. The orchestrator sees the leaderboard (through
+`explore.leaderboard()`) and the previous player's one-line summary. A
+player sees only the directive and the resume note: the `decision` input
+is hidden, so no leaderboard, no other attempt, no path, and no token
+reaches a player.
+
 ## How to run it
 
     result = await explore.run("explore")
@@ -66,8 +72,8 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
       "max_entries": 29,
       "failure_policy": "continue",
       "inputs": [
-        {"name": "decision", "type": "json", "from": "orchestrator.decision"},
-        {"name": "directive", "type": "json", "from": "orchestrator.directive"}
+        {"name": "decision", "type": "json", "from": "orchestrator.decision", "hidden": true},
+        {"name": "directive", "type": "json", "from": "orchestrator.directive", "verbatim": true}
       ],
       "outputs": [
         {"name": "summary", "type": "json"}
@@ -76,7 +82,7 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
         "name": "explore-player",
         "fork_from": {"input": "decision", "path": "next.session_ref"},
         "mcp_servers": {"input": "decision", "path": "next.mcp_servers"},
-        "prompt": "{directive}\nYou are resumed from a checkpoint. Your game is restored to the state you saved. Request the current observation first; the last moves in your memory may not have happened in the restored game. Play until you die or the harness stops you. When you stop, end your final answer with a fenced json block of the form {\"summary\": {\"outcome\": \"<alive|died|stopped>\", \"note\": \"<one line>\"}}."
+        "prompt": "{directive}\nYou continue your own game from a checkpoint you saved earlier. The game is restored to that saved state. Your memory of the moves after the save does not apply: request the current observation first and play from what you see. Play until you die or the harness stops you. When you stop, end your final answer with a fenced json block of the form {\"summary\": {\"outcome\": \"<alive|died|stopped>\", \"note\": \"<one line>\"}}."
       }
     }
   ],

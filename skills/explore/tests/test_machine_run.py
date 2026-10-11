@@ -133,7 +133,7 @@ if HAVE_RUNTIME:
                             newest = Ledger(self.run_dir).checkpoints()[-1]
                             result = explore.select(
                                 newest.id,
-                                f"Go deeper from {newest.id}.",
+                                f"Go deeper from {newest.id}." if self.selections else 'Go deeper from c0. Avoid the "mines" door.',
                                 run_dir=self.run_dir,
                                 adapter=explore.ScriptedAdapter(),
                             )
@@ -224,7 +224,19 @@ class ExploreMachineRunTest(unittest.TestCase):
                 {"session_file": str(self.run_dir / "sessions" / "child-3.jsonl"), "entry_id": player1_ids[3]},
             )
             self.assertEqual(players[0]["kwargs"]["mcp_servers"], [])
-            self.assertTrue(players[0]["prompt"].startswith('"[ORCHESTRATOR DIRECTIVE for this attempt: Go deeper from c0.]"'))
+            # The directive reaches the player verbatim: no quotes, no escapes.
+            self.assertTrue(
+                players[0]["prompt"].startswith('[ORCHESTRATOR DIRECTIVE for this attempt: Go deeper from c0. Avoid the "mines" door.]\n'),
+                players[0]["prompt"][:160],
+            )
+            # A player sees nothing but the directive and the resume note: no
+            # leaderboard, no other attempt's numbers, no path, no token.
+            for prompt in (p["prompt"] for p in players):
+                self.assertNotIn("## Inputs", prompt)
+                self.assertNotIn("session_ref", prompt)
+                self.assertNotIn("checkpoint", prompt.lower().replace("from a checkpoint you saved", ""))
+                self.assertNotIn(str(self.run_dir), prompt)
+                self.assertNotIn("Dlvl", prompt)
             # The ledger: three attempts, three checkpoints, two selections.
             ledger = Ledger(self.run_dir)
             self.assertEqual(ledger.attempts_started(), 3)

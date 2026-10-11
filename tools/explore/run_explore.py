@@ -77,6 +77,7 @@ def main(argv=None) -> int:
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
     parser.add_argument("--prime-agent", default="prime-agent", help="the Rust prime-agent binary with fork_from support")
     parser.add_argument("--python", default=sys.executable, help="the eval venv python (verifiers, mcp, aiohttp)")
+    parser.add_argument("--agent-dir", default=None, help="a prime-agent agent dir you already logged in with (its auth.json and settings are kept); default <run-dir>/agent")
     parser.add_argument("--dry-run", action="store_true", help="set everything up and print the command; do not start prime-agent")
     parser.add_argument("prime_agent_args", nargs="*", help="arguments after -- go to prime-agent")
     args = parser.parse_args(argv)
@@ -123,21 +124,27 @@ def main(argv=None) -> int:
     server = opener["mcp_servers"][0]
     print(f"attempt 0: {server['url']}", flush=True)
 
-    agent_dir = run_dir / "agent"
+    agent_dir = pathlib.Path(args.agent_dir).resolve() if args.agent_dir else run_dir / "agent"
     link(SKILLS_DIR / "explore", agent_dir / "skills" / "explore")
     link(NETHACK_SKILL, agent_dir / "skills" / "nethack")
-    write_json(
-        agent_dir / "settings.json",
+    # Merge into the existing settings (a logged-in agent dir keeps its
+    # provider, model, and auth); this run's keys win.
+    settings = {}
+    if (agent_dir / "settings.json").is_file():
+        try:
+            settings = json.loads((agent_dir / "settings.json").read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            settings = {}
+    settings.update(
         {
             "onboardingShown": True,
             "quietStartup": True,
             "factory": {"enabled": True},
             "autoRefine": {"enabled": False, "compact": False},
-            "mcpServers": {
-                "nethack": {"type": "http", "url": server["url"], "bearerTokenEnvVar": "NETHACK_MCP_TOKEN"},
-            },
-        },
+        }
     )
+    settings.setdefault("mcpServers", {})["nethack"] = {"type": "http", "url": server["url"], "bearerTokenEnvVar": "NETHACK_MCP_TOKEN"}
+    write_json(agent_dir / "settings.json", settings)
     env = dict(os.environ)
     env.update(
         {
@@ -145,7 +152,7 @@ def main(argv=None) -> int:
             # The Rust binary's kernel venv must never be the shared
             # ~/.prime/agent/kernel-venv the 0.3.3 install and other runs use
             # (it would rebuild it with its own runtime); one venv per run.
-            "PRIME_AGENT_KERNEL_VENV": str(run_dir / "kernel-venv"),
+            "PRIME_AGENT_KERNEL_VENV": str((agent_dir / "kernel-venv") if args.agent_dir else (run_dir / "kernel-venv")),
             "PRIME_AGENT_MACHINES_DIR": str(machines_dir),
             "EXPLORE_RUN_DIR": str(run_dir),
             "EXPLORE_ADAPTER": "explore_adapter:NetHackAdapter",
