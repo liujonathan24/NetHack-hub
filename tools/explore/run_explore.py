@@ -135,6 +135,9 @@ def main(argv=None) -> int:
             settings = json.loads((agent_dir / "settings.json").read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             settings = {}
+    # The Rust binary writes every known key, unset ones as null: drop the
+    # nulls so the merge below sees only real values.
+    settings = {key: value for key, value in settings.items() if value is not None}
     settings.update(
         {
             "onboardingShown": True,
@@ -143,7 +146,9 @@ def main(argv=None) -> int:
             "autoRefine": {"enabled": False, "compact": False},
         }
     )
-    settings.setdefault("mcpServers", {})["nethack"] = {"type": "http", "url": server["url"], "bearerTokenEnvVar": "NETHACK_MCP_TOKEN"}
+    servers = settings.get("mcpServers") if isinstance(settings.get("mcpServers"), dict) else {}
+    servers["nethack"] = {"type": "http", "url": server["url"], "bearerTokenEnvVar": "NETHACK_MCP_TOKEN"}
+    settings["mcpServers"] = servers
     write_json(agent_dir / "settings.json", settings)
     env = dict(os.environ)
     env.update(
