@@ -155,14 +155,18 @@ ENGINE = pathlib.Path(os.environ.get("NETHACK_ENGINE", "/root/NetHack-engine"))
 
 ROOT_PROMPT = """You run a checkpointed-exploration experiment. Do exactly this and nothing else.
 
-1. Run `result = await explore.run("explore")` and print `result["run_id"]`.
+1. Run `result = await explore.run("explore")` and print `result["run_id"]`. Run it ONCE.
 2. Then loop: `snap = await rlm.factory.watch(result["run_id"], 60)`; print one line
    with `snap["state"]` and the `entries_used` of each node in `snap["nodes"]`.
    Stop looping when `snap["state"]` is not "running" and not "stopping".
    If it is "paused", print `snap["pause_reason"]` and run
    `await rlm.factory.resume(result["run_id"])`, then keep looping.
 3. When the run has ended, print `explore.leaderboard(100)` and the run's
-   `rlm.factory.status(result["run_id"])["usage"]`. Then stop.
+   `rlm.factory.status(result["run_id"])["usage"]` and `["events"]`. Then stop.
+
+Rules. Never start a second run. Never install, upgrade, or remove Python
+packages. Never edit files. Do not try to repair anything: if something fails,
+print the error and the run's status and stop.
 """
 
 
@@ -208,7 +212,7 @@ def main(argv=None) -> int:
     write_json(
         run_dir / "explore.json",
         {
-            "adapter": "explore_adapter:NetHackAdapter",
+            "adapter": f"{ENV_DIR / 'explore_adapter.py'}:NetHackAdapter",
             "python": args.python,
             "pythonpath": pythonpath,
             "env_dir": str(ENV_DIR),
@@ -220,8 +224,13 @@ def main(argv=None) -> int:
             "max_skill_calls": args.max_skill_calls,
             "auto_checkpoint_every_n_calls": args.every,
             "attempts": args.attempts,
+            # The orchestrator-only token: gates explore.leaderboard() and
+            # explore.select(); the machine copy below carries it in the
+            # orchestrator's prompt, and only there.
+            "orchestrator_token": uuid.uuid4().hex,
         },
     )
+    orchestrator_token = json.loads((run_dir / "explore.json").read_text(encoding="utf-8"))["orchestrator_token"]
 
     # The machine with this run's attempt count (a copy of the library machine).
     machines_dir = run_dir / "machines"
@@ -229,6 +238,7 @@ def main(argv=None) -> int:
     text = source.read_text(encoding="utf-8")
     text = text.replace('"max_entries": 29', f'"max_entries": {max(1, args.attempts - 1)}')
     text = text.replace('"max_transitions": 64', f'"max_transitions": {2 * args.attempts + 2}')
+    text = text.replace("{{EXPLORE_TOKEN}}", orchestrator_token)
     (machines_dir / "explore").mkdir(parents=True, exist_ok=True)
     (machines_dir / "explore" / "MACHINE.md").write_text(text, encoding="utf-8")
 
@@ -280,18 +290,22 @@ def main(argv=None) -> int:
             "PRIME_AGENT_KERNEL_VENV": str((agent_dir / "kernel-venv") if args.agent_dir else (run_dir / "kernel-venv")),
             "PRIME_AGENT_MACHINES_DIR": str(machines_dir),
             "EXPLORE_RUN_DIR": str(run_dir),
-            "EXPLORE_ADAPTER": "explore_adapter:NetHackAdapter",
+            # The adapter loads from its file: the kernel venv must NOT get a
+            # PYTHONPATH into the repo (the env's nethack.py would shadow the
+            # `nethack` skill package). The game servers get their PYTHONPATH
+            # from explore.json through the adapter.
+            "EXPLORE_ADAPTER": f"{ENV_DIR / 'explore_adapter.py'}:NetHackAdapter",
             "NETHACK_MCP_TOKEN": server["headers"]["Authorization"].split(" ", 1)[1],
-            "PYTHONPATH": os.environ["PYTHONPATH"],
         }
     )
+    env.pop("PYTHONPATH", None)
     model_flags = []
     for flag, value in (("--provider", args.provider), ("--model", args.model), ("--thinking", args.thinking)):
         if value:
             model_flags += [flag, value]
     # The Rust CLI takes the print-mode message right after --print (no `--` arm).
     command = [args.prime_agent, "--print", ROOT_PROMPT, *model_flags, *args.prime_agent_args]
-    (run_dir / "command.json").write_text(json.dumps({"mode": args.mode, "print_command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "PRIME_AGENT_MACHINES_DIR", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER", "PYTHONPATH")}}, indent=2) + "\n", encoding="utf-8")
+    (run_dir / "command.json").write_text(json.dumps({"mode": args.mode, "print_command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "PRIME_AGENT_MACHINES_DIR", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER")}}, indent=2) + "\n", encoding="utf-8")
     if args.mode == "print":
         print("prime-agent command:", " ".join([command[0], "--print", "<prompt>", *command[3:]]), flush=True)
     else:

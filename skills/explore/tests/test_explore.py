@@ -145,10 +145,16 @@ class SelectTest(unittest.TestCase):
             self.assertEqual(nxt["checkpoint"], "c0")
             self.assertEqual(nxt["attempt"], 1)
             self.assertEqual(nxt["session_ref"], {"session_file": str(path), "entry_id": "r0"})
-            self.assertEqual(nxt["env_handle"], {"bundle": "c0"})
             self.assertEqual(nxt["mcp_servers"], [])
-            self.assertEqual(nxt["directive"], "Find the downstairs before you fight.")
-            self.assertTrue(nxt["memory"]["ok"])
+            selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
+            self.assertEqual(selection["directive"], "Find the downstairs before you fight.")
+            self.assertTrue(selection["memory"]["ok"])
+            self.assertNotIn("memory", nxt)
+            self.assertNotIn("directive", nxt)
+            self.assertNotIn("env_handle", nxt)
+            self.assertEqual(selection_env := [r for r in ledger.records() if r.get("kind") == "selection"][-1]["env_handle"], {"bundle": "c0"})
+            self.assertTrue(json.loads(explore.answer(result).strip("`\n").removeprefix("json\n"))["decision"]["next"]["session_ref"])
+            self.assertLess(len(explore.answer(result)), 900)
             self.assertEqual(result["directive"], "[ORCHESTRATOR DIRECTIVE for this attempt: Find the downstairs before you fight.]")
             self.assertTrue(explore.answer(result).startswith("```json\n"))
             self.assertEqual([r["kind"] for r in ledger.records()][-1], "selection")
@@ -156,7 +162,8 @@ class SelectTest(unittest.TestCase):
             self.assertEqual(json.loads(calls[-1])["op"], "restore")
             # Blind arms get the neutral directive; a bad directive is refused.
             blind = explore.select("c0", "ignored", blind=True, run_dir=run, adapter=explore.ScriptedAdapter())
-            self.assertEqual(blind["decision"]["next"]["directive"], "Continue playing.")
+            self.assertEqual(blind["directive"], "[ORCHESTRATOR DIRECTIVE for this attempt: Continue playing.]")
+            self.assertEqual([r for r in ledger.records() if r.get("kind") == "selection"][-1]["directive"], "Continue playing.")
             with self.assertRaisesRegex(ValueError, "names a key"):
                 explore.select("c0", "Press > to descend.", run_dir=run, adapter=explore.ScriptedAdapter())
             with self.assertRaisesRegex(ValueError, "unknown checkpoint"):
@@ -165,9 +172,27 @@ class SelectTest(unittest.TestCase):
             ledger.add_checkpoint(attempt=3, score={"dlvl": 1}, env_handle="h", call=1, parent=None)
             fresh = explore.select("c1", "Explore.", run_dir=run, adapter=explore.ScriptedAdapter())
             self.assertIsNone(fresh["decision"]["next"]["session_ref"])
-            self.assertIn("no player session recorded", fresh["decision"]["next"]["memory"]["reason"])
+            selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
+            self.assertIn("no player session recorded", selection["memory"]["reason"])
             self.assertEqual(explore.stop("done")["decision"], {"stop": True, "reason": "done"})
             self.assertNotIn("next", explore.stop()["decision"])
+
+    def test_orchestrator_token_gates_the_ledger_reads(self) -> None:
+        with TemporaryDirectory() as temp:
+            run = Path(temp)
+            (run / "explore.json").write_text(json.dumps({"orchestrator_token": "t0k3n"}), encoding="utf-8")
+            ledger = Ledger(run)
+            ledger.add_checkpoint(attempt=0, score={"dlvl": 1}, env_handle="h", call=1, parent=None)
+            with self.assertRaises(explore.NotTheOrchestrator):
+                explore.leaderboard(run_dir=run)
+            with self.assertRaises(explore.NotTheOrchestrator):
+                explore.select("c0", "Explore.", run_dir=run, adapter=explore.ScriptedAdapter())
+            self.assertIn("c0", explore.leaderboard(token="t0k3n", run_dir=run))
+            result = explore.select("c0", "Explore.", token="t0k3n", run_dir=run, adapter=explore.ScriptedAdapter())
+            self.assertEqual(result["decision"]["next"]["checkpoint"], "c0")
+            # The machine's prompt carries the placeholder the driver fills.
+            machine = (HERE.parent / "machines" / "explore" / "MACHINE.md").read_text(encoding="utf-8")
+            self.assertIn("{{EXPLORE_TOKEN}}", machine)
 
     def test_fixed_rule_takes_the_previous_attempts_latest_checkpoint(self) -> None:
         with TemporaryDirectory() as temp:

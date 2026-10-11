@@ -77,9 +77,22 @@ def load_adapter(spec: str | None = None, *, run_dir: Path | None = None) -> Env
         spec = configured if isinstance(configured, str) else None
     if not spec or spec == "scripted":
         return ScriptedAdapter()
-    module_name, _, class_name = spec.partition(":")
+    module_name, _, class_name = spec.rpartition(":")
     if not module_name or not class_name:
-        raise ValueError(f"adapter must be 'module:Class' or 'scripted', got {spec!r}")
-    module = importlib.import_module(module_name)
+        raise ValueError(f"adapter must be 'module:Class', '/path/to/file.py:Class', or 'scripted', got {spec!r}")
+    if module_name.endswith(".py") or "/" in module_name:
+        # A file path: the kernel venv has no PYTHONPATH into the repo, and
+        # it must not (the env's `nethack.py` would shadow the `nethack`
+        # skill package), so the adapter loads from its file.
+        import importlib.util
+
+        path = Path(module_name).expanduser()
+        loader_spec = importlib.util.spec_from_file_location(f"explore_adapter_{abs(hash(str(path)))}", path)
+        if loader_spec is None or loader_spec.loader is None:
+            raise ImportError(f"cannot load adapter module from {path}")
+        module = importlib.util.module_from_spec(loader_spec)
+        loader_spec.loader.exec_module(module)
+    else:
+        module = importlib.import_module(module_name)
     factory = getattr(module, class_name)
     return factory()

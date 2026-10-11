@@ -66,11 +66,33 @@ __all__ = [
     "stop",
     "validate_directive",
     "watch_players",
+    "NotTheOrchestrator",
 ]
 
 DIRECTIVE_BLOCK_FORMAT = "[ORCHESTRATOR DIRECTIVE for this attempt: {directive}]"
 BLIND_DIRECTIVE = "Continue playing."
 MACHINE_NAME = "explore"
+
+
+class NotTheOrchestrator(PermissionError):
+    """Raised when a ledger read or a selection is attempted without the
+    run's orchestrator token."""
+
+
+def _require_token(token: str | None, ledger: Ledger, what: str) -> None:
+    """The orchestrator token gates the leaderboard and select(). Every child
+    of the run has this package; only the orchestrator's prompt carries the
+    token (``explore.json`` holds it). A player that calls these by mistake
+    gets a clear refusal instead of another attempt's numbers."""
+    from .adapters import read_config
+
+    expected = read_config(ledger.dir).get("orchestrator_token")
+    if not expected:
+        return  # an ungated run (tests, local use)
+    if token != expected:
+        raise NotTheOrchestrator(
+            f"{what} is for the orchestrator only; a player never reads the leaderboard or selects a checkpoint"
+        )
 
 # -- the environment's side ------------------------------------------------
 
@@ -115,15 +137,20 @@ def outcome(
 # -- the orchestrator's side -----------------------------------------------
 
 
-def leaderboard(limit: int = 30, *, run_dir: str | Path | None = None) -> str:
+def leaderboard(limit: int = 30, *, token: str | None = None, run_dir: str | Path | None = None) -> str:
     """The leaderboard text: one line per checkpoint with its harness-computed
-    numbers, how many attempts started there, and how they ended."""
-    return leaderboard_text(Ledger(run_dir), limit=limit)
+    numbers, how many attempts started there, and how they ended. Orchestrator
+    only (``token``)."""
+    ledger = Ledger(run_dir)
+    _require_token(token, ledger, "explore.leaderboard")
+    return leaderboard_text(ledger, limit=limit)
 
 
-def rows(*, run_dir: str | Path | None = None) -> list[dict[str, Any]]:
-    """The leaderboard as data."""
-    return leaderboard_rows(Ledger(run_dir))
+def rows(*, token: str | None = None, run_dir: str | Path | None = None) -> list[dict[str, Any]]:
+    """The leaderboard as data. Orchestrator only (``token``)."""
+    ledger = Ledger(run_dir)
+    _require_token(token, ledger, "explore.rows")
+    return leaderboard_rows(ledger)
 
 
 _KEY_TOKEN_RE = re.compile(
@@ -153,6 +180,7 @@ def select(
     checkpoint_id: str,
     directive: str = "",
     *,
+    token: str | None = None,
     blind: bool = False,
     run_dir: str | Path | None = None,
     adapter: EnvFork | None = None,
@@ -165,15 +193,19 @@ def select(
 
     ``{"decision": {"next": {...}}, "directive": "<text>"}``
 
-    ``next`` carries ``checkpoint``, ``attempt`` (the new player's index),
-    ``session_ref`` (the fork source, or null when no conversation is known:
-    the player then starts with fresh memory), ``env_handle``,
-    ``mcp_servers``, and ``memory`` (how the cut went). ``blind`` replaces
+    ``next`` carries only what the player's spawn needs: ``checkpoint``,
+    ``attempt`` (the new player's index), ``session_ref`` (the fork source,
+    or null when no conversation is known: the player then starts with fresh
+    memory), and ``mcp_servers``. The block stays short on purpose: the
+    orchestrator model copies it into its final answer, and a long block
+    gets mistyped. How the cut went and the env handle are in the ledger's
+    ``selection`` record. ``blind`` replaces
     the directive with the neutral "Continue playing." (the A1/A2 arms).
     A directive that fails ``validate_directive`` raises ``ValueError``: fix
     it and call again.
     """
     ledger = Ledger(run_dir)
+    _require_token(token, ledger, "explore.select")
     chosen = ledger.checkpoint(str(checkpoint_id))
     if chosen is None:
         known = ", ".join(entry.id for entry in ledger.checkpoints()) or "none"
@@ -193,15 +225,15 @@ def select(
         cut = SessionCut(ok=False, session_file="", reason=f"no player session recorded for attempt {chosen.attempt}")
     else:
         cut = cut_session(session_file, chosen.call)
+    # The block the machine binds stays small: the child's final answer is
+    # the binding lane and hosts cap it, so only what the player's spawn
+    # needs rides here. The cut's details go to the ledger.
     decision = {
         "next": {
             "checkpoint": chosen.id,
             "attempt": attempt,
             "session_ref": cut.fork_source(),
-            "env_handle": restored.get("env_handle", chosen.env_handle),
             "mcp_servers": list(restored.get("mcp_servers") or []),
-            "directive": directive_text,
-            "memory": cut.as_dict(),
         }
     }
     ledger.append(
@@ -212,6 +244,8 @@ def select(
             "directive": directive_text,
             "blind": blind,
             "memory_ok": cut.ok,
+            "memory": cut.as_dict(),
+            "env_handle": restored.get("env_handle", chosen.env_handle),
         }
     )
     return {"decision": decision, "directive": DIRECTIVE_BLOCK_FORMAT.format(directive=directive_text)}
