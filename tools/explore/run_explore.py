@@ -28,6 +28,8 @@ check the setup).
 The model's credentials are prime-agent's own (run `prime-agent` once with the
 same agent dir and `/login` first; this script does not manage them).
 """
+from __future__ import annotations
+
 
 DAEMON_PROTOCOL = {"name": "prime-agent.daemon", "version": 7}
 
@@ -132,7 +134,6 @@ def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pa
         daemon_log.close()
     return exit_code
 
-from __future__ import annotations
 
 import argparse
 import json
