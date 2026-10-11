@@ -56,6 +56,8 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
     {
       "id": "orchestrator",
       "max_entries": 29,
+      "retries": 2,
+      "retry_missing_outputs": true,
       "failure_policy": "continue",
       "inputs": [
         {"name": "summary", "type": "json", "from": "player.summary", "optional": true}
@@ -67,7 +69,7 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
       "subagent": {
         "name": "explore-orchestrator",
         "fork_from": "self",
-        "prompt": "You are the orchestrator of a checkpointed exploration run. Your token is {{EXPLORE_TOKEN}}. An attempt just ended. Run `print(explore.leaderboard(token=\"{{EXPLORE_TOKEN}}\"))` and read it. Pick the one checkpoint the next player must start from, and write a directive for that player: strategy only, at most two sentences, at most 300 characters, no key names. Then run `result = explore.select(\"<checkpoint id>\", \"<directive>\", token=\"{{EXPLORE_TOKEN}}\")` and `print(explore.answer(result))`. If the run must end, run `print(explore.answer(explore.stop(\"<reason>\")))` instead. Your final answer is the printed fenced json block, copied exactly as printed, character for character, and nothing else. The previous player's summary, when it wrote one: {summary}"
+        "prompt": "You are the orchestrator of a checkpointed exploration run. Your token is {{EXPLORE_TOKEN}}. An attempt just ended. Run `print(explore.leaderboard(token=\"{{EXPLORE_TOKEN}}\"))` and read it. Pick the one checkpoint the next player must start from, and write a directive for that player: strategy only, at most two sentences, at most 300 characters, no key names. Then run `result = explore.select(\"<checkpoint id>\", \"<directive>\", token=\"{{EXPLORE_TOKEN}}\")` and `print(explore.answer(result))`. If the run must end, run `print(explore.answer(explore.stop(\"<reason>\")))` instead. Every `run` above means: execute the code with your ipython tool. Code written in your message text runs nothing and ends the round with no decision. Your final answer is the printed fenced json block, copied exactly as printed, character for character, and nothing else. The previous player's summary, when it wrote one: {summary}"
       }
     },
     {
