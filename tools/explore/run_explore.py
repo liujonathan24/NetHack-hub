@@ -16,10 +16,121 @@ What it does, in order:
 4. runs `prime-agent --print` with a prompt that calls `explore.run("explore")`
    and watches the run to its end.
 
-Arguments after `--` go to prime-agent verbatim (provider, model, thinking).
-The model's credentials are prime-agent's own (run `prime-agent` once and
-`/login` first; this script does not manage them).
+The root session is daemon-backed: a Rust `--print` session runs in process
+with no RLM child runtime, so `rlm.spawn` (and therefore the factory) refuses
+there. The driver starts `prime-agent --mode daemon` on a private socket with
+this run's environment, then speaks the daemon's JSONL protocol: `create` a
+resident root session, `prompt` it, `wait_for_headless_completion` with RLM
+quiescence, read the last assistant text, `kill` the session, stop the daemon.
+`--mode print` keeps the old in-process path (no subagents; useful only to
+check the setup).
+
+The model's credentials are prime-agent's own (run `prime-agent` once with the
+same agent dir and `/login` first; this script does not manage them).
 """
+
+DAEMON_PROTOCOL = {"name": "prime-agent.daemon", "version": 7}
+
+
+class DaemonClient:
+    """A minimal JSONL client for the prime-agent daemon socket."""
+
+    def __init__(self, socket_path: pathlib.Path, *, connect_timeout_s: float = 60.0) -> None:
+        deadline = time.time() + connect_timeout_s
+        while True:
+            try:
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.sock.connect(str(socket_path))
+                break
+            except OSError:
+                self.sock.close()
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.5)
+        self.reader = self.sock.makefile("r", encoding="utf-8")
+        self.hello = json.loads(self.reader.readline())
+
+    def command(self, command: dict, *, timeout_s: float | None = 120.0) -> dict:
+        request_id = uuid.uuid4().hex[:12]
+        envelope = {"type": "command", "id": request_id, "protocol": DAEMON_PROTOCOL, "command": command}
+        self.sock.sendall((json.dumps(envelope) + "\n").encode("utf-8"))
+        self.sock.settimeout(timeout_s)
+        while True:
+            line = self.reader.readline()
+            if not line:
+                raise RuntimeError("the daemon closed the connection")
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("id") == request_id:
+                if message.get("success") is False:
+                    raise RuntimeError(f"daemon {command['type']} failed: {message.get('error')} {message.get('errorInfo') or ''}")
+                return message
+
+    def close(self) -> None:
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pathlib.Path, env: dict, provider: str | None, model: str | None, thinking: str | None, prompt: str, wait_hours: float) -> int:
+    """Start a private daemon, create and prompt a root session, wait for it to finish."""
+    socket_path = run_dir / "daemon.sock"
+    if socket_path.exists():
+        socket_path.unlink()
+    daemon_log = open(run_dir / "daemon.log", "ab")
+    daemon = subprocess.Popen(
+        [prime_agent, "--mode", "daemon", "--daemon-socket", str(socket_path)],
+        cwd=str(run_dir), env=env, stdin=subprocess.DEVNULL, stdout=daemon_log, stderr=daemon_log, start_new_session=True,
+    )
+    exit_code = 1
+    try:
+        client = DaemonClient(socket_path)
+        print(f"daemon up: {client.hello.get('type')} pid {daemon.pid}", flush=True)
+        config = {"cwd": str(run_dir), "sessionDir": str(agent_dir / "sessions"), "executionMode": "print"}
+        if provider:
+            config["provider"] = provider
+        if model:
+            config["model"] = model
+        if thinking:
+            config["thinking"] = thinking
+        created = client.command({"type": "create", "lifecycle": "resident", "config": config})
+        data = created.get("data") or {}
+        session_id = data.get("activeSessionId") or data.get("id")
+        if not session_id:
+            raise RuntimeError(f"create returned no session id: {created}")
+        print(f"root session: {session_id} file {data.get('sessionFile')}", flush=True)
+        (run_dir / "root_session.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        client.command({"type": "prompt", "activeSessionId": session_id, "message": prompt, "source": "rpc"})
+        print("prompt admitted; waiting for the run to end ...", flush=True)
+        client.command(
+            {"type": "wait_for_headless_completion", "activeSessionId": session_id, "waitForRlmQuiescence": True},
+            timeout_s=wait_hours * 3600,
+        )
+        last = client.command({"type": "get_last_assistant_text", "activeSessionId": session_id})
+        text = (last.get("data") or {}).get("text") if isinstance(last.get("data"), dict) else last.get("data")
+        (run_dir / "root.log").write_text(json.dumps(text, indent=2) if not isinstance(text, str) else text, encoding="utf-8")
+        print("--- root's final answer ---", flush=True)
+        print(text if isinstance(text, str) else json.dumps(text, indent=2), flush=True)
+        try:
+            client.command({"type": "kill", "activeSessionId": session_id})
+        except RuntimeError as error:
+            print(f"kill: {error}", flush=True)
+        client.close()
+        exit_code = 0
+    finally:
+        try:
+            os.killpg(daemon.pid, 15)
+        except ProcessLookupError:
+            pass
+        try:
+            daemon.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            os.killpg(daemon.pid, 9)
+        daemon_log.close()
+    return exit_code
 
 from __future__ import annotations
 
@@ -28,8 +139,11 @@ import json
 import os
 import pathlib
 import shutil
+import socket
 import subprocess
 import sys
+import time
+import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -78,6 +192,11 @@ def main(argv=None) -> int:
     parser.add_argument("--prime-agent", default="prime-agent", help="the Rust prime-agent binary with fork_from support")
     parser.add_argument("--python", default=sys.executable, help="the eval venv python (verifiers, mcp, aiohttp)")
     parser.add_argument("--agent-dir", default=None, help="a prime-agent agent dir you already logged in with (its auth.json and settings are kept); default <run-dir>/agent")
+    parser.add_argument("--provider", default=None, help="model provider for the root and its children (e.g. prime-inference)")
+    parser.add_argument("--model", default=None, help="model id (e.g. deepseek/deepseek-v4-flash)")
+    parser.add_argument("--thinking", default=None, help="off, minimal, low, medium, high")
+    parser.add_argument("--mode", choices=("daemon", "print"), default="daemon", help="daemon (subagents work) or the in-process --print path (no subagents)")
+    parser.add_argument("--wait-hours", type=float, default=6.0, help="how long to wait for the run to finish")
     parser.add_argument("--dry-run", action="store_true", help="set everything up and print the command; do not start prime-agent")
     parser.add_argument("prime_agent_args", nargs="*", help="arguments after -- go to prime-agent")
     args = parser.parse_args(argv)
@@ -165,16 +284,30 @@ def main(argv=None) -> int:
             "PYTHONPATH": os.environ["PYTHONPATH"],
         }
     )
+    model_flags = []
+    for flag, value in (("--provider", args.provider), ("--model", args.model), ("--thinking", args.thinking)):
+        if value:
+            model_flags += [flag, value]
     # The Rust CLI takes the print-mode message right after --print (no `--` arm).
-    command = [args.prime_agent, "--print", ROOT_PROMPT, *args.prime_agent_args]
-    (run_dir / "command.json").write_text(json.dumps({"command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "PRIME_AGENT_MACHINES_DIR", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER", "PYTHONPATH")}}, indent=2) + "\n", encoding="utf-8")
-    print("prime-agent command:", " ".join([command[0], "--print", "<prompt>", *command[3:]]), flush=True)
+    command = [args.prime_agent, "--print", ROOT_PROMPT, *model_flags, *args.prime_agent_args]
+    (run_dir / "command.json").write_text(json.dumps({"mode": args.mode, "print_command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "PRIME_AGENT_MACHINES_DIR", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER", "PYTHONPATH")}}, indent=2) + "\n", encoding="utf-8")
+    if args.mode == "print":
+        print("prime-agent command:", " ".join([command[0], "--print", "<prompt>", *command[3:]]), flush=True)
+    else:
+        print(f"daemon mode: socket {run_dir / 'daemon.sock'}, model {args.provider}/{args.model}", flush=True)
     if args.dry_run:
         return 0
-    with open(run_dir / "root.log", "ab") as log:
-        completed = subprocess.run(command, cwd=str(run_dir), env=env, stdout=log, stderr=subprocess.STDOUT)
-    print(f"prime-agent exited {completed.returncode}; see {run_dir / 'root.log'} and {run_dir / 'ledger.jsonl'}")
-    return completed.returncode
+    if args.mode == "print":
+        with open(run_dir / "root.log", "ab") as log:
+            completed = subprocess.run(command, cwd=str(run_dir), env=env, stdout=log, stderr=subprocess.STDOUT)
+        print(f"prime-agent exited {completed.returncode}; see {run_dir / 'root.log'} and {run_dir / 'ledger.jsonl'}")
+        return completed.returncode
+    code = run_daemon_session(
+        prime_agent=args.prime_agent, run_dir=run_dir, agent_dir=agent_dir, env=env,
+        provider=args.provider, model=args.model, thinking=args.thinking, prompt=ROOT_PROMPT, wait_hours=args.wait_hours,
+    )
+    print(f"run ended ({code}); see {run_dir / 'ledger.jsonl'} and {run_dir / 'root.log'}", flush=True)
+    return code
 
 
 if __name__ == "__main__":
