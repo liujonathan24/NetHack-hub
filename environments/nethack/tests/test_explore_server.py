@@ -100,6 +100,17 @@ class ExploreServerTest(unittest.TestCase):
             names = asyncio.run(tool_names(url))
             observation = asyncio.run(call_tool(url, pick(names, "request_map"), {}))
             self.assertIn("[call#", observation)
+            # The server publishes the live game state beside its ready file.
+            import time as _time
+
+            state_path = run_dir / "servers" / "attempt-0.state.json"
+            for _ in range(20):
+                state = json.loads(state_path.read_text()) if state_path.exists() else {}
+                if state.get("skill_calls", 0) >= 1:
+                    break
+                _time.sleep(0.5)
+            self.assertGreaterEqual(state["skill_calls"], 1, state)
+            self.assertFalse(state["budget_exhausted"])
             saved = asyncio.run(call_tool(url, pick(names, "save"), {"label": "smoke", "note": "before the stop"}))
             self.assertNotIn("Error", saved[:200], saved)
             # The mirror runs every 2 s inside the server; finalize flushes it.
@@ -123,9 +134,12 @@ class ExploreServerTest(unittest.TestCase):
             names2 = asyncio.run(tool_names(url2))
             observation2 = asyncio.run(call_tool(url2, pick(names2, "request_map"), {}))
             self.assertIn("Dlvl", observation2)
-            self.assertTrue(adapter.finalize(run_dir, 1, reason="smoke stop 2"))
+            # settle(): a quiet game is declared over and its outcome recorded.
+            state = adapter.settle(attempt=1, run_dir=run_dir, quiet_s=1.0, timeout_s=60.0)
+            self.assertIn("skill_calls", state)
             outcomes = ledger.outcomes()
             self.assertEqual(outcomes[-1].attempt, 1)
+            self.assertIn("no game call", outcomes[-1].reason)
             self.assertEqual(outcomes[-1].checkpoint_from, saved_checkpoint.id)
             self.assertEqual(restored["env_handle"]["id"], saved_checkpoint.id)
 

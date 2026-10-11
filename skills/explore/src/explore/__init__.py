@@ -137,19 +137,35 @@ def outcome(
 # -- the orchestrator's side -----------------------------------------------
 
 
-def leaderboard(limit: int = 30, *, token: str | None = None, run_dir: str | Path | None = None) -> str:
+def _settle_previous(ledger: Ledger, adapter: EnvFork | None) -> None:
+    """Make sure the latest attempt's GAME is over and its outcome recorded
+    before the orchestrator reads anything. A player's turn can end while its
+    game calls keep running in the kernel; the adapter's ``settle`` waits for
+    the game (or a quiet period), stops the server, and writes the outcome."""
+    previous = ledger.attempts_started() - 1
+    if previous < 0 or any(outcome.attempt == previous for outcome in ledger.outcomes()):
+        return
+    adapter = adapter or load_adapter(run_dir=ledger.dir)
+    settle = getattr(adapter, "settle", None)
+    if settle is not None:
+        settle(attempt=previous, run_dir=ledger.dir)
+
+
+def leaderboard(limit: int = 30, *, token: str | None = None, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> str:
     """The leaderboard text: one line per checkpoint with its harness-computed
     numbers, how many attempts started there, and how they ended. Orchestrator
-    only (``token``)."""
+    only (``token``). Waits for the previous attempt's game to be over first."""
     ledger = Ledger(run_dir)
     _require_token(token, ledger, "explore.leaderboard")
+    _settle_previous(ledger, adapter)
     return leaderboard_text(ledger, limit=limit)
 
 
-def rows(*, token: str | None = None, run_dir: str | Path | None = None) -> list[dict[str, Any]]:
+def rows(*, token: str | None = None, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> list[dict[str, Any]]:
     """The leaderboard as data. Orchestrator only (``token``)."""
     ledger = Ledger(run_dir)
     _require_token(token, ledger, "explore.rows")
+    _settle_previous(ledger, adapter)
     return leaderboard_rows(ledger)
 
 
@@ -206,6 +222,8 @@ def select(
     """
     ledger = Ledger(run_dir)
     _require_token(token, ledger, "explore.select")
+    adapter = adapter or load_adapter(run_dir=ledger.dir)
+    _settle_previous(ledger, adapter)
     chosen = ledger.checkpoint(str(checkpoint_id))
     if chosen is None:
         known = ", ".join(entry.id for entry in ledger.checkpoints()) or "none"
@@ -218,7 +236,6 @@ def select(
         if problems:
             raise ValueError("; ".join(problems))
     attempt = ledger.attempts_started()
-    adapter = adapter or load_adapter(run_dir=ledger.dir)
     restored = adapter.restore(chosen.env_handle, attempt=attempt, run_dir=ledger.dir)
     session_file = ledger.player_session(chosen.attempt)
     if session_file is None:
@@ -251,9 +268,10 @@ def select(
     return {"decision": decision, "directive": DIRECTIVE_BLOCK_FORMAT.format(directive=directive_text)}
 
 
-def stop(reason: str = "") -> dict[str, Any]:
+def stop(reason: str = "", *, token: str | None = None) -> dict[str, Any]:
     """End the run. The decision has NO ``next`` key, so the machine's guard
-    ``decision.next exists`` fails (a ``null`` value would still exist)."""
+    ``decision.next exists`` fails (a ``null`` value would still exist).
+    ``token`` is accepted for symmetry with select() and not checked."""
     return {"decision": {"stop": True, "reason": reason}, "directive": ""}
 
 

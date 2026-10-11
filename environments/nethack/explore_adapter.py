@@ -33,6 +33,10 @@ from typing import Any
 HERE = pathlib.Path(__file__).resolve().parent
 BOOT_TIMEOUT_S = 300.0
 STOP_TIMEOUT_S = 90.0
+#: settle(): how long a game may make no progress before the attempt is
+#: declared over anyway, and the hard cap on waiting.
+SETTLE_QUIET_S = 180.0
+SETTLE_TIMEOUT_S = 3600.0
 
 
 def _read_json(path: pathlib.Path) -> dict[str, Any]:
@@ -93,6 +97,45 @@ class NetHackAdapter:
             raise FileNotFoundError(f"checkpoint {directory} has no state.bundle")
         self.finalize(run_dir, attempt - 1, reason="next attempt selected")
         return self._boot(run_dir, attempt, resume=str(directory), checkpoint_from=str(env_handle.get("id") or directory.name))
+
+    def settle(self, *, attempt: int, run_dir: pathlib.Path, quiet_s: float | None = None, timeout_s: float | None = None) -> dict[str, Any]:
+        """Wait until attempt ``attempt``'s GAME is over, then stop its server
+        (which writes the outcome). Over means: died, ascended, terminated,
+        or the call budget exhausted; or no game call for ``quiet_s``; or
+        ``timeout_s`` elapsed. A player's turn can end while its game calls
+        keep running in the kernel, so the orchestrator must not read the
+        ledger before this returns. Returns the final state (empty when the
+        server was already gone)."""
+        run_dir = pathlib.Path(run_dir)
+        config = self.config(run_dir)
+        quiet_s = float(quiet_s if quiet_s is not None else config.get("settle_quiet_s", SETTLE_QUIET_S))
+        timeout_s = float(timeout_s if timeout_s is not None else config.get("settle_timeout_s", SETTLE_TIMEOUT_S))
+        ready = _read_json(self.ready_path(run_dir, attempt))
+        pid = ready.get("pid")
+        if not isinstance(pid, int) or not _alive(pid):
+            return {}
+        state_path = self.ready_path(run_dir, attempt).with_suffix(".state.json")
+        started = time.time()
+        last_calls, last_change = -1, time.time()
+        reason = "settle timeout"
+        while True:
+            state = _read_json(state_path)
+            calls = int(state.get("skill_calls") or 0)
+            if calls != last_calls:
+                last_calls, last_change = calls, time.time()
+            if state.get("died") or state.get("ascended") or state.get("terminated") or state.get("budget_exhausted"):
+                reason = "game over"
+                break
+            if time.time() - last_change > quiet_s:
+                reason = f"no game call for {int(quiet_s)} s"
+                break
+            if time.time() - started > timeout_s:
+                break
+            if not _alive(pid):
+                return state
+            time.sleep(2.0)
+        self.finalize(run_dir, attempt, reason=reason)
+        return state
 
     # -- servers -----------------------------------------------------------------
 

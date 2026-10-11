@@ -194,6 +194,31 @@ class SelectTest(unittest.TestCase):
             machine = (HERE.parent / "machines" / "explore" / "MACHINE.md").read_text(encoding="utf-8")
             self.assertIn("{{EXPLORE_TOKEN}}", machine)
 
+    def test_leaderboard_and_select_settle_the_previous_attempt_first(self) -> None:
+        class RecordingAdapter(explore.ScriptedAdapter):
+            settled: list[int] = []
+
+            def settle(self, *, attempt, run_dir):
+                self.settled.append(attempt)
+                Ledger(run_dir).add_outcome(attempt=attempt, result="budget", checkpoint_from=None, reason="settled by adapter")
+                return {"budget_exhausted": True}
+
+        with TemporaryDirectory() as temp:
+            run = Path(temp)
+            ledger = Ledger(run)
+            ledger.add_player(attempt=0, child="sub-a", session_file=None)
+            ledger.add_checkpoint(attempt=0, score={"dlvl": 2}, env_handle="h", call=5, parent=None)
+            adapter = RecordingAdapter()
+            text = explore.leaderboard(run_dir=run, adapter=adapter)
+            self.assertEqual(adapter.settled, [0])
+            self.assertIn("1 finished", text)  # the settled outcome counts as finished
+            self.assertEqual([(o.attempt, o.result) for o in ledger.outcomes()], [(0, "budget")])
+            # Already settled: no second settle on the next read or on select.
+            explore.rows(run_dir=run, adapter=adapter)
+            explore.select("c0", "Go.", run_dir=run, adapter=adapter)
+            self.assertEqual(adapter.settled, [0])
+            self.assertEqual(explore.stop("x", token="ignored")["decision"]["stop"], True)
+
     def test_fixed_rule_takes_the_previous_attempts_latest_checkpoint(self) -> None:
         with TemporaryDirectory() as temp:
             run = Path(temp)

@@ -294,6 +294,26 @@ class Server:
     def log(self, message: str) -> None:
         print(f"[explore_server attempt {self.args.attempt} {time.strftime('%H:%M:%S')}] {message}", file=sys.stderr, flush=True)
 
+    def write_state(self) -> None:
+        """Publish the attempt's live game state beside the ready file, so the
+        adapter can tell when the GAME is over (the player's turn can end
+        while its game calls keep running in the kernel)."""
+        state = self.trace.state if self.trace is not None else None
+        if state is None:
+            return
+        payload = {
+            "attempt": self.args.attempt,
+            "skill_calls": int(state.skill_calls),
+            "max_skill_calls": int(self.args.max_skill_calls),
+            "died": bool(state.died),
+            "ascended": bool(state.ascended),
+            "terminated": bool(state.terminated),
+            "budget_exhausted": bool(state.budget_exhausted),
+            "max_dlvl_reached": int(state.max_dlvl_reached),
+            "updated_at": time.time(),
+        }
+        atomic_write(self.ready_path.with_suffix(".state.json"), json.dumps(payload) + "\n")
+
     def request_stop(self, reason: str) -> None:
         self.log(f"stop requested: {reason}")
         self.stop_reason = reason
@@ -309,6 +329,8 @@ class Server:
             while not self.stop_event.is_set():
                 with contextlib.suppress(Exception):
                     self.mirror_archive()
+                with contextlib.suppress(Exception):
+                    self.write_state()
                 if self.stop_path.exists():
                     reason = self.stop_path.read_text(encoding="utf-8").strip() or "stop requested"
                     self.request_stop(reason)

@@ -33,6 +33,11 @@ class EnvFork(Protocol):
         """Rebuild the game ``env_handle`` names, for ``attempt``. Returns
         ``{"env_handle": ..., "mcp_servers": [...]}``."""
 
+    def settle(self, *, attempt: int, run_dir: Path) -> dict[str, Any]:
+        """Wait until ``attempt``'s game is over, then stop it and record the
+        outcome. Optional: an adapter without it is assumed to end attempts
+        itself."""
+
 
 class ScriptedAdapter:
     """No game at all: handles are echoed, and no MCP servers are needed.
@@ -54,6 +59,10 @@ class ScriptedAdapter:
     def restore(self, env_handle: Any, *, attempt: int, run_dir: Path) -> dict[str, Any]:
         self._record(run_dir, {"op": "restore", "attempt": attempt, "env_handle": env_handle})
         return {"env_handle": env_handle, "mcp_servers": []}
+
+    def settle(self, *, attempt: int, run_dir: Path) -> dict[str, Any]:
+        self._record(run_dir, {"op": "settle", "attempt": attempt})
+        return {}
 
 
 def read_config(run_dir: Path) -> dict[str, Any]:
