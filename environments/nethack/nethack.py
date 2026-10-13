@@ -14,8 +14,7 @@ import random
 import re
 from typing import Any, Optional
 
-import verifiers as vf
-from datasets import Dataset
+from nethack_harness.vf_compat import HAVE_VERIFIERS, vf
 
 from nethack_core.env import NetHackCoreEnv
 from nethack_harness.memory.journal import Journal
@@ -2483,6 +2482,8 @@ def _build_task_dataset(n_examples: int, seed_base: int, explicit_seeds: Optiona
     `system_prompt` defaults to this module's SYSTEM_PROMPT (honoring any
     NETHACK_HARNESS overlay); load_environment passes the spec's prompt.
     """
+    from datasets import Dataset
+
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT
     rng = random.Random(seed_base)
@@ -2736,10 +2737,12 @@ def load_environment(
             spec = _dc.replace(
                 spec, system_prompt=spec.system_prompt + "\n\n" + "\n\n".join(_blocks))
 
+    # The dataset only feeds verifiers' rollout loop; the game box, which runs
+    # without verifiers, seeds each game through setup_state instead.
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,
-    )
+    ) if HAVE_VERIFIERS else None
 
     # Sub-experiment 1c: when a sub_lm_model id is given (and no explicit
     # sub_lm object was passed), build a real Prime-backed Sub-LM so

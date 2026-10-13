@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-import verifiers as vf
+from nethack_harness.vf_compat import vf
 
 from nethack_core.env import NetHackCoreEnv
 from nethack_core import trace_schema as TS
