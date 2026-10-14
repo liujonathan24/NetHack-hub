@@ -39,6 +39,21 @@ class NetHack(McpIntegration):
     url = None
     bearer_token_env = "NETHACK_MCP_TOKEN"
 
+    # The Rust runtime's `McpIntegration._resolve_config` returns only the class
+    # `url` (it never reads `mcpServers`), so ask the host the way the 0.3.3
+    # runtime did. `mcp.config` serves both the settings entry and a child's
+    # session-scoped servers, so an explore player reaches its own game.
+    async def _resolve_config(self):
+        from rlm import host_request
+
+        config = await host_request("mcp.config", {"server": self.server}) or {}
+        headers = {
+            key: value
+            for key, value in (config.get("headers") or {}).items()
+            if key.lower() != "authorization"
+        }
+        return config.get("url"), headers
+
 
 nethack = NetHack()
 
