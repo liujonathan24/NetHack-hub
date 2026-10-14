@@ -78,6 +78,7 @@ class NetHackAdapter:
         config.setdefault("task_spec", "full_nle")
         config.setdefault("skill_set", "np_core,request_map,search,save")
         config.setdefault("max_skill_calls", 150)
+        config.setdefault("wall_clock_s", 0)
         config.setdefault("auto_checkpoint_every_n_calls", 20)
         return config
 
@@ -200,6 +201,7 @@ class NetHackAdapter:
             "--skill-set", str(config["skill_set"]),
             "--max-skill-calls", str(config["max_skill_calls"]),
             "--every", str(config["auto_checkpoint_every_n_calls"]),
+            "--wall-clock-s", str(config["wall_clock_s"]),
         ]
         if resume:
             command += ["--resume-checkpoint", resume]

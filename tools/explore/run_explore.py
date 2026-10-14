@@ -137,6 +137,7 @@ def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pa
 
 import argparse
 import json
+import re
 import os
 import pathlib
 import shutil
@@ -185,6 +186,17 @@ def link(target: pathlib.Path, path: pathlib.Path) -> None:
     path.symlink_to(target, target_is_directory=True)
 
 
+def single_life_machine(text: str) -> str:
+    """The machine with the opener only: the same first life a PAE run plays
+    as attempt 1 (same prompt, same seed), with no state after it."""
+    match = re.search(r"```machine-spec\n(.*?)\n```", text, re.S)
+    spec = json.loads(match.group(1))
+    spec["states"] = [state for state in spec["states"] if state.get("entry")]
+    spec["transitions"] = []
+    spec["run"]["max_transitions"] = 2
+    return text[: match.start(1)] + json.dumps(spec, indent=2) + text[match.end(1) :]
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--run-dir", required=True)
@@ -194,6 +206,8 @@ def main(argv=None) -> int:
     parser.add_argument("--skill-set", default="np_core,request_map,search,save")
     parser.add_argument("--max-skill-calls", type=int, default=150)
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
+    parser.add_argument("--wall-clock-s", type=float, default=7200.0, help="per-attempt wall clock (the single-life rollout timeout); 0 = none")
+    parser.add_argument("--single-life", action="store_true", help="the opener only: one life, no orchestrator, no checkpoint resumes (the base arm)")
     parser.add_argument("--prime-agent", default="prime-agent", help="the Rust prime-agent binary with fork_from support")
     parser.add_argument("--python", default=sys.executable, help="the eval venv python (verifiers, mcp, aiohttp)")
     parser.add_argument("--agent-dir", default=None, help="a prime-agent agent dir you already logged in with (its auth.json and settings are kept); default <run-dir>/agent")
@@ -223,6 +237,8 @@ def main(argv=None) -> int:
             "skill_set": args.skill_set,
             "max_skill_calls": args.max_skill_calls,
             "auto_checkpoint_every_n_calls": args.every,
+            "wall_clock_s": args.wall_clock_s,
+            "single_life": args.single_life,
             "attempts": args.attempts,
             # The orchestrator-only token: gates explore.leaderboard() and
             # explore.select(); the machine copy below carries it in the
@@ -239,6 +255,8 @@ def main(argv=None) -> int:
     text = text.replace('"max_entries": 29', f'"max_entries": {max(1, args.attempts - 1)}')
     text = text.replace('"max_transitions": 64', f'"max_transitions": {2 * args.attempts + 2}')
     text = text.replace("{{EXPLORE_TOKEN}}", orchestrator_token)
+    if args.single_life:
+        text = single_life_machine(text)
     (machines_dir / "explore").mkdir(parents=True, exist_ok=True)
     (machines_dir / "explore" / "MACHINE.md").write_text(text, encoding="utf-8")
 

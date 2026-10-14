@@ -335,6 +335,12 @@ class Server:
                     reason = self.stop_path.read_text(encoding="utf-8").strip() or "stop requested"
                     self.request_stop(reason)
                     break
+                # The single-life harness's rollout timeout, per attempt. The
+                # outcome is censored (wall clock), never merged with death.
+                wall = float(self.args.wall_clock_s or 0.0)
+                if wall > 0 and time.time() - self.started_at > wall:
+                    self.request_stop(f"wall clock {int(wall)} s")
+                    break
                 if self.proc is not None and self.proc.poll() is not None:
                     self.request_stop(f"game server exited (rc={self.proc.returncode})")
                     break
@@ -389,6 +395,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--skill-set", default="np_core,request_map,search,save")
     parser.add_argument("--max-skill-calls", type=int, default=150)
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
+    parser.add_argument("--wall-clock-s", type=float, default=0.0, help="end the attempt this many seconds after boot (0 = no limit)")
     parser.add_argument("--resume-checkpoint", default=None)
     parser.add_argument("--checkpoint-from", default=None, help="the ledger id of the checkpoint this attempt resumes")
     parser.add_argument("--poll", type=float, default=2.0)
