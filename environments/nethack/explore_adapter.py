@@ -213,6 +213,9 @@ class NetHackAdapter:
         extra = [str(p) for p in config.get("pythonpath") or []]
         env["PYTHONPATH"] = os.pathsep.join(extra + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
         env["EXPLORE_RUN_DIR"] = str(run_dir)
+        # A specific engine build (nethack_core reads NLE_LIB_PATH first).
+        if config.get("nle_lib_path"):
+            env["NLE_LIB_PATH"] = str(config["nle_lib_path"])
         log = open(ready_path.with_suffix(".server.log"), "ab")
         # Detached: the server must outlive the kernel that selected the
         # checkpoint, because the player (another process) uses it.

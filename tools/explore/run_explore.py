@@ -256,6 +256,7 @@ def main(argv=None) -> int:
     parser.add_argument("--control-config", default=None, help="the base arm's config.toml: its [taskset] game knobs, its workspace (AGENTS.md system prompt), its task prompt, and its SKILL.md bytes are served")
     parser.add_argument("--max-skill-calls", type=int, default=150)
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
+    parser.add_argument("--nle-lib", default=None, help="the libnethack.so every game server loads (NLE_LIB_PATH)")
     parser.add_argument("--wall-clock-s", type=float, default=7200.0, help="per-attempt wall clock (the single-life rollout timeout); 0 = none")
     parser.add_argument("--single-life", action="store_true", help="the opener only: one life, no orchestrator, no checkpoint resumes (the base arm)")
     parser.add_argument("--prime-agent", default="prime-agent", help="the Rust prime-agent binary with fork_from support")
@@ -298,6 +299,7 @@ def main(argv=None) -> int:
             "max_skill_calls": args.max_skill_calls,
             "auto_checkpoint_every_n_calls": args.every,
             "wall_clock_s": args.wall_clock_s,
+            "nle_lib_path": str(pathlib.Path(args.nle_lib).resolve()) if args.nle_lib else None,
             "taskset_json": str(taskset_json) if taskset_json else None,
             "workspace": str(workspace) if workspace else None,
             "single_life": args.single_life,
