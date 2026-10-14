@@ -254,6 +254,11 @@ class NethackBaseAgent:
     
     @property
     def showing_more_message(self) -> bool:
+        # Ask the engine when it can: a text window can leave "--More--" on
+        # screen after it is answered, which the scan below would still see.
+        unwrapped = self.env.unwrapped
+        if hasattr(unwrapped, "waiting_for_space"):
+            return bool(unwrapped.waiting_for_space)
         # Seems like this is the only way to detect --More-- messages
         # As last_observation["message"] does not contain this
         for line in self.last_observation["tty_chars"]:

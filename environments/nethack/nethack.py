@@ -14,8 +14,7 @@ import random
 import re
 from typing import Any, Optional
 
-import verifiers as vf
-from datasets import Dataset
+from nethack_harness.vf_compat import HAVE_VERIFIERS, vf
 
 from nethack_core.env import NetHackCoreEnv
 from nethack_harness.memory.journal import Journal
@@ -1002,6 +1001,23 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         forever. Measured: 3 of 5 `b80_b0` seeds burned 2,499 calls each at
         game time 1 this way. See `prompt/interactive_state.py`.
         """
+        if state.get("_auto_dismiss") is False and state.get("raw_obs") is not None:
+            # `shape()` takes the first `@` on screen as the hero, which is wrong
+            # when a human monster is drawn above it.
+            try:
+                from nethack_harness.prompt.features import adjacent_tiles
+                _adj = adjacent_tiles(state["raw_obs"])
+                if _adj:
+                    state["structured_obs"].adjacent = _adj
+            except Exception:
+                pass
+            # The engine's `inv_strs` can lag behind the game's own `i` listing.
+            try:
+                from nethack_harness.prompt.tty_screen import apply_inventory_listing
+                apply_inventory_listing(state, state["structured_obs"].inventory,
+                                        state.get("_call_log"))
+            except Exception:
+                pass
         obs_text = self.spec.turn_template(
             state["structured_obs"],
             state["journal"] if journal is None else journal,
@@ -1009,9 +1025,44 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             compact=self.compact_obs,
             journal_max_chars=self.journal_render_max_chars,
         )
+        raw_surface = state.get("_auto_dismiss") is False
+        _any_log = state.get("_call_log")
+        # `np_*` skill feedback carries no game message, so those calls get it too.
+        call_log = _any_log if (
+            raw_surface or str(state.get("_last_skill_name") or "").startswith("np_")
+        ) else None
+        getpos_pending = bool(
+            _any_log is not None and _any_log.getpos_step
+            and _any_log.getpos_step == _any_log.steps)
+        so = state.get("structured_obs")
+        _bkw = {}
+        if _any_log is not None:
+            # Tracked across the call: a menu is only partly repainted after a toggle.
+            _bkw["window"] = _any_log.window
         warning = detect_blocking_ui(
-            state.get("raw_obs"), published_tools=state.get("_published_tools"))
+            state.get("raw_obs"), published_tools=state.get("_published_tools"),
+            inventory=getattr(so, "inventory", None),
+            getpos_pending=getpos_pending, **_bkw)
+        if warning and raw_surface:
+            # At HP 0 the end screens are up but input no longer reaches the
+            # game (GAME OVER says so), so a waiting-for-input banner is wrong.
+            try:
+                if int((getattr(so, "status", None) or {}).get("hitpoints", 1)) <= 0:
+                    warning = None
+            except (TypeError, ValueError):
+                pass
         text = f"{warning}\n{obs_text}" if warning else obs_text
+        if call_log is not None:
+            from nethack_harness.prompt.tty_screen import bound_lines
+            if call_log.lines:
+                block = ["=== GAME MESSAGES (printed during this call, in order) ==="]
+                block += [f"  {m}" for m in bound_lines(call_log.lines)]
+            elif call_log.steps:
+                block = ["=== GAME MESSAGES === (none: the game printed nothing new during this call)"]
+            else:
+                block = []
+            if block:
+                text = "\n".join(block) + "\n\n" + text
         # E9b awareness probe: append the reflection questions to every turn.
         if self.reflect:
             from nethack_harness.prompt.reflection import REFLECT_BLOCK
@@ -1067,8 +1118,15 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         }
         clock_before = _game_clock(state)
         rec = TurnRecorder(state.get("env"), capture_frames=self.record_step_frames)
+        # Logs what the game prints during this call, for `_render_obs_text`.
+        # It only observes, so the recorded keystrokes are unchanged.
+        from nethack_harness.prompt.tty_screen import CallScreenLog
+        call_log = CallScreenLog(state.get("env"), baseline_obs=state.get("raw_obs"),
+                                 prev_window=getattr(state.get("_call_log"), "window", None))
+        state["_call_log"] = call_log
         with rec:
-            content = await self._apply_tool_call_inner(state, skill_name, skill_args)
+            with call_log:
+                content = await self._apply_tool_call_inner(state, skill_name, skill_args)
         clock_after = _game_clock(state)
         # Echo the correlation id into the RESULT payload -- the one channel
         # that reaches the model transcript verbatim in every scaffold (an MCP
@@ -1316,7 +1374,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         _is_descent = (
             skill_name == "np_down"
             or (skill_name == "np_press_key"
-                and str((skill_args or {}).get("key", "")).strip() == ">")
+                and _press_key_sends_gt((skill_args or {}).get("key", "")))
         )
         # E9a hard enforcement: descent is REFUSED while underleveled, with no
         # override -- the stairs stay locked until XL >= norm(Dlvl). This turns
@@ -1957,7 +2015,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # (never raises). Mutates raw_obs.tty_chars, then re-shape so the map
         # view reflects the cleaned tty.
         if state.get("_standard_tier", True):
-            _scrub_intro_banner(state["raw_obs"])
+            _scrub_intro_banner(state["raw_obs"],
+                                window=getattr(state.get("_call_log"), "window", None))
             state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
 
         # Build the per-turn user message from the spec's turn template.
@@ -2168,6 +2227,23 @@ def _native_tool_call_id(calls):
     return str(tid) if tid else None
 
 
+def _press_key_sends_gt(key) -> bool:
+    """True when an np_press_key key sequence ("s>", "<GT>") would send '>'.
+
+    An unparseable sequence sends nothing; if the parser cannot load, fall
+    back to matching ">" exactly.
+    """
+    key = str(key or "")
+    try:
+        from nethack_harness.tools import netplay_true as _npt  # noqa: F401  (puts vendor/ on sys.path)
+        from netplay.nethack_utils.nle_wrapper import RawKeyPress
+        return any(int(k) == ord(">") for k in RawKeyPress.parse_sequence(key))
+    except ValueError:
+        return False
+    except Exception:
+        return key.strip() == ">"
+
+
 def _game_clock(state) -> Optional[int]:
     """The in-game turn counter (`status["time"]`), or None if unreadable.
 
@@ -2199,7 +2275,9 @@ def _obs_tty_has_more(obs) -> bool:
         tty = obs.get("tty_chars") if isinstance(obs, dict) else getattr(obs, "tty_chars", None)
         if tty is None:
             return False
-        return any(b"--More--" in bytes(int(c) for c in row) for row in tty[:3])
+        # Rows joined: a long message can wrap the marker across rows. The
+        # replay grader in residency-environments mirrors this check.
+        return b"--More--" in b"".join(bytes(int(c) for c in row) for row in tty[:3])
     except Exception:
         return False
 
@@ -2212,7 +2290,7 @@ def _obs_tty_has_more(obs) -> bool:
 _INTRO_BANNER_MARKERS = (b"Copyright", b"Stichting", b"Version 3.6", b"See license")
 
 
-def _scrub_intro_banner(obs) -> None:
+def _scrub_intro_banner(obs, window=None) -> None:
     """Strip the stale intro/copyright banner from a CoreObservation's tty.
 
     The authoritative dungeon map lives in ``obs.chars`` (one row above the
@@ -2234,9 +2312,20 @@ def _scrub_intro_banner(obs) -> None:
             return
         space = ord(" ")
         n_cols = min(tty.shape[1], chars.shape[1])
+        # An open menu or text window covers cells `chars` reports blank; keep
+        # its rectangle (rows up to `end_row`, columns from `col`) intact.
+        win_col, win_end = n_cols, -1
+        try:
+            from nethack_harness.prompt.tty_screen import find_window
+            _win = window if window is not None else find_window(obs)
+            if _win is not None:
+                win_col, win_end = _win.col, _win.end_row
+        except Exception:
+            pass
         # tty row r (1..21) corresponds to chars row r-1, same columns.
         for r in range(1, min(tty.shape[0], chars.shape[0] + 1)):
-            for x in range(n_cols):
+            cols = min(n_cols, win_col) if r <= win_end else n_cols
+            for x in range(cols):
                 if tty[r, x] != chars[r - 1, x] and chars[r - 1, x] == space:
                     tty[r, x] = space
     except Exception:
@@ -2368,6 +2457,8 @@ def _build_task_dataset(n_examples: int, seed_base: int, explicit_seeds: Optiona
     `system_prompt` defaults to this module's SYSTEM_PROMPT (honoring any
     NETHACK_HARNESS overlay); load_environment passes the spec's prompt.
     """
+    from datasets import Dataset
+
     if system_prompt is None:
         system_prompt = SYSTEM_PROMPT
     rng = random.Random(seed_base)
@@ -2621,10 +2712,11 @@ def load_environment(
             spec = _dc.replace(
                 spec, system_prompt=spec.system_prompt + "\n\n" + "\n\n".join(_blocks))
 
+    # Only verifiers' rollout loop reads the dataset.
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,
-    )
+    ) if HAVE_VERIFIERS else None
 
     # Sub-experiment 1c: when a sub_lm_model id is given (and no explicit
     # sub_lm object was passed), build a real Prime-backed Sub-LM so

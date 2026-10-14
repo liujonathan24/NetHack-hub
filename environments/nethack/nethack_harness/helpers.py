@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-import verifiers as vf
+from nethack_harness.vf_compat import vf
 
 from nethack_core.env import NetHackCoreEnv
 from nethack_core import trace_schema as TS
@@ -1084,16 +1084,35 @@ def _cr_would_be_unknown_command(obs) -> bool:
         getlin ("write what?")    -> (0, 1, 0)
         inventory menu, "(end)"   -> (0, 0, 1)
 
-    So a CR is stray iff every flag is clear. Anything else -- including a state
-    we cannot read -- is treated as "a prompt might be open", and the CR is sent
-    unchanged. Never raises: a detector failure must not break a rollout, and
-    failing open only restores the previous behaviour.
+    So a CR is stray iff every flag is clear and the `#` extended-command prompt
+    (which sets no flag) is not open. A state we cannot read counts as "a prompt
+    might be open", and the CR is sent. Never raises.
     """
     try:
         misc = obs.get("misc") if isinstance(obs, dict) else getattr(obs, "misc", None)
         if misc is None:
             return False
-        return all(int(v) == 0 for v in misc)
+        return all(int(v) == 0 for v in misc) and not _ext_cmd_prompt_open(obs)
+    except Exception:
+        return False
+
+
+def _ext_cmd_prompt_open(obs) -> bool:
+    """True while the `#` extended-command prompt is reading input.
+
+    That prompt sets no `misc` flag, so it is read off the screen: cursor on
+    row 0 and row 0 starting with `#`.
+    """
+    try:
+        get = obs.get if isinstance(obs, dict) else (lambda name: getattr(obs, name, None))
+        misc, cursor, tty = get("misc"), get("tty_cursor"), get("tty_chars")
+        if misc is None or cursor is None or tty is None:
+            return False
+        if any(int(v) for v in misc):
+            return False
+        if int(list(cursor)[0]) != 0:
+            return False
+        return bytes(int(c) for c in tty[0]).startswith(b"#")
     except Exception:
         return False
 
@@ -1171,11 +1190,9 @@ _ASCENSION_MARKERS = (
     "with the Amulet",
     "offered the Amulet",
 )
+# Only phrases NetHack prints about the player: "killed by", "drowned" and the
+# like also appear in messages about monsters ("The gnome is killed by ...").
 _DEATH_MARKERS = (
-    "killed by",
-    "starved to death",
-    "petrified by",
-    "drowned",
     "quit the game",
     "Do you want your possessions identified",
 )
@@ -1551,7 +1568,8 @@ _TYPE_MAP = {
 # matches the system prompt: x = column 0-78, y = row 0-20.
 _ARG_HINTS = {
     "x": "column 0-78", "y": "row 0-20",
-    "key": "one key; '>' descend, '<' ascend, 's' search, ESC/SPACE/ENTER by name",
+    "key": "one key or a sequence sent in order, e.g. '>' or 'E-Elbereth<ENTER>'; "
+           "specials in angle brackets: <ESC> <ENTER> <SPACE> <TAB> <BACKSPACE> <C-d> <LT> <GT>",
     "item_letter": "inventory letter (a-z, A-Z), e.g. 'f'",
     "direction": "n/e/s/w or ne/se/sw/nw (or 'self' for np_zap)",
     "count": "number of turns",

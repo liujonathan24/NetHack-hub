@@ -49,12 +49,18 @@ tty row 0 is checked for the small set of prompt shapes NetHack writes to the
 message line. That half is a heuristic and is deliberately narrow: a false
 positive would tell the agent to press `esc` when nothing is open, which costs
 one call, whereas a false negative costs the entire rollout.
+
+The engine leaves the last message on row 0 after it is answered, so when
+the observation has a cursor, a row-0 prompt counts only while the cursor is
+on row 0.
 """
 from __future__ import annotations
 
 import re
 
-import numpy as np
+from nethack_harness.prompt.tty_screen import (
+    find_window, format_window, is_getpos_text, misc_flags, tty_cursor,
+)
 
 # Prompt text NetHack writes to tty row 0 while blocking for input, for the
 # cases `misc` leaves at zero. Matched case-insensitively as substrings.
@@ -77,47 +83,178 @@ def _tty_row0(raw_obs) -> str:
         return ""
 
 
-def detect_blocking_ui(raw_obs, published_tools=None) -> str | None:
+def _hero_tty_cell(raw_obs):
+    """The hero's terminal cell (row, col): map (x, y) is tty (y + 1, x)."""
+    bl = getattr(raw_obs, "blstats", None)
+    if bl is None:
+        return None
+    try:
+        return int(bl[1]) + 1, int(bl[0])
+    except (IndexError, TypeError, ValueError):
+        return None
+
+
+# Item prompts end in a bracket group like "[bcde or ?*]" or "[- bh or ?*]".
+_ITEM_PROMPT_RE = re.compile(r"\[([^\]]*?)(?:\s*or\s*)?\??\*\]")
+
+
+def _item_prompt_letters(prompt: str):
+    """Letters an item prompt suggests, ranges expanded, or None if not one."""
+    m = _ITEM_PROMPT_RE.search(prompt or "")
+    if not m:
+        return None
+    body = m.group(1)
+    keys: list[str] = []
+    i = 0
+    while i < len(body):
+        if (i + 2 < len(body) and body[i + 1] == "-" and body[i].isalpha()
+                and body[i + 2].isalpha()):
+            keys.extend(chr(o) for o in range(ord(body[i]), ord(body[i + 2]) + 1))
+            i += 3
+            continue
+        if not body[i].isspace():
+            keys.append(body[i])
+        i += 1
+    return keys
+
+
+def _item_prompt_lines(prompt: str, inventory, published_tools=None) -> list[str]:
+    keys = _item_prompt_letters(prompt)
+    if keys is None:
+        return []
+    tools = {str(t) for t in (published_tools or ())}
+    if "np_press_key" in tools:
+        how = "`np_press_key(key='<letter>')`"
+    elif any(t.startswith("bal_") for t in tools):
+        how = "`bal_<letter>`"
+    else:
+        how = "pressing that letter"
+    by_letter = {}
+    for it in inventory or ():
+        try:
+            by_letter[str(it.letter)] = str(it.description)
+        except AttributeError:
+            continue
+    out = ["This is an ITEM prompt: answer with an inventory letter, e.g. "
+           f"{how}. ANY letter from your inventory is "
+           "accepted, not only the suggested ones."]
+    sugg = [k for k in keys if k.isalpha()]
+    if sugg:
+        out.append("The game suggests:")
+        for k in sugg:
+            out.append(f"  {k}: {by_letter.get(k, '(not in your inventory list)')}")
+    if "-" in keys:
+        out.append("  -: nothing / your bare hands or fingers")
+    if "$" in keys:
+        out.append("  $: gold")
+    out.append("'?' lists the suggested items, '*' lists your whole inventory, "
+               "`esc` cancels.")
+    return out
+
+
+def _window_lines(win) -> list[str]:
+    if win.is_menu:
+        title = "A MENU IS OPEN"
+    else:
+        title = "A TEXT WINDOW IS OPEN"
+    page = win.page
+    if page:
+        title += f" (page {page[0]} of {page[1]})"
+    lines = [f"=== GAME IS WAITING FOR INPUT: {title} ===",
+             "The game clock is FROZEN until this is answered or closed; "
+             "movement keys do nothing here. On screen:"]
+    lines.extend(format_window(win))
+    if win.is_menu:
+        sel = [f"{l}" for (l, mark, _t) in win.entries if mark in "+#"]
+        lines.append(
+            "Press an entry's letter to select it (in a pick-one menu that "
+            "chooses it immediately; in a pick-several menu it toggles, and a "
+            "selected entry shows '+' instead of '-' after its letter). "
+            "`enter` confirms, `esc` cancels.")
+        lines.append("Currently selected: " + (", ".join(sel) if sel else "nothing"))
+    else:
+        lines.append("Press `enter` to continue past it, or `esc` to close it.")
+    if page and page[0] < page[1]:
+        nxt = "'>'" if win.is_menu else "'>' (or `enter`)"
+        lines.append(f"More follows: press {nxt} for page {page[0] + 1}, "
+                     "'<' to go back.")
+    elif page and page[0] > 1:
+        lines.append("'<' goes back to the previous page.")
+    lines.append("")
+    return lines
+
+
+_FIND = object()
+
+
+def detect_blocking_ui(raw_obs, published_tools=None, inventory=None,
+                       getpos_pending: bool = False, window=_FIND) -> str | None:
     """Return a warning block if the game is blocked on UI input, else None.
 
     The returned string is inserted directly above `=== MAP ===` so the agent
     reads it before the (stale) dungeon view it would otherwise act on.
+
+    `window` is the open window tracked across the call (default: read off
+    `raw_obs`). `getpos_pending` means a position prompt (travel `_`) was the
+    last thing this call printed; that prompt leaves `misc` clear and the
+    cursor on the hero.
     """
     if raw_obs is None:
         return None
 
     row0 = _tty_row0(raw_obs)
+    low = row0.lower()
+    flags = misc_flags(raw_obs)
+    cur = tty_cursor(raw_obs)
+    win = find_window(raw_obs) if window is _FIND else window
 
-    misc = getattr(raw_obs, "misc", None)
-    blocked = False
-    if misc is not None:
-        try:
-            blocked = bool(np.asarray(misc).any())
-        except (TypeError, ValueError):
-            blocked = False
-
-    if not blocked:
-        low = row0.lower()
-        blocked = any(marker in low for marker in _PROMPT_MARKERS)
-
+    # No cursor (older engines, test fakes): match prompt text on row 0.
+    if cur is None:
+        blocked = bool(flags and any(flags)) or any(m in low for m in _PROMPT_MARKERS)
+    else:
+        hero = _hero_tty_cell(raw_obs)
+        getpos = is_getpos_text(row0) and (
+            getpos_pending or (hero is not None and cur != hero and cur[0] != 0))
+        blocked = (bool(flags and any(flags)) or cur[0] == 0
+                   or win is not None or getpos)
     if not blocked:
         return None
 
+    if win is not None:
+        return "\n".join(_window_lines(win))
+
     lines = [
         "=== GAME IS WAITING FOR INPUT — THE MAP BELOW IS STALE ===",
-        "A menu or prompt is open. The game clock is FROZEN: movement and",
-        "action keys are being swallowed and change nothing. Repeating your",
-        "last action will loop forever.",
+        "A prompt is open. The game clock is FROZEN until you answer it:",
+        "movement and action keys are taken as answers, not as moves.",
     ]
     if row0:
         lines.append(f"Prompt line: {row0}")
 
-    answers = _offered_answers(row0, published_tools)
-    if answers:
-        lines.append(f"ONLY these answers do anything right now: {answers}.")
-        lines.append("Any other key is swallowed and changes nothing.")
+    item_lines = _item_prompt_lines(row0, inventory, published_tools)
+    if item_lines:
+        lines.extend(item_lines)
+    elif "--more--" in low or (flags is not None and flags[2]):
+        # Waiting for space with no window drawn is a --More--, which a long
+        # message can wrap off row 0.
+        lines.append("The game is showing --More--: press `enter` to see the "
+                     "next message (`esc` skips the rest of them).")
+    elif "in what direction" in low:
+        lines.append("Answer with a direction key: h j k l y u b n (west, "
+                     "south, north, east, NW, NE, SW, SE), or < > . for "
+                     "up, down, yourself; `esc` cancels.")
+    elif is_getpos_text(row0):
+        lines.append("Move the cursor with direction keys, then press '.' or "
+                     "',' to pick the spot; `esc` cancels.")
+    elif flags is not None and flags[1] and not flags[0]:
+        lines.append("It wants typed text: press the keys one at a time, then "
+                     "`enter`; `esc` cancels.")
     else:
-        lines.append("Answer the prompt above, or press `esc` to cancel it.")
+        answers = _offered_answers(row0, published_tools)
+        if answers:
+            lines.append(f"Suggested answers (from the prompt): {answers}.")
+        else:
+            lines.append("Answer the prompt above, or press `esc` to cancel it.")
     lines.append("")
     return "\n".join(lines)
 
