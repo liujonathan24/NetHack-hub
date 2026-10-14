@@ -77,7 +77,7 @@ class DaemonClient:
             pass
 
 
-def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pathlib.Path, env: dict, provider: str | None, model: str | None, thinking: str | None, prompt: str, wait_hours: float) -> int:
+def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pathlib.Path, env: dict, provider: str | None, model: str | None, thinking: str | None, prompt: str, wait_hours: float, cwd: pathlib.Path | None = None) -> int:
     """Start a private daemon, create and prompt a root session, wait for it to finish."""
     socket_path = run_dir / "daemon.sock"
     if socket_path.exists():
@@ -91,7 +91,7 @@ def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pa
     try:
         client = DaemonClient(socket_path)
         print(f"daemon up: {client.hello.get('type')} pid {daemon.pid}", flush=True)
-        config = {"cwd": str(run_dir), "sessionDir": str(agent_dir / "sessions"), "executionMode": "print"}
+        config = {"cwd": str(cwd or run_dir), "sessionDir": str(agent_dir / "sessions"), "executionMode": "print"}
         if provider:
             config["provider"] = provider
         if model:
@@ -186,6 +186,55 @@ def link(target: pathlib.Path, path: pathlib.Path) -> None:
     path.symlink_to(target, target_is_directory=True)
 
 
+# The keys of a control [taskset] that describe ITS run, not the game.
+_RUN_ONLY_TASKSET_KEYS = ("trace_dir", "explicit_seeds", "n_examples", "seed", "max_skill_calls")
+
+# What the factory adds to the control's task prompt for an RLM child.
+OPENER_RULES = (
+    "Use the game skill: await every game call in your own cell and read its observation before the next "
+    "call. Do not run game calls in background tasks, and do not message other agents."
+)
+
+
+def control_taskset(config_toml: pathlib.Path) -> dict:
+    import tomllib
+
+    taskset = dict(tomllib.loads(config_toml.read_text(encoding="utf-8"))["taskset"])
+    for key in _RUN_ONLY_TASKSET_KEYS:
+        taskset.pop(key, None)
+    env_args = dict(taskset.get("env_args") or {})
+    env_args.pop("explicit_seeds", None)
+    taskset["env_args"] = env_args
+    return taskset
+
+
+def control_opener_machine(text: str, task_prompt: str) -> str:
+    """The opener's prompt is the control's task prompt, then the RLM rules."""
+    match = re.search(r"```machine-spec\n(.*?)\n```", text, re.S)
+    spec = json.loads(match.group(1))
+    for state in spec["states"]:
+        if state.get("entry"):
+            state["subagent"]["prompt"] = f"{task_prompt}\n\n{OPENER_RULES}"
+    return text[: match.start(1)] + json.dumps(spec, indent=2) + text[match.end(1) :]
+
+
+def materialize_control_skill(dest: pathlib.Path) -> None:
+    """The skill files the control harness wrote (`PrimeAgentHarness.setup`):
+    SKILL.md with the baseline coordinate sentence (`skill_doc_coords=False`)."""
+    sys.path.insert(0, str(REPO / "harnesses" / "nethack-prime-agent"))
+    from nethack_prime_agent import _SKILL_FILES, _restore_baseline_coord_note
+
+    if dest.is_symlink():
+        dest.unlink()
+    for name in _SKILL_FILES:
+        data = (NETHACK_SKILL / name).read_bytes()
+        if name == "SKILL.md":
+            data = _restore_baseline_coord_note(data)
+        target = dest / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
 def single_life_machine(text: str) -> str:
     """The machine with the opener only: the same first life a PAE run plays
     as attempt 1 (same prompt, same seed), with no state after it."""
@@ -203,7 +252,8 @@ def main(argv=None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--attempts", type=int, default=30, help="N attempts; the machine's run limits are set from it")
     parser.add_argument("--character", default="Val-hum-neu-fem")
-    parser.add_argument("--skill-set", default="np_core,request_map,search,save")
+    parser.add_argument("--skill-set", default=None, help="default: the control config's skill set, else np_core,request_map,search,save")
+    parser.add_argument("--control-config", default=None, help="the base arm's config.toml: its [taskset] game knobs, its workspace (AGENTS.md system prompt), its task prompt, and its SKILL.md bytes are served")
     parser.add_argument("--max-skill-calls", type=int, default=150)
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
     parser.add_argument("--wall-clock-s", type=float, default=7200.0, help="per-attempt wall clock (the single-life rollout timeout); 0 = none")
@@ -222,6 +272,16 @@ def main(argv=None) -> int:
 
     run_dir = pathlib.Path(args.run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    taskset_json, workspace = None, None
+    if args.control_config:
+        taskset = control_taskset(pathlib.Path(args.control_config))
+        if args.skill_set is None:
+            args.skill_set = taskset.get("env_args", {}).get("skill_set")
+        taskset_json = run_dir / "taskset.json"
+        write_json(taskset_json, taskset)
+        workspace = run_dir / "workspace"
+    if args.skill_set is None:
+        args.skill_set = "np_core,request_map,search,save"
     pythonpath = [str(REPO / "tools" / "pycompat"), str(ENGINE), str(REPO), str(ENV_DIR), str(SKILLS_DIR / "explore" / "src")]
     write_json(
         run_dir / "explore.json",
@@ -238,6 +298,8 @@ def main(argv=None) -> int:
             "max_skill_calls": args.max_skill_calls,
             "auto_checkpoint_every_n_calls": args.every,
             "wall_clock_s": args.wall_clock_s,
+            "taskset_json": str(taskset_json) if taskset_json else None,
+            "workspace": str(workspace) if workspace else None,
             "single_life": args.single_life,
             "attempts": args.attempts,
             # The orchestrator-only token: gates explore.leaderboard() and
@@ -271,10 +333,17 @@ def main(argv=None) -> int:
     opener = adapter.fresh(attempt=0, run_dir=run_dir)
     server = opener["mcp_servers"][0]
     print(f"attempt 0: {server['url']}", flush=True)
+    if workspace is not None:
+        task = json.loads((run_dir / "servers" / "task.json").read_text(encoding="utf-8"))
+        machine = machines_dir / "explore" / "MACHINE.md"
+        machine.write_text(control_opener_machine(machine.read_text(encoding="utf-8"), task["prompt"]), encoding="utf-8")
 
     agent_dir = pathlib.Path(args.agent_dir).resolve() if args.agent_dir else run_dir / "agent"
     link(SKILLS_DIR / "explore", agent_dir / "skills" / "explore")
-    link(NETHACK_SKILL, agent_dir / "skills" / "nethack")
+    if workspace is not None:
+        materialize_control_skill(agent_dir / "skills" / "nethack")
+    else:
+        link(NETHACK_SKILL, agent_dir / "skills" / "nethack")
     # Merge into the existing settings (a logged-in agent dir keeps its
     # provider, model, and auth); this run's keys win.
     settings = {}
@@ -342,6 +411,7 @@ def main(argv=None) -> int:
         prime_agent=args.prime_agent, run_dir=run_dir, agent_dir=agent_dir, env=env,
         provider=args.provider, model=args.model, thinking=args.thinking,
         prompt=ROOT_PROMPT.replace("{{EXPLORE_TOKEN}}", orchestrator_token), wait_hours=args.wait_hours,
+        cwd=workspace,
     )
     print(f"run ended ({code}); see {run_dir / 'ledger.jsonl'} and {run_dir / 'root.log'}", flush=True)
     return code

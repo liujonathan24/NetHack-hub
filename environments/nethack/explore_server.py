@@ -183,6 +183,27 @@ class Server:
                 now=created,
             )
 
+    def write_workspace(self, data, root: pathlib.Path) -> None:
+        """The control arm's agent workspace (`NetHackTask.setup`'s
+        `build_workspace` call), with the task's resolved prompts beside it."""
+        from tools.cli_harness_eval.workspace import build_workspace
+
+        spec = m._spec_for(data.tier)
+        objective = (
+            f"{spec.description}\n\nSuccess: {spec.success_criterion}\n\n"
+            "Drive the game only through the `nethack` MCP tools."
+        )
+        build_workspace(root, objective=objective, system_prompt=data.system_prompt or None)
+        wiki = root / "wiki"
+        if wiki.is_dir():
+            for page in wiki.glob("*.md"):
+                page.chmod(0o444)
+            wiki.chmod(0o555)
+        atomic_write(
+            self.ready_path.with_name("task.json"),
+            json.dumps({"prompt": data.prompt, "system_prompt": data.system_prompt, "tier": data.tier}, indent=2) + "\n",
+        )
+
     def write_outcome(self) -> None:
         state = self.trace.state if self.trace is not None else None
         final = {}
@@ -209,22 +230,32 @@ class Server:
     async def boot(self) -> dict:
         from aiohttp import web
 
-        env_args = {
+        # A control taskset (the base arm's config.toml [taskset], as JSON)
+        # fixes every game knob the control ran with; only the seed, the call
+        # cap, the skill set and the checkpoint args are this run's.
+        base: dict = {}
+        if self.args.taskset_json:
+            base = json.loads(pathlib.Path(self.args.taskset_json).read_text(encoding="utf-8"))
+        env_args = dict(base.pop("env_args", {}) or {})
+        env_args.update({
             "skill_set": self.args.skill_set,
             "checkpoint_archive": str(self.archive),
             "auto_checkpoint": True,
             "auto_checkpoint_every_n_calls": int(self.args.every),
-        }
+        })
         if self.args.resume_checkpoint:
             env_args["resume_checkpoint"] = self.args.resume_checkpoint
-        task, trace = build_task_and_trace(
-            task_spec=self.args.task_spec,
+        config = {"task_spec": self.args.task_spec, "character": self.args.character, **base}
+        config.update(
             explicit_seeds=[int(self.args.seed)],
-            character=self.args.character,
             max_skill_calls=int(self.args.max_skill_calls),
             env_args=env_args,
+            seed_workspace=False,
         )
+        task, trace = build_task_and_trace(**config)
         self.trace = trace
+        if self.args.workspace:
+            self.write_workspace(task.data, pathlib.Path(self.args.workspace))
         secret = secrets.token_hex(16)
         channel = StateChannel(trace, task.data, secret)
         runner = web.AppRunner(channel.app())
@@ -395,6 +426,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--skill-set", default="np_core,request_map,search,save")
     parser.add_argument("--max-skill-calls", type=int, default=150)
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
+    parser.add_argument("--taskset-json", default=None, help="the control arm's [taskset] config as JSON (game knobs)")
+    parser.add_argument("--workspace", default=None, help="write the control arm's agent workspace here (attempt 0)")
     parser.add_argument("--wall-clock-s", type=float, default=0.0, help="end the attempt this many seconds after boot (0 = no limit)")
     parser.add_argument("--resume-checkpoint", default=None)
     parser.add_argument("--checkpoint-from", default=None, help="the ledger id of the checkpoint this attempt resumes")

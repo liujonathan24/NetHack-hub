@@ -202,6 +202,8 @@ class NetHackAdapter:
             "--max-skill-calls", str(config["max_skill_calls"]),
             "--every", str(config["auto_checkpoint_every_n_calls"]),
             "--wall-clock-s", str(config["wall_clock_s"]),
+            *(["--taskset-json", str(config["taskset_json"])] if config.get("taskset_json") else []),
+            *(["--workspace", str(config["workspace"])] if config.get("workspace") and attempt == 0 else []),
         ]
         if resume:
             command += ["--resume-checkpoint", resume]
