@@ -1699,10 +1699,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_stuck_n"] = int(state.get("_stuck_n", 0)) + 1 if _frozen else 0
             state["_sig_prev"] = state.get("_sig_now")
             if int(state.get("_stuck_n", 0)) >= 2:
-                _n = int(state["_stuck_n"]) + 1
                 halt_reason = ((halt_reason or "") +
-                    f" [STUCK: this exact call has run {_n} times and the game "
-                    f"clock has not advanced once. Do something DIFFERENT.]").strip()
+                    " [STUCK: the game clock has not advanced. Do something different.]").strip()
         except Exception:
             pass
         state["last_reward"] = total_reward

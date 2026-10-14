@@ -1573,7 +1573,7 @@ _ARG_HINTS = {
     "item_letter": "inventory letter (a-z, A-Z), e.g. 'f'",
     "direction": "n/e/s/w or ne/se/sw/nw (or 'self' for np_zap)",
     "count": "number of turns",
-    "times": "number of searches (1-20)",
+    "times": "number of searches",
     "x1": "left column 0-78", "y1": "top row 0-20",
     "x2": "right column 0-78", "y2": "bottom row 0-20",
     "n": "number of turns to undo (1-15)",

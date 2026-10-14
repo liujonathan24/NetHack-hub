@@ -423,7 +423,7 @@ def ascend(env: NetHackCoreEnv, obs: StructuredObservation) -> SkillResult:
         "times": {
             "type": "integer",
             "default": 1,
-            "description": "Number of consecutive search actions (1-20).",
+            "description": "Number of consecutive search actions.",
         },
     },
 })

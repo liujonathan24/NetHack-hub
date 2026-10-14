@@ -241,8 +241,8 @@ def detect_blocking_ui(raw_obs, published_tools=None, inventory=None,
                      "next message (`esc` skips the rest of them).")
     elif "in what direction" in low:
         lines.append("Answer with a direction key: h j k l y u b n (west, "
-                     "south, north, east, NW, NE, SW, SE), or < > . for "
-                     "up, down, yourself; `esc` cancels.")
+                     "south, north, east, NW, NE, SW, SE), or . for "
+                     "yourself; `esc` cancels.")
     elif is_getpos_text(row0):
         lines.append("Move the cursor with direction keys, then press '.' or "
                      "',' to pick the spot; `esc` cancels.")
