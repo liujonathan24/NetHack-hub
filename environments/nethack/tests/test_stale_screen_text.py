@@ -1,18 +1,7 @@
-"""Text left on screen from something already over must not end or block the game.
-
-Both cases come from DeepSeek-v4-Flash rollouts on the np_core sandbox:
-
-* "The gnome is killed by the magic missile!  The magic missile hits you!"
-  matched the death marker "killed by"; the game was reported over, and the
-  rollout ended, with the character alive at HP 46/65.
-* After the Quest portal, the Quest entry text window stayed drawn on screen
-  once it had been dismissed. With the hero standing inside that remnant, the
-  observation announced an open text window and a frozen clock for the rest of
-  the game while the clock kept running.
-"""
-from __future__ import annotations
+"""Text left on screen from something already over must not end or block the game."""
 
 import numpy as np
+import pytest
 
 from nethack_harness.helpers import _detect_terminal_outcome
 from nethack_harness.prompt.tty_screen import find_window
@@ -27,20 +16,15 @@ class _Screen:
             self.tty_cursor = np.asarray(cursor)
 
 
-def test_a_monster_killed_by_something_is_not_a_death():
-    obs = _Screen(["The gnome is killed by the magic missile!  The magic missile hits you!"])
+@pytest.mark.parametrize("row0,misc,died", [
+    ("The gnome is killed by the magic missile!  The magic missile hits you!", (0, 0, 0), False),
+    ("Do you want your possessions identified? [ynq] (n)", (1, 0, 0), True),
+], ids=["monster-killed-by-something", "death-prompt"])
+def test_only_the_death_prompt_is_a_death(row0, misc, died):
     state = {"terminated": False}
-    _detect_terminal_outcome(obs, state)
-    assert state["died"] is False
-    assert state["terminated"] is False
-
-
-def test_the_death_prompt_is_still_a_death():
-    obs = _Screen(["Do you want your possessions identified? [ynq] (n)"], misc=(1, 0, 0))
-    state = {"terminated": False}
-    _detect_terminal_outcome(obs, state)
-    assert state["died"] is True
-    assert state["terminated"] is True
+    _detect_terminal_outcome(_Screen([row0], misc=misc), state)
+    assert state["died"] is died
+    assert state["terminated"] is died
 
 
 _QUEST_TEXT = [
@@ -51,11 +35,8 @@ _QUEST_TEXT = [
 ]
 
 
-def test_a_dismissed_text_window_is_not_open():
-    # The hero (cursor) stands inside the leftover text; the engine waits for nothing.
+def test_a_text_window_is_open_only_while_the_engine_waits_on_it():
+    # Dismissed: the engine waits for nothing; the hero (cursor) stands inside the leftover text.
     assert find_window(_Screen(_QUEST_TEXT, misc=(0, 0, 0), cursor=(2, 30))) is None
-
-
-def test_a_text_window_the_engine_waits_on_is_open():
     win = find_window(_Screen(_QUEST_TEXT, misc=(0, 0, 1), cursor=(3, 29)))
     assert win is not None and win.terminator == "--More--"

@@ -15,23 +15,14 @@
 # RawKeyPress from this module.
 #
 # Only the now-unused sys/numpy/PIL/gymnasium/nle/minihack imports were
-# dropped from upstream. RawKeyPress itself was then EXTENDED (marked
-# "ADDED (fix/netcore-input)" below); every upstream member and every input
-# upstream's parse() accepted still maps to the same key code:
-#   * members for the printable ASCII keys upstream omitted (- | { } ] ~ '),
-#     TAB, BACKSPACE, LINEFEED and Ctrl+A..Ctrl+Z. Upstream's enum made
-#     `np_press_key --key -` fail, so the fingers answer to "What do you want
-#     to write with? [- ...]" (and #force's `|`, the `{`/`}`/`]` commands,
-#     ...) was unreachable.
-#   * parse() also accepts "tab" / "backspace" by name.
-#   * parse_sequence(): a string of keys with <NAME> specials, used by the
-#     multi-key press_key skill.
+# dropped. Local additions: RawKeyPress keys upstream lacked (- | { } ] ~ ',
+# TAB, BACKSPACE, LINEFEED, Ctrl+A..Z), "tab"/"backspace" in parse(), and
+# parse_sequence().
 
 import enum
 
-# ADDED (fix/netcore-input): names usable inside angle brackets in
-# RawKeyPress.parse_sequence, e.g. "E-Elbereth<ENTER>". Module-level because
-# a dict inside the IntEnum body would become an enum member.
+# <NAME> keys for parse_sequence. Outside RawKeyPress because a dict in an
+# IntEnum body would become a member.
 _SEQUENCE_NAMES = {
     "esc": 27,
     "enter": 13,
@@ -151,8 +142,6 @@ class RawKeyPress(enum.IntEnum):
     KEYPRESS_ESC = 27
     KEYPRESS_SPACE = 32
 
-    # ADDED (fix/netcore-input): the printable ASCII keys upstream left out,
-    # so that every printable key can be pressed.
     KEYPRESS_MINUS = ord("-")
     KEYPRESS_PIPE = ord("|")
     KEYPRESS_OPEN_CURLY_BRACKET = ord("{")
@@ -161,8 +150,8 @@ class RawKeyPress(enum.IntEnum):
     KEYPRESS_TILDE = ord("~")
     KEYPRESS_APOSTROPHE = ord("'")
 
-    # ADDED (fix/netcore-input): control keys. Ctrl+I, Ctrl+J, Ctrl+M are the
-    # same codes as TAB, LINEFEED and ENTER, so IntEnum makes them aliases.
+    # Ctrl+H, I, J and M have the codes of BACKSPACE, TAB, LINEFEED and ENTER,
+    # so IntEnum makes them aliases.
     KEYPRESS_BACKSPACE = 8
     KEYPRESS_TAB = 9
     KEYPRESS_LINEFEED = 10
@@ -199,7 +188,6 @@ class RawKeyPress(enum.IntEnum):
             "enter": RawKeyPress.KEYPRESS_ENTER,
             "space": RawKeyPress.KEYPRESS_SPACE,
             "esc": RawKeyPress.KEYPRESS_ESC,
-            # ADDED (fix/netcore-input)
             "tab": RawKeyPress.KEYPRESS_TAB,
             "backspace": RawKeyPress.KEYPRESS_BACKSPACE,
         }
@@ -211,21 +199,14 @@ class RawKeyPress(enum.IntEnum):
         
         raise ValueError(f"Cannot parse the given key {key}.")
 
-    # ADDED (fix/netcore-input): multi-key parsing for the press_key skill.
     @staticmethod
     def parse_sequence(key: str) -> "list[RawKeyPress]":
         """Parse a press_key argument into the keys to send, in order.
 
-        * A single character is that key (so "<", ">" and "," alone work).
-        * ESC, ENTER, SPACE, TAB or BACKSPACE alone (any case) is that key.
-        * Anything else is a sequence: each character is one key, and
-          <ESC> <ENTER> <SPACE> <TAB> <BACKSPACE> <LT> <GT> <C-x> (Ctrl+x)
-          in angle brackets, any case, are special keys. A "<" that does not
-          start one of those is the literal "<" key; <NAME> with an unknown
-          NAME is an error.
-
-        Raises ValueError (nothing is sent) on an empty string, an unknown
-        <NAME>, or a character that is not an ASCII key.
+        Each character is one key; <ESC> <ENTER> <SPACE> <TAB> <BACKSPACE> <LT>
+        <GT> and <C-x> (any case) are special keys, and ESC, ENTER, SPACE, TAB or
+        BACKSPACE alone is that one key. A "<" not followed by NAME> is the "<"
+        key; an unknown <NAME> raises ValueError.
         """
         import re
         if not isinstance(key, str) or key == "":

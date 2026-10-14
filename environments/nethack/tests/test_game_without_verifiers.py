@@ -1,15 +1,4 @@
-"""The game box runs without verifiers, and plays the same game byte for byte.
-
-`nethack_toolset.game` (residency-environments, scripts/nethack) builds this env
-with `load_environment(..., self_dispatch=True, trace_dir=...)` and then only
-calls `setup_state`, `_apply_tool_call` and `_render_obs_text`. Its image
-installs neither verifiers nor datasets; `nethack_harness.vf_compat` stands in
-for the little of verifiers that path runs. This drives that path in two fresh
-interpreters, one with verifiers importable and one with verifiers and datasets
-blocked, and requires the same observations, schemas and record.
-"""
-
-from __future__ import annotations
+"""The game path (self_dispatch=True) runs without verifiers or datasets and plays the same game."""
 
 import json
 import os
@@ -55,17 +44,14 @@ DRIVER = textwrap.dedent(
         )
         state = await env.setup_state({"task": {"seed": 3}, "info": {}})
         schemas = registry.all_schemas()
-        out = {
-            "have_verifiers": HAVE_VERIFIERS,
-            "not_a_knob": env.not_a_knob,
-            "skills": {n: schemas[n] for n in sorted(env._allowed_skill_names) if n in schemas},
-            "turns": [env._render_obs_text(state)],
-        }
+        skills = {n: schemas[n] for n in sorted(env._allowed_skill_names) if n in schemas}
+        turns = [env._render_obs_text(state)]
         for skill, args in CALLS:
             content = await env._apply_tool_call(state, skill, args)
             text = content_to_text(content) if content else env._render_obs_text(state)
-            out["turns"].append([text, bool(state.get("terminated")), state.get("max_dlvl_reached")])
-        print(json.dumps(out))
+            turns.append([text, bool(state.get("terminated")), state.get("max_dlvl_reached")])
+        print(json.dumps({"have_verifiers": HAVE_VERIFIERS, "not_a_knob": env.not_a_knob,
+                          "skills": skills, "turns": turns}))
 
     asyncio.run(main())
     """

@@ -1,36 +1,6 @@
-"""Read NetHack's UI off the terminal the way a human player sees it.
+"""Read NetHack's menus, text windows, prompts and messages off the tty screen.
 
-Why this module exists
-----------------------
-`nethack_core.observations.shape()` parses menus with a bottom-up regex that
-stops at the first non-item row. A NetHack menu is item rows *interleaved with
-class headers* ("Weapons", "Comestibles"), so the parse kept only the entries
-below the last header. Measured on the np_core surface: the inventory (`i`)
-rendered as a single garbled `[0] an uncur ration`, the pick-up menu (`,`)
-showed "Pick up what?" with no entries at all, and text windows ("Things that
-are here:", the enlightenment screen) were not rendered at all. Every one of
-these is fully visible on `tty_chars`.
-
-What is read, and from where
-----------------------------
-* **Windows.** tty NetHack draws a menu or text window as a rectangle whose
-  left edge is its `offx` column, starting at row 0, with a terminator line at
-  the bottom: `(end)`, `(N of M)` for multi-page menus, or `--More--`. The
-  terminator is printed at `offx`, and the cursor is parked right after it
-  while the window waits. So: find the terminator row, take every row above it
-  from that column on. The part of each row LEFT of `offx` is the dungeon (or
-  the copyright banner remnant) and is ignored.
-* **Pending input.** `misc` (in_yn_function, in_getlin, xwaitforspace) plus the
-  cursor. At the command prompt the cursor sits on the hero; while NetHack is
-  asking something on the message line the cursor is on row 0. A remembered
-  message is never used to decide that the game is waiting.
-* **Messages.** The per-step `message` field is the text NetHack wrote to the
-  message line during that step (empty when it wrote nothing), so collecting
-  it on every engine step of a call gives every message of the call, in order,
-  including each link of a `--More--` chain.
-
-Only what is on the screen is read, so nothing here can show the agent more
-than a human at the terminal would see.
+Only what is on the screen is read, so the agent sees no more than a human would.
 """
 from __future__ import annotations
 
@@ -43,8 +13,7 @@ import numpy as np
 # `(end)` / `(1 of 2)` / `--More--` as the LAST thing on a row.
 _TERMINATOR_RE = re.compile(r"(\(end\)|\(\d+ of \d+\)|--More--)\s*$")
 _PAGE_RE = re.compile(r"\((\d+) of (\d+)\)")
-# "a - item", "a + item" (selected), "a # item" (count selected). NetHack menu
-# accelerators are letters, plus a few symbols in special menus.
+# "a - item"; the mark is "+" when selected, "#" when selected with a count.
 _ENTRY_RE = re.compile(r"^([a-zA-Z0-9$#*?:<>@_-]) ([-+#]) (.*)$")
 
 
@@ -60,7 +29,6 @@ class TtyWindow:
 
     @property
     def is_menu(self) -> bool:
-        """True when it offers selectable entries (letters)."""
         return bool(self.entries)
 
     @property
@@ -87,7 +55,7 @@ def tty_rows(obs) -> list[str]:
 
 
 def tty_cursor(obs) -> Optional[tuple[int, int]]:
-    """(row, col) of the terminal cursor, or None when the obs has none."""
+    """(row, col) of the terminal cursor, or None."""
     cur = getattr(obs, "tty_cursor", None)
     if cur is None and isinstance(obs, dict):
         cur = obs.get("tty_cursor")
@@ -115,7 +83,6 @@ def misc_flags(obs) -> Optional[tuple[bool, bool, bool]]:
 
 
 def obs_message(obs) -> str:
-    """The message-line text NetHack wrote during the step that produced `obs`."""
     msg = getattr(obs, "message", None)
     if msg is None and isinstance(obs, dict):
         msg = obs.get("message")
@@ -138,9 +105,8 @@ _GETPOS_MARKERS = ("where do you want to travel to?", "(for instructions type a"
 
 
 def is_getpos_text(text: str) -> bool:
-    """A position prompt (travel `_`, farlook `;`, ...). It is drawn on the
-    message line but the cursor sits on the map, so `misc` stays all zero and
-    the cursor-on-row-0 test cannot see it."""
+    """A position prompt (travel `_`, farlook `;`). The cursor is on the map and
+    `misc` stays all zero, so only the prompt text shows it."""
     low = (text or "").lower()
     return any(m in low for m in _GETPOS_MARKERS)
 
@@ -148,53 +114,39 @@ def is_getpos_text(text: str) -> bool:
 def find_window(obs) -> Optional[TtyWindow]:
     """The menu / text window currently drawn on the terminal, or None.
 
-    A `--More--` on row 0 is the message line's own prompt, not a window, and is
-    not returned here. When the obs carries a cursor, the window only counts if
-    the cursor is inside it (NetHack parks it after the terminator while the
-    window waits, or on the entry just toggled), so a remnant can never be
-    mistaken for a live window.
+    tty NetHack draws a window from row 0 down to a terminator line printed at
+    the window's left column, and keeps the cursor inside it while it waits.
     """
     rows = tty_rows(obs)
     if not rows:
         return None
     cur = tty_cursor(obs)
-    # The bottom-most terminator is the window's last line. A full-screen
-    # page uses all 24 rows ("(1 of 2)" on row 23); the status lines never
-    # end in a terminator, so scanning them is safe.
+    # Row 0 is skipped: a --More-- there is the message line's prompt.
     for r in range(len(rows) - 1, 0, -1):
         m = _TERMINATOR_RE.search(rows[r])
         if not m:
             continue
         col = m.start(1)
-        # The terminator must be alone on its row from `col` on, and the row
-        # left of it must not be window text (it is dungeon or blank).
         if rows[r][col:].strip() != m.group(1):
             continue
-        # Live windows hold the cursor: after the terminator while waiting,
-        # or on the entry just toggled in a pick-several menu.
+        # A window left over on screen does not hold the cursor.
         if cur is not None and not (0 <= cur[0] <= r and cur[1] >= col):
             continue
         body = [row[col:].rstrip() for row in rows[:r]]
         body_rows = list(range(r))
-        # Trim blank rows at both ends, keep interior blanks (they separate
-        # sections, exactly as on screen).
         while body and not body[0].strip():
             body.pop(0)
             body_rows.pop(0)
         while body and not body[-1].strip():
             body.pop()
             body_rows.pop()
-        # Remove the common indent so the text starts at column 0.
         ind = [len(b) - len(b.lstrip()) for b in body if b.strip()]
         cut = min(ind) if ind else 0
         body = [b[cut:] for b in body]
         win = TtyWindow(lines=body, terminator=m.group(1), col=col, end_row=r,
                         entries=_entries(body), rows=body_rows)
-        # A text window waits for its dismissal key, so the engine's
-        # xwaitforspace is set for as long as it is open. Its text can stay
-        # on screen after it closes (the Quest entry text did, for the rest of
-        # the game), and the cursor-inside test passes whenever the hero
-        # stands inside that remnant; with the flags all clear it is gone.
+        # An open text window keeps xwaitforspace set. With all flags clear its
+        # text is a leftover, even when the hero stands inside it.
         flags = misc_flags(obs)
         if not win.is_menu and flags is not None and not any(flags):
             continue
@@ -225,12 +177,8 @@ def _still_open(obs, prev: TtyWindow) -> bool:
 def resolve_window(obs, prev: Optional[TtyWindow] = None) -> Optional[TtyWindow]:
     """The open window, carrying `prev` forward across partial redraws.
 
-    Toggling an entry in a pick-several menu makes the engine repaint only
-    that entry's row; the rest of the window's rectangle comes back as the
-    dungeon underneath (measured: after `,` then `a`, only "a + a +0 dagger"
-    and the title were on screen). So when no complete window is visible but
-    the game is still waiting inside the one seen before, keep that window and
-    update the rows that were repainted (their selection marks).
+    Toggling a pick-several entry repaints only that row, so while the game
+    still waits in `prev`, keep it and take the repainted selection marks.
     """
     fresh = find_window(obs)
     if fresh is not None:
@@ -253,32 +201,21 @@ def resolve_window(obs, prev: Optional[TtyWindow] = None) -> Optional[TtyWindow]
 
 
 def format_window(win: TtyWindow, indent: str = "  ") -> list[str]:
-    """The window exactly as on screen, one line per row, terminator last."""
     out = [f"{indent}{ln}" if ln.strip() else "" for ln in win.lines]
     out.append(f"{indent}{win.terminator}")
     return out
 
 
-# ---------------------------------------------------------------------------
-# Per-call message harvest
-# ---------------------------------------------------------------------------
-
-#: Cap on rendered message lines per call. A 100-step explore can print a lot;
-#: keep the head and the tail (the outcome) and say how many were elided.
+#: Cap on message lines shown per call; `bound_lines` keeps the head and tail.
 MAX_MESSAGE_LINES = 40
 _HEAD_LINES = 12
 
 
 class _HarvestState:
-    """Running state for a message harvest over consecutive engine steps.
+    """Running state for collecting new messages over consecutive engine steps.
 
-    This engine does NOT clear the message line between steps: `message` (and
-    tty row 0) keep showing the last thing printed until something new is
-    printed. Measured: "You drop a +0 dagger." was still the `message` of two
-    later `s` (search) steps. So a message is new only when it CHANGES; the
-    running `prev` is seeded with the message that was already on screen when
-    the call started, which is what stops "You kill the newt!" being reported
-    again by four later calls.
+    The engine does not clear the message line between steps, so a message is
+    new only when it changes; `prev` starts as the message already on screen.
     """
 
     __slots__ = ("prev", "seen_windows", "held", "last_prompt")
@@ -286,12 +223,10 @@ class _HarvestState:
     def __init__(self, baseline_obs=None) -> None:
         self.prev = obs_message(baseline_obs) if baseline_obs is not None else ""
         self.seen_windows: set = set()
-        #: The text window on screen right now, as (signature, lines). Its
-        #: lines join the message list once it is gone from the screen; while
-        #: it is still up, the waiting-for-input banner shows it instead.
+        #: (signature, lines) of the text window on screen; its lines join the
+        #: messages once it closes.
         self.held = None
-        #: The prompt text on the message line after the previous step, if
-        #: the game was asking something there.
+        #: The prompt on the message line after the previous step, if any.
         self.last_prompt = ""
         if baseline_obs is not None:
             cur = tty_cursor(baseline_obs)
@@ -300,7 +235,7 @@ class _HarvestState:
 
 
 def _step_text(obs, st: "_HarvestState") -> list[str]:
-    """What one engine step newly printed, as display lines (possibly empty)."""
+    """What one engine step newly printed, as display lines."""
     out: list[str] = []
     win = find_window(obs)
     sig = win.signature() if (win is not None and not win.is_menu) else None
@@ -310,14 +245,10 @@ def _step_text(obs, st: "_HarvestState") -> list[str]:
     cur = tty_cursor(obs)
     msg = obs_message(obs)
     more_on_top = "--More--" in row0(obs)
-    # Cursor on row 0 without a --More-- means NetHack is reading input on the
-    # message line: a question ("[yn]"), an item prompt, or the echo of an
-    # extended command being typed. That is a prompt, not a message; if it is
-    # still pending, the waiting-for-input banner shows it.
+    # Cursor on row 0 without --More--: NetHack is reading input on the message
+    # line (a question, an item prompt, an extended command), not printing.
     prompting = cur is not None and cur[0] == 0 and not more_on_top
-    # Answering a prompt leaves "<prompt> <answer>" on the message line
-    # ("In what direction? h"). That is an echo of the agent's own key, not
-    # something the game said.
+    # "<prompt> <answer>" left after answering echoes the agent's own key.
     new = msg
     if st.last_prompt and msg.startswith(st.last_prompt):
         rest = msg[len(st.last_prompt):].lstrip()
@@ -340,23 +271,6 @@ def new_messages_per_step(observations, baseline_obs=None):
         yield o, _step_text(o, st)
 
 
-def harvest_messages(observations, baseline_obs=None) -> list[str]:
-    """Every message the game newly printed across `observations`, in order.
-
-    `baseline_obs` is the observation before the first step (its message is
-    old news). Text windows (not menus) are included once each.
-    """
-    lines: list[str] = []
-    st = _HarvestState(baseline_obs)
-    for o in observations or ():
-        for ln in _step_text(o, st):
-            if not lines or lines[-1] != ln:
-                lines.append(ln)
-    if st.held is not None:
-        lines.extend(st.held[1])
-    return lines
-
-
 def bound_lines(lines: list[str], cap: int = MAX_MESSAGE_LINES) -> list[str]:
     if len(lines) <= cap:
         return list(lines)
@@ -371,11 +285,8 @@ _INVENTORY_KEYS = (ord("i"), ord("I"))
 def apply_inventory_listing(state: dict, inventory, call_log=None) -> None:
     """Show each item as the game's own inventory listing last described it.
 
-    `state["_inv_tty"]` keeps the last listing together with the `inv_strs`
-    text each item had when it was captured. An item's listing text is used
-    only while its `inv_strs` text is still that captured text; as soon as
-    the engine reports anything new for the letter, `inv_strs` wins again.
-    Mutates the items' `description` in place.
+    The listing text is used only while the item's `inv_strs` text is unchanged
+    since the listing was captured. Mutates the items' `description`.
     """
     if call_log is not None and call_log.inventory_listing and not getattr(call_log, "_inv_used", False):
         call_log._inv_used = True
@@ -394,18 +305,15 @@ def apply_inventory_listing(state: dict, inventory, call_log=None) -> None:
 
 
 class CallScreenLog:
-    """Collect the text of every engine step taken during ONE tool call.
+    """Collect the text of every engine step taken during one tool call.
 
-    Patches `env.step` on the instance for the duration of the `with` block
-    (the same seam `helpers.TurnRecorder` uses; this nests inside it and is
-    removed first). Read-only: it never steps the engine and never changes an
-    action, so replay determinism is unaffected.
+    Patches `env.step` on the instance inside the `with` block. Read-only: it
+    never steps the engine or changes an action.
     """
 
     def __init__(self, env, baseline_obs=None, prev_window=None) -> None:
         self._env = env
-        #: The open menu / text window after the latest step (None when none),
-        #: carried across partial redraws -- see `resolve_window`.
+        #: The open menu / text window after the latest step (see `resolve_window`).
         self.window: Optional[TtyWindow] = prev_window
         self._orig = None
         self._had_own = False
@@ -413,7 +321,7 @@ class CallScreenLog:
         self.lines: list[str] = []
         self.steps = 0
         self._st = _HarvestState(baseline_obs)
-        #: Step index (1-based) at which the travel/getpos prompt last appeared.
+        #: Step (1-based) at which the travel/getpos prompt last appeared.
         self.getpos_step = 0
         #: letter -> description from an inventory listing (`i`) seen this call.
         self.inventory_listing: Optional[dict] = None
@@ -432,19 +340,15 @@ class CallScreenLog:
 
     def _note(self, obs, action=None) -> None:
         self.steps += 1
-        # Was the game at the command prompt before this key? (An `i` typed
-        # as an ANSWER -- to an item prompt, or in a pick-up menu -- is not
-        # the inventory command.)
+        # An `i` typed as an answer (to a prompt, or in a menu) is not the
+        # inventory command.
         at_command = self.window is None and not self._waiting
         self.window = resolve_window(obs, self.window)
         flags = misc_flags(obs)
         cur = tty_cursor(obs)
         self._waiting = bool(flags and any(flags)) or (cur is not None and cur[0] == 0)
-        # The inventory as the game itself lists it (`i` / `I`). The engine's
-        # `inv_strs` is only refreshed when NetHack calls update_inventory(),
-        # which some changes never trigger: after "Your dagger gets dull." the
-        # `i` menu said "c - a -2 dagger" while `inv_strs` still said "+0".
-        # The listing is what a human sees, so the renderer prefers it.
+        # Keep the game's own `i` listing: `inv_strs` is refreshed only by
+        # update_inventory(), so it can lag behind (a dagger that got dull).
         try:
             a = int(action) if action is not None else None
         except (TypeError, ValueError):
@@ -500,7 +404,6 @@ class CallScreenLog:
         except Exception:
             pass
         self._installed = False
-        # Keep the harvested text, drop the engine references: this object
-        # stays in the rollout state after the call.
+        # This object stays in the rollout state after the call: drop engine refs.
         self._env = None
         self._orig = None

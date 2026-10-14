@@ -468,13 +468,9 @@ def _glyph_run_encode(map_view: str, min_run: int = 5) -> str:
 def _note_kills_seen(state, structured, game_turn) -> None:
     """Feed the corpse-age kill log from the messages of this observation.
 
-    On raw-prompt surfaces the message on screen is often OLD (this engine
-    never clears the message line), and `note_kills` stamps the CURRENT turn
-    -- so a "You kill the jackal!" still on screen twenty turns later made the
-    corpse look twenty turns fresher, which is exactly the wrong direction for
-    a food-poisoning warning. There, only the messages printed during this call
-    (`tty_screen.CallScreenLog`) are fed, once per call, and a kill the skill
-    layer already timed during this call keeps that (earlier, exact) turn.
+    On raw-prompt surfaces the message line can be old, so only the messages
+    printed during this call are fed, once per call; a kill already timed
+    during the call keeps that earlier turn.
     """
     from nethack_harness.prompt.corpse_age import kill_log, note_kills
     cl = state.get("_call_log") if (state is not None
@@ -765,11 +761,9 @@ def _format_obs_summarize_reset(structured, journal, state, journal_max_chars: i
 # ladder is suppressed so the observation cannot simultaneously say "you are
 # dead" and "attack the kobold".
 
-#: NetHack's death sequence, in the order the player sees it: the death message,
-#: then the DYWYPI prompt, then Final Attributes, then the tombstone. Mirrors
-#: `helpers._DEATH_MARKERS` (kept local so `prompt/` does not import the env
-#: package) and adds the phrases that appear on the *first* death frame, which
-#: is exactly the frame `_DEATH_MARKERS` was too late for.
+#: Text on NetHack's death screens, from the first death frame on. Like
+#: `helpers._DEATH_MARKERS`, kept here so `prompt/` does not import the env.
+#: Not "killed by", "drowned" and the like: they also end messages about monsters.
 _DEATH_SCREEN_MARKERS = (
     "You die",
     "You died",
@@ -1841,10 +1835,6 @@ def format_observation_as_chat(
 
         except Exception:
             pass
-    # MESSAGES is withheld under `minimal` like the other context blocks. On
-    # raw-prompt surfaces nothing is lost by that: `NetHackEnv._render_obs_text`
-    # prepends a GAME MESSAGES block with every message printed during the
-    # call (tty_screen.CallScreenLog).
     _raw_ui = state is not None and state.get("_auto_dismiss") is False
     _call_log = state.get("_call_log") if _raw_ui else None
     if structured.messages and not minimal:
@@ -1855,24 +1845,14 @@ def format_observation_as_chat(
                 lines.append(f"  {m}")
             lines.append("")
         elif not any(m in _call_log.lines for m in structured.messages):
-            # This engine keeps the last message on the message line until
-            # something new is printed, so the line on screen is usually OLD
-            # news. Messages printed during this call are already listed in
-            # the GAME MESSAGES block; anything else is labelled as earlier.
+            # New messages are in the GAME MESSAGES block; the line on screen
+            # is left over from an earlier call.
             lines.append("=== LAST MESSAGE ON SCREEN (from an earlier call, not new) ===")
             for m in msgs:
                 lines.append(f"  {m}")
             lines.append("")
-    # A menu / text window drawn on the terminal right now. On raw-prompt
-    # surfaces the waiting-for-input banner (`interactive_state`) renders it
-    # in full from the tty -- all rows, real letters, selection marks -- so
-    # the `shape()`-parsed MENU block (which kept only the rows below the
-    # last class header) is not repeated here.
-    #
-    # `inventory_prompt` is likewise parsed from the message line, which this
-    # engine does not clear -- after the prompt is answered it can still be
-    # there. So whenever the observation carries a cursor, the banner (which
-    # decides from the cursor whether anything is really open) owns both.
+    # With a cursor, the waiting-for-input banner (`interactive_state`) renders
+    # open menus and item prompts from the tty, so MENU and PROMPT are skipped.
     _banner_owns_ui = False
     if _raw_ui and state.get("raw_obs") is not None:
         try:
@@ -1910,8 +1890,6 @@ def format_observation_as_chat(
             for i, item in enumerate(p["items"]):
                 lines.append(f"  [{i}] {item.description}")
         else:
-            # The inventory letter IS the answer; `[0] [1]` indices were not
-            # keys the game accepts.
             for item in p["items"]:
                 lines.append(f"  {item.letter}: {item.description}")
         lines.append("")

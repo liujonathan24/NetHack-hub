@@ -26,8 +26,9 @@ incomparable to theirs.
 
 ## Fidelity summary
 
-Eleven of the twelve vendored behavioural files are **byte-identical** to
-upstream. Verify at any time with:
+Nine of the twelve vendored behavioural files are **byte-identical** to
+upstream; `skills.py`, `agent_base.py` and `nle_wrapper.py` carry our fixes
+(see the git log). Verify at any time with:
 
 ```bash
 diff vendor/netplay/nethack_agent/skills.py <(curl -sSL \
@@ -36,7 +37,7 @@ diff vendor/netplay/nethack_agent/skills.py <(curl -sSL \
 
 | Vendored file | Upstream path | Diff |
 |---|---|---|
-| `netplay/nethack_agent/skills.py` | same | **identical** |
+| `netplay/nethack_agent/skills.py` | same | adapted |
 | `netplay/nethack_agent/tracking.py` | same | **identical** |
 | `netplay/nethack_agent/describe.py` | same | **identical** |
 | `netplay/nethack_utils/glyphs.py` | same | **identical** |
@@ -46,7 +47,7 @@ diff vendor/netplay/nethack_agent/skills.py <(curl -sSL \
 | `netplay/core/skill.py` | same | **identical** |
 | `netplay/core/skill_repository.py` | same | **identical** |
 | `netplay/core/descriptor.py` | same | **identical** |
-| `netplay/core/agent_base.py` | same | **identical** |
+| `netplay/core/agent_base.py` | same | adapted |
 | `netplay/nethack_agent/pathfinding.py` | same | 1 line — see below |
 
 This was achieved by putting `vendor/` on `sys.path` as a **package root**, so
@@ -85,12 +86,10 @@ We reuse NetPlay's *skill layer*, not its agent loop — our harness supplies th
 policy (the LLM scaffold under evaluation) and calls skills one at a time. Kept:
 
 - `finish_task_skill` — byte-for-byte (upstream 38–44)
-- `_execute_skill` — adapted from upstream 215–238: the interrupt policy is
-  local (nearby hostile monsters instead of any newly-seen glyph, no item or
-  feature interrupts, player-visible level-change text); see the module
-  docstring's LOCAL CHANGE note
-- `_skip_more_messages` — byte-for-byte (upstream 189–196)
-- `_update_objects` — byte-for-byte (upstream 198–213)
+- `_execute_skill` — adapted (upstream 215–238): a nearby hostile monster
+  interrupts instead of any newly-seen glyph
+- `_skip_more_messages` — adapted (upstream 189–196)
+- `_update_objects` — adapted (upstream 198–213)
 
 The three `_`-prefixed methods are **not** LLM plumbing — they are the skill
 *execution contract*, and they materially bound behaviour: a skill is stopped
@@ -103,12 +102,12 @@ Replaced: `NetHackAgent.__init__` only. Every attribute `skills.py` touches on
 the agent — `blstats`, `current_level`, `step`, `get_path_to`, `distance_to`,
 `get_distance_map`, `get_walkable_mask`, `waiting_for_popup`,
 `current_game_message`, `set_current_room`, `avoid_monsters` — is defined by the
-byte-identical `netplay/core/agent_base.py`, so dropping the LLM plumbing
+vendored `netplay/core/agent_base.py`, so dropping the LLM plumbing
 changes no skill semantics.
 
 ### `netplay/nethack_utils/nle_wrapper.py` — REDUCED
 
-`RawKeyPress` (upstream 12–134) is reproduced **byte-for-byte**;
+`RawKeyPress` (upstream 12–134) is reproduced with our key-sequence parsing;
 `render_ascii_map` and `NethackGymnasiumWrapper` (upstream 136–273) are removed.
 That class *is* the NLE/MiniHack engine seam this port replaces — it constructs
 `nle.env.base.NLE` / `minihack.MiniHack` and adapts NLE's 4-tuple step. Keeping

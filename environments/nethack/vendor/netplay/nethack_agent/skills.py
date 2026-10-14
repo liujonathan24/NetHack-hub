@@ -83,17 +83,8 @@ def set_avoid_monster_flag(agent: NetHackAgent, value: bool):
     agent.avoid_monsters = value
     yield Step.completed(f"Set avoid_monsters flag to {value}")
 
-# ADDED (fix/netcore-input): peaceful monsters are obstacles for pathing.
-# Upstream move_to walked straight into peaceful monsters. NetHack then asks
-# "Really attack <shopkeeper>? [yn] (n)", `fail_on_popup` aborted the skill
-# with the prompt still open, and the next call walked into it again. Now:
-#   * monsters known to be peaceful are removed from the walkable map, so the
-#     path goes around them, or the skill waits (search) for them to move;
-#   * a monster is known peaceful when it belongs to an always-peaceful role
-#     (shopkeeper, watchman, temple priest, ...: the species is what `;`
-#     shows on screen) or when walking into it raised "Really attack?";
-#   * if the prompt still appears it is answered `n` at once, never `y`.
-# Everything is decided from observations; every key goes through agent.step.
+# Walking into a peaceful monster asks "Really attack?". move_to paths around
+# known peacefuls (an always-peaceful species, or one that asked) and answers n.
 PEACEFUL_WAIT_LIMIT = 5
 PEACEFUL_PROMPT_LIMIT = 3
 _ALWAYS_PEACEFUL_SPECIES = (
@@ -101,8 +92,6 @@ _ALWAYS_PEACEFUL_SPECIES = (
     "Oracle", "guard",
 )
 
-
-#: LOCAL: refused moves in a row after which move_to gives up (see move_to).
 MOVE_REFUSED_LIMIT = 3
 
 
@@ -150,9 +139,8 @@ def _really_attack_prompt(agent: NetHackAgent) -> bool:
 
 
 def _step_declining_attack(agent: NetHackAgent, action, nx: int, ny: int, thoughts=None):
-    """Step `action` (a move onto (nx, ny)). If NetHack asks "Really attack?",
-    answer `n` straight away and remember the monster as peaceful.
-    Yields the steps; returns True when an attack was declined."""
+    """Step a move onto (nx, ny); answer "Really attack?" with n and remember the
+    monster as peaceful. Returns True (via `yield from`) when it declined."""
     step = agent.step(action, thoughts=thoughts)
     if not _really_attack_prompt(agent):
         yield step
@@ -189,7 +177,7 @@ def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
     waits = 0
     declined = 0
     declined_at = set()  # tiles whose occupant answered "Really attack?" this call
-    refused = 0  # moves in a row the game refused without a turn passing
+    refused = 0
     while True:
         if (agent.blstats.x == x and agent.blstats.y == y):
             yield Step.completed(f"Reached position {x, y}.")
@@ -233,10 +221,8 @@ def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
         before = (agent.blstats.x, agent.blstats.y, agent.blstats.time)
         was_declined = yield from _step_declining_attack(
             agent, get_move_action(agent.blstats.x, agent.blstats.y, next_x, next_y), next_x, next_y)
-        # LOCAL: a move the game refuses ("You can't move diagonally out of an
-        # intact doorway") leaves the hero in place without a turn passing, and
-        # the recomputed path asks for the same move again -- upstream looped
-        # here forever. Give up after a few refusals and say why.
+        # A refused move (e.g. diagonally out of a doorway) passes no turn, and
+        # the new path would ask for the same move again forever.
         if not was_declined and (agent.blstats.x, agent.blstats.y, agent.blstats.time) == before:
             refused += 1
             if refused >= MOVE_REFUSED_LIMIT:
@@ -390,15 +376,6 @@ def search_room(agent: NetHackAgent, room_id: int, max_search_count=3):
 
         yield agent.step(actions.Command.SEARCH)
 
-# CHANGED (fix/netcore-input): press_key takes a SEQUENCE of keys.
-# Upstream pressed exactly one key and could not press `-`, `|`, `{`, `}`, `]`,
-# `~`, `'`, TAB or any Ctrl key (RawKeyPress lacked them), so e.g. engraving
-# with fingers ("write with? [- ...]") was impossible. Now `key` is parsed by
-# RawKeyPress.parse_sequence: a single key or named special behaves exactly as
-# before; longer strings are sent key by key, each through `agent.step` (the
-# normal engine step, so every key is recorded and replays). ENTER on the
-# extended-command prompt is sent as LF instead of CR -- see
-# `_on_extended_command_prompt`.
 PRESS_KEY_MAX_KEYS = 200
 
 
@@ -411,17 +388,9 @@ def _screen_text(agent: NetHackAgent) -> str:
 
 
 def _on_extended_command_prompt(agent: NetHackAgent) -> bool:
-    """True while the `#` extended-command prompt is reading input.
-
-    The engine reads that prompt with tty_get_ext_cmd, which (unlike getlin)
-    does not raise the in_getlin flag, so `misc` is all zero exactly as when
-    the game waits for a normal command. The harness drops a CR in that state
-    as a stray `Unknown command '^M'` (netplay_true.NetPlayEngineEnv.step), so
-    ENTER never reached the prompt and `#loot` could not be submitted. The
-    prompt is recognised from what is on screen: cursor on the top line and
-    the top line starting with `#`. getline.c accepts LF as well as CR to end
-    the line, so ENTER is sent as LF there.
-    """
+    """True while the `#` extended-command prompt reads input. It sets no `misc`
+    flag, so the harness would drop a CR; the prompt also ends on LF, which
+    press_key sends instead."""
     try:
         obs = agent.last_observation
         misc = [int(v) for v in np.asarray(obs["misc"]).reshape(-1)]
@@ -432,7 +401,6 @@ def _on_extended_command_prompt(agent: NetHackAgent) -> bool:
         return False
 
 
-#: What the agent is told when an ENTER is not sent (see `_enter_would_be_dropped`).
 ENTER_NOT_SENT = (
     "ENTER was not sent: the game is not reading a typed line or an answer here, so it would do nothing. "
     "At the command prompt ENTER is not a command. At a 'Where do you want to ...' or 'Pick ...' cursor "
@@ -441,14 +409,8 @@ ENTER_NOT_SENT = (
 
 
 def _enter_would_be_dropped(agent: NetHackAgent) -> bool:
-    """True when the harness would drop an ENTER right now.
-
-    NetPlayEngineEnv.step drops a CR while the game is not reading input (the
-    `misc` flags all clear) and the `#` prompt is not open, because NetHack would
-    only answer `Unknown command '^M'`. Cursor (getpos) prompts also leave the
-    flags clear, so an ENTER there is dropped too. The skill checks the same
-    condition first so it can say so instead of reporting the key as pressed.
-    """
+    """True when the harness would drop an ENTER: `misc` is all zero (as at the
+    command and cursor prompts) and the `#` prompt is not open."""
     try:
         misc = [int(v) for v in np.asarray(agent.last_observation["misc"]).reshape(-1)]
         return not any(misc) and not _on_extended_command_prompt(agent)
@@ -516,7 +478,6 @@ def press_key(agent: NetHackAgent, key: str):
         if k == RawKeyPress.KEYPRESS_ENTER and _on_extended_command_prompt(agent):
             code = RawKeyPress.KEYPRESS_LINEFEED
         elif k == RawKeyPress.KEYPRESS_ENTER and _enter_would_be_dropped(agent):
-            # LOCAL: the harness would drop this ENTER without a word; skip it and say so.
             skipped.append(i + 1)
             continue
         if total == 1:
@@ -526,8 +487,7 @@ def press_key(agent: NetHackAgent, key: str):
         else:
             thoughts = None
         if total > 1 and i == total - 1 and not skipped:
-            # On the last key's own step, so it is reported even when the
-            # skill is interrupted right after that step.
+            # On the last key's own step, so it shows even if the skill is interrupted.
             thoughts = f"{thoughts} Pressed all {total} keys." if thoughts else f"Pressed all {total} keys."
         step = agent.step(code, thoughts=thoughts)
         remaining = total - i - 1
@@ -560,9 +520,6 @@ def press_key(agent: NetHackAgent, key: str):
     ]
 )
 def type_text(agent: NetHackAgent, text: str):
-    # CHANGED (fix/netcore-input): validate every character before sending any,
-    # so an unpressable character no longer leaves half the text typed.
-    # (RawKeyPress now covers every printable ASCII key.)
     keys = []
     for i, key in enumerate(text):
         try:
@@ -691,8 +648,6 @@ def melee_attack(agent: NetHackAgent, x, y):
                 yield Step.completed(f"Killed the target.")
                 return
         else:
-            # CHANGED (fix/netcore-input): a walking step that bumps a peaceful
-            # monster answers "Really attack?" with `n` instead of leaving it open.
             path = agent.get_path_to(nx, ny, bump_into_unwalkables=False, avoid_monsters=True)
             px, py = path[1] if path is not None and len(path) > 1 else (nx, ny)
             if (yield from _step_declining_attack(agent, move_action, px, py)):

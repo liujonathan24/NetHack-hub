@@ -50,20 +50,13 @@ message line. That half is a heuristic and is deliberately narrow: a false
 positive would tell the agent to press `esc` when nothing is open, which costs
 one call, whereas a false negative costs the entire rollout.
 
-Row 0 alone is NOT evidence that anything is pending: this engine leaves the
-last message on row 0 until something new is printed, so an answered
-"eat it? [ynq] (n)" stayed there through later turns and the banner kept
-announcing it (~20 turns for one "Really attack?"). When the observation has a
-cursor, a row-0 prompt counts only while the cursor is on row 0 (where NetHack
-leaves it while reading an answer); the travel prompt counts only while it is
-the latest thing printed or the cursor is off the hero. Open menus and text
-windows are read off the tty in full (`tty_screen.py`) and rendered here.
+The engine leaves the last message on row 0 after it is answered, so when
+the observation has a cursor, a row-0 prompt counts only while the cursor is
+on row 0.
 """
 from __future__ import annotations
 
 import re
-
-import numpy as np
 
 from nethack_harness.prompt.tty_screen import (
     find_window, format_window, is_getpos_text, misc_flags, tty_cursor,
@@ -101,9 +94,7 @@ def _hero_tty_cell(raw_obs):
         return None
 
 
-# "What do you want to drop? [bcde or ?*]", "write with? [- bh or ?*]",
-# "What do you want to use or apply? [fhi or ?*]". NetHack's item prompts all
-# end in a bracket group whose tail is "or ?*" (or just "?*" / "*").
+# Item prompts end in a bracket group like "[bcde or ?*]" or "[- bh or ?*]".
 _ITEM_PROMPT_RE = re.compile(r"\[([^\]]*?)(?:\s*or\s*)?\??\*\]")
 
 
@@ -200,22 +191,13 @@ def detect_blocking_ui(raw_obs, published_tools=None, inventory=None,
                        getpos_pending: bool = False, window=_FIND) -> str | None:
     """Return a warning block if the game is blocked on UI input, else None.
 
-    The decision is made from the CURRENT screen only -- `misc`, where the
-    cursor is, and whether a window is drawn -- never from the message line's
-    text alone. This engine keeps the last message on row 0 until something
-    new is printed, so "There is a jackal corpse here; eat it? [ynq] (n)" was
-    still on row 0 after it had been answered and a later `search` had run;
-    the old row-0 text match kept announcing a prompt that no longer existed.
+    The returned string is inserted directly above `=== MAP ===` so the agent
+    reads it before the (stale) dungeon view it would otherwise act on.
 
-    `window` is the open window as tracked across the call's steps (see
-    `tty_screen.resolve_window`); omitted, it is read off `raw_obs`.
-
-    `getpos_pending` comes from the per-call message log: a position prompt
-    (travel `_`) leaves the cursor on the hero and `misc` all zero, so the
-    only evidence it is live is that it was the last thing this call printed.
-
-    Observations without a cursor (older engines, unit fakes) fall back to
-    matching the prompt shapes on row 0.
+    `window` is the open window tracked across the call (default: read off
+    `raw_obs`). `getpos_pending` means a position prompt (travel `_`) was the
+    last thing this call printed; that prompt leaves `misc` clear and the
+    cursor on the hero.
     """
     if raw_obs is None:
         return None
@@ -224,10 +206,9 @@ def detect_blocking_ui(raw_obs, published_tools=None, inventory=None,
     low = row0.lower()
     flags = misc_flags(raw_obs)
     cur = tty_cursor(raw_obs)
-    # `window`: the caller's tracked window (tty_screen.CallScreenLog carries
-    # it across partial redraws); by default read it off this screen.
     win = find_window(raw_obs) if window is _FIND else window
 
+    # No cursor (older engines, test fakes): match prompt text on row 0.
     if cur is None:
         blocked = bool(flags and any(flags)) or any(m in low for m in _PROMPT_MARKERS)
     else:
@@ -254,8 +235,8 @@ def detect_blocking_ui(raw_obs, published_tools=None, inventory=None,
     if item_lines:
         lines.extend(item_lines)
     elif "--more--" in low or (flags is not None and flags[2]):
-        # xwaitforspace with no window drawn is a --More--; a long message
-        # can wrap it off row 0 (the Archeologist's welcome line does).
+        # Waiting for space with no window drawn is a --More--, which a long
+        # message can wrap off row 0.
         lines.append("The game is showing --More--: press `enter` to see the "
                      "next message (`esc` skips the rest of them).")
     elif "in what direction" in low:

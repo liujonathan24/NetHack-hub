@@ -451,9 +451,9 @@ def remembered_monsters(state, raw_obs, game_turn, dlvl) -> list[str]:
     return out[:MONSTER_CAP]
 
 
-# ---------------------------------------------------------------------------
-# ADJACENT: the hero's 8 neighbours, around the hero's REAL position.
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+# Adjacent tiles                                                               #
+# --------------------------------------------------------------------------- #
 
 _ADJ_ORDER = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 _ADJ_OFFSETS = {
@@ -472,19 +472,10 @@ _ADJ_TERRAIN = {
 
 
 def adjacent_tiles(raw_obs) -> dict[str, str]:
-    """`{"N": ..., ..., "NW": ...}` for the 8 tiles around the hero.
+    """`{"N": ..., "NW": ...}` for the 8 tiles around the hero's `blstats` (x, y).
 
-    Replaces `nethack_core.observations.extract_adjacent` for rendering. That
-    one locates the hero as the FIRST `@` on the terminal, so whenever a human
-    or elf (`@`: the Oracle, a shopkeeper, a watchman) is drawn above the hero
-    it described that monster's surroundings: on the Oracle level it listed
-    the Oracle's fountains while hill orcs stood next to the hero. It also named
-    monsters by class letter only (every `G` became "gnome lord").
-
-    Here the hero is `blstats` (x, y), tiles are read from the map-frame
-    `chars`/`glyphs` planes (no menu overlay can bleed in), and a monster is
-    named by its species from the glyph -- the name the game's own farlook
-    (`;`) gives. Peacefulness is not in the glyph, so it is not claimed.
+    Monsters are named by species from the glyph. Peacefulness is not in the
+    glyph, so it is not shown.
     """
     chars = getattr(raw_obs, "chars", None)
     glyphs = getattr(raw_obs, "glyphs", None)

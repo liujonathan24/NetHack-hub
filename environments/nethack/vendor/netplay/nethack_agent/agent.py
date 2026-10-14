@@ -10,18 +10,16 @@ policy (an LLM scaffold under evaluation) and calls skills one at a time. So
 this module keeps only what the skill layer actually touches:
 
   * `finish_task_skill`     -- reproduced BYTE-FOR-BYTE (upstream lines 38-44).
-  * `_execute_skill`        -- ADAPTED from upstream lines 215-238: the
-    interrupt policy changed, see LOCAL CHANGE below.
-  * `_skip_more_messages`   -- BYTE-FOR-BYTE (upstream lines 189-196).
-  * `_update_objects`       -- BYTE-FOR-BYTE (upstream lines 198-213).
+  * `_execute_skill`        -- ADAPTED (upstream lines 215-238), see the end.
+  * `_skip_more_messages`   -- ADAPTED (upstream lines 189-196).
+  * `_update_objects`       -- ADAPTED (upstream lines 198-213).
   * `NetHackAgent.__init__` -- REPLACED (dropped the LLM/descriptor/selector
     plumbing; kept the two knobs the retained methods read).
 
 The three `_`-prefixed methods are kept because they are not LLM plumbing --
 they are the *skill execution contract*, and they materially bound behaviour:
 `_execute_skill` stops a skill after `max_skill_gamesteps` (100) in-game turns
-and interrupts it on a level change, teleport, low health or (upstream) a
-newly-seen glyph -- locally, a nearby hostile monster instead (see below).
+and interrupts it on a level change, teleport, low health or nearby hostile.
 `explore_level` runs until exploration is provably exhausted, so without this
 cap it would not be the same action NetPlay's agent actually took.
 
@@ -29,7 +27,7 @@ This matters for fidelity and is worth being precise about: every attribute
 `skills.py` uses on the agent -- `blstats`, `current_level`, `step`,
 `get_path_to`, `distance_to`, `get_distance_map`, `get_walkable_mask`,
 `waiting_for_popup`, `current_game_message`, `set_current_room`,
-`avoid_monsters` -- is defined by the *vendored, byte-verbatim*
+`avoid_monsters` -- is defined by the *vendored*
 `netplay/core/agent_base.py`, not here. None of the skill-relevant behaviour
 lives in upstream's `NetHackAgent`, so dropping the LLM plumbing changes no
 skill semantics.
@@ -38,28 +36,10 @@ Everything else from upstream's agent.py (AgentMemory, _solve_task,
 _skip_more_messages, _update_objects, _execute_skill, the renderers) belongs to
 the agent loop, not the skills, and is not reproduced. See vendor/PROVENANCE.md.
 
-LOCAL CHANGE (interrupt policy) -- `_execute_skill` is NO LONGER byte-verbatim.
-Upstream interrupts on every `NewGlyphEvent`: any monster, object, down-stair,
-altar or fountain glyph that was not on screen a moment ago, anywhere on the
-level. Play-tests showed that makes the closed-loop skills unusable (a kick
-interrupted by a lichen 60 columns away, every shop item and the corpse of the
-monster just killed "appearing", the same werejackal stopping two calls in a
-row with no progress) and that the event text leaked TRUE object identities
-("worthless piece of green glass" for what the game calls a "green gem"),
-because `describe_glyph` names the glyph's actual object type. The level-change
-text also printed the level index within the branch, not the Dlvl the status
-line shows. What changed, and nothing else:
-
-  * `NewGlyphEvent` no longer interrupts. Items and dungeon features never do.
-    Instead `_hostile_monster_interrupt` interrupts for a HOSTILE monster that
-    comes within `HOSTILE_NEAR_RADIUS` squares, or that keeps closing in from
-    within `APPROACH_RADIUS`, once per monster (and not again on the next call
-    while it stays put). Pets and peaceful monsters never interrupt; see that
-    method for how peacefulness is decided. It reads observations only.
-  * Level changes are reported in player-visible terms (`describe_level_change`).
-  * Low HP, teleport and level change still interrupt exactly as upstream.
-  * `last_interrupt` records why the last skill was interrupted (for the
-    harness's "no progress" note).
+`_execute_skill` does not interrupt on `NewGlyphEvent`: it fired for far-away
+monsters and every item, and its text named unidentified objects by their true
+type. A hostile monster that comes near interrupts instead, once
+(`_hostile_monster_interrupt`).
 """
 
 from netplay.core.agent_base import NethackBaseAgent, Step
@@ -106,27 +86,17 @@ class NetHackAgent(NethackBaseAgent):
         super().__init__(env=env, log_folder=log_folder, render=render)
         self.max_skill_gamesteps = max_skill_gamesteps
         self.update_hidden_objects = update_hidden_objects
-        # ADDED (fix/netcore-input): monster glyphs that answered "Really
-        # attack?" when walked into, so pathing treats them as obstacles
-        # (skills._known_peaceful). Lives as long as this agent (one episode).
+        # Monster glyphs that answered "Really attack?"; pathing avoids them.
         self.known_peaceful_glyphs = set()
 
-        # LOCAL (interrupt policy): see the module docstring.
-        # `describe_tile(x, y)` -> what NetHack's farlook (`;`) prints for that
-        # map square, or None when the harness cannot supply it. Set by
-        # nethack_harness.tools.netplay_true.get_agent.
+        # describe_tile(x, y) -> farlook (`;`) text for that square, or None.
         self.describe_tile: Optional[Callable[[int, int], Optional[str]]] = None
         self.last_interrupt: Optional[str] = None
         self._tracked_monsters: List[dict] = []
-        # Monsters an interrupt already named during the previous skill call.
         self._reported_last_call: List[dict] = []
 
-    # ADDED (fix/netcore-input): agent_base.get_path_to / distance_to compute
-    # `avoid_monsters` from their argument and then pass `self.avoid_monsters`
-    # instead, so an explicit `avoid_monsters=True` (melee_attack's approach
-    # walk) was silently ignored and the walk went through other monsters,
-    # peaceful ones included. These overrides pass the resolved value on.
-    # (get_distance_map in agent_base already does this correctly.)
+    # The base versions ignore an explicit avoid_monsters=True (they pass
+    # self.avoid_monsters on); these pass the resolved value.
     def get_path_to(self, x, y, bump_into_unwalkables=True, avoid_monsters=None):
         if not avoid_monsters:
             avoid_monsters = self.avoid_monsters
@@ -138,8 +108,7 @@ class NetHackAgent(NethackBaseAgent):
         return self.last_bfs_results.distance_to(x, y, bump_into_unwalkables, avoid_monsters=avoid_monsters)
 
     # ----------------------------------------------------------------------
-    # Below: upstream netplay/nethack_agent/agent.py, reproduced verbatim,
-    # except `_execute_skill` (LOCAL CHANGE, see the module docstring).
+    # Below: adapted from upstream netplay/nethack_agent/agent.py.
     # ----------------------------------------------------------------------
 
     def _skip_more_messages(self, generator: Iterator[Step]) -> Iterator[Step]:
@@ -148,11 +117,7 @@ class NetHackAgent(NethackBaseAgent):
             if step.is_done():
                 return
 
-            # LOCAL: bounded. Upstream pressed SPACE for as long as the screen
-            # showed --More--; a screen that SPACE never clears (reached by applying
-            # a nonsense inventory letter) looped forever and grew until the kernel
-            # killed the game server. Give up after MORE_PRESS_LIMIT presses, try
-            # ESC once, and otherwise leave the screen for the agent to answer.
+            # Some --More-- screens never clear with SPACE: try ESC, then leave it to the agent.
             presses = 0
             while self.showing_more_message and presses < self.MORE_PRESS_LIMIT:
                 yield self.step(RawKeyPress.KEYPRESS_SPACE)
@@ -186,8 +151,7 @@ class NetHackAgent(NethackBaseAgent):
         skill_description = " ".join([skill.name, *kwargs_str])
         yield Step.think(f"Executing skill '{skill_description}'.")
 
-        # LOCAL (interrupt policy): seed monster tracking from what is on
-        # screen as the call starts; the melee target is never an interrupt.
+        # The melee target never interrupts its own attack.
         self.last_interrupt = None
         exempt = None
         if skill.name == "melee_attack":
@@ -199,14 +163,9 @@ class NetHackAgent(NethackBaseAgent):
 
         start_ingame_time = self.blstats.time
         prev_blstats = self.blstats
-        # LOCAL (no-progress guard): the cap below counts in-game turns, so a skill
-        # that keeps sending keys the game rejects without spending a turn (a move
-        # into a doorway diagonal, a wall) looped forever and wedged the game
-        # server. Stop once this many keys in a row leave the clock where it was.
-        # press_key is exempt: its key count is bounded by what the agent typed.
+        # Stop a skill whose keys or steps stop moving the game clock (e.g. walking
+        # into a wall). press_key is exempt: it sends only what the agent typed.
         idle_keys, idle_since = 0, self.blstats.time
-        # A skill can also loop while yielding only thoughts, sending no key at all;
-        # count every step, and stop that the same way.
         idle_steps = 0
         try:
             for step in skill(self, **skill_kwargs):
@@ -241,7 +200,7 @@ class NetHackAgent(NethackBaseAgent):
                     return
 
                 if step.executed_action():
-                    # LOCAL: NewGlyphEvent removed from this tuple (see docstring).
+                    # No NewGlyphEvent: see the module docstring.
                     interrupt_event_types = (tracking.DungeonLevelChangeEvent, tracking.TeleportEvent, tracking.LowHealthEvent)
                     interrupt_events = [event for event in step.step_data.events if isinstance(event, interrupt_event_types)]
                     reason = None
@@ -264,38 +223,24 @@ class NetHackAgent(NethackBaseAgent):
         finally:
             self._end_monster_tracking()
 
-    # ----------------------------------------------------------------------
-    # LOCAL (interrupt policy). Not upstream code.
-    # ----------------------------------------------------------------------
+    # Not upstream.
 
-    #: A hostile monster this close (Chebyshev squares, i.e. moves) interrupts.
-    #: Why 7: most early monsters move at speed <= 12, the hero's speed, so one
-    #: that is 7 squares away needs ~6 turns to reach melee -- enough for one
-    #: considered decision (throw, retreat, Elbereth, change route) before it
-    #: can attack. It also roughly covers an ordinary lit room around the hero,
-    #: so "a monster entered my room" interrupts while monsters wandering in
-    #: other rooms (the 60-column-away lichen of the play-tests) do not.
+    #: A hostile monster within this many squares (moves) interrupts: about a lit
+    #: room, and ~6 turns before a speed-12 monster can attack.
     HOSTILE_NEAR_RADIUS = 7
-    #: Keys in a row that may leave the game clock unchanged before a skill is
-    #: stopped as making no progress (see `_execute_skill`). Menus, prompts and
-    #: `--More--` screens legitimately take a few keys without a turn passing;
-    #: fifty is far above that and far below "forever".
+    #: Keys in a row without the game clock moving before a skill is stopped.
     MAX_IDLE_KEYS = 50
     #: Steps of any kind (thoughts included) in a row without the clock moving.
     MAX_IDLE_STEPS = 200
     #: SPACE presses spent dismissing one run of --More-- screens.
     MORE_PRESS_LIMIT = 20
-    #: A hostile monster further away than HOSTILE_NEAR_RADIUS but within this
-    #: range interrupts only if it is visibly closing in: it moved toward the
-    #: hero on APPROACH_STREAK consecutive moves. (Two was too easy for a
-    #: wandering monster to satisfy by chance in live tests; three is not.)
+    #: Past HOSTILE_NEAR_RADIUS but within APPROACH_RADIUS, a hostile interrupts
+    #: once it has moved closer APPROACH_STREAK times in a row.
     APPROACH_RADIUS = 10
     APPROACH_STREAK = 3
-    #: How many observations a tracked monster may be out of sight and still be
-    #: recognised as the same monster when it reappears.
+    #: Observations a monster may be out of sight and still match when it returns.
     FORGET_AFTER = 10
-    #: Species that are always generated peaceful (M2_PEACEFUL). Used ONLY
-    #: when there is no farlook description of the monster itself.
+    #: Always-peaceful species (M2_PEACEFUL); used only without farlook text.
     ALWAYS_PEACEFUL = ("shopkeeper", "guard", "prisoner", "Oracle",
                        "aligned priest", "high priest", "watchman",
                        "watch captain")
@@ -311,17 +256,8 @@ class NetHackAgent(NethackBaseAgent):
         return text or None
 
     def _visible_hostiles(self) -> List[dict]:
-        """Hostile monsters on screen now, from the observation only.
-
-        Pets are recognised from the glyph. Peaceful monsters are recognised
-        from the farlook description of the square ("peaceful gnome",
-        "tame kitten") -- the text a human gets for free with `;`, taken from
-        the engine's per-square screen descriptions without sending a key.
-        Without descriptions, species that are always peaceful are skipped by
-        name. The name reported is the one the player sees: the displayed
-        monster (so a shapeshifter is named by its current form), never
-        anything the glyph does not show.
-        """
+        """Hostile monsters on screen. Pets are known by glyph, peaceful ones by
+        the square's farlook text ("peaceful gnome"); no key is sent."""
         obs = self.last_observation
         if obs is None:
             return []
@@ -341,15 +277,12 @@ class NetHackAgent(NethackBaseAgent):
             low = (descr or "").lower()
             if low.startswith(("peaceful ", "tame ")):
                 continue
-            # Is the farlook text about this monster? Either it names the
-            # species ("gnome lord", "invisible stalker") or it is a proper
-            # name (an angry shopkeeper is just "Asidonhopo").
+            # Farlook text is about this monster if it names the species or is a
+            # proper name (an angry shopkeeper is just "Asidonhopo").
             if species.lower() in low or (descr and descr[:1].isupper()):
                 name = descr.split(",")[0].strip() or species
             else:
-                # No description, or one that is about the square rather than
-                # the monster (the map can show a monster the hero cannot look
-                # at, e.g. one in a dark area): name the species on the map.
+                # No farlook text about the monster (e.g. it is in the dark).
                 if species in self.ALWAYS_PEACEFUL:
                     continue
                 name = species
@@ -375,8 +308,8 @@ class NetHackAgent(NethackBaseAgent):
             carried = [dict(c) for c in self._reported_last_call]
             tracked = []
             for m in self._visible_hostiles():
-                # Not consumed: with two of a species close together the
-                # identities are ambiguous, and repeating is the worse error.
+                # Not consumed: two of a species close together are ambiguous,
+                # and a repeated interrupt is the worse error.
                 prev = self._match(m, carried, max_dist=2, consume=False)
                 m.update(reported=prev is not None,
                          exempt=exempt is not None and (m["x"], m["y"]) == tuple(exempt),
@@ -394,8 +327,7 @@ class NetHackAgent(NethackBaseAgent):
         ]
 
     def _hostile_monster_interrupt(self) -> Optional[str]:
-        """Update monster tracking after one engine step; return the interrupt
-        reason, or None. Never raises (a bug here must not break a skill)."""
+        """Update tracking after one step; return the interrupt reason or None. Never raises."""
         try:
             return self._hostile_monster_interrupt_unsafe()
         except Exception:
@@ -408,8 +340,7 @@ class NetHackAgent(NethackBaseAgent):
             p.pop("_taken", None)
         carried = [dict(c) for c in self._reported_last_call]
         current = self._visible_hostiles()
-        # Match the closest current monsters first, so a monster next to the
-        # hero keeps its identity when two of a species are on screen.
+        # Closest first, so a monster next to the hero keeps its identity.
         current.sort(key=lambda m: m["d"])
         reason = None
         for m in current:
@@ -448,8 +379,7 @@ class NetHackAgent(NethackBaseAgent):
             m["inside"] = d <= self.HOSTILE_NEAR_RADIUS
             m["adjacent"] = d <= 1
             m["missing"] = 0
-        # Keep monsters that just went out of sight for a while, so one that
-        # steps behind a wall and back is not "new" again.
+        # Remember monsters briefly out of sight, so one behind a wall is not new again.
         for p in prev_list:
             if not p.get("_taken") and p.get("missing", 0) < self.FORGET_AFTER:
                 q = dict(p)
@@ -463,9 +393,7 @@ class NetHackAgent(NethackBaseAgent):
         return reason
 
 
-#: Dungeon branch names, indexed by `u.uz.dnum` (blstats dungeon_number), in
-#: the order of NetHack 3.6's dat/dungeon.def. These are the names the game's
-#: own dungeon overview (Ctrl-O) shows the player.
+#: Branch names by blstats dungeon_number (dat/dungeon.def order), as Ctrl-O shows them.
 BRANCH_NAMES = {
     0: "the Dungeons of Doom",
     1: "Gehennom",
@@ -479,11 +407,7 @@ BRANCH_NAMES = {
 
 
 def describe_level_change(old_depth, old_dnum, new_depth, new_dnum) -> str:
-    """LOCAL: a level change in the terms the player sees.
-
-    Uses the depth the status line shows as `Dlvl:` (blstats depth), not the
-    level index within the branch, and names the branch only when it changes.
-    """
+    """A level change by the status line's Dlvl; names the branch only when it changes."""
     old_depth, new_depth = int(old_depth), int(new_depth)
     old_dnum, new_dnum = int(old_dnum), int(new_dnum)
     if new_depth > old_depth:

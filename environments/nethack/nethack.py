@@ -1002,11 +1002,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         game time 1 this way. See `prompt/interactive_state.py`.
         """
         if state.get("_auto_dismiss") is False and state.get("raw_obs") is not None:
-            # ADJACENT around the hero's real position (blstats), with monsters
-            # named by species. `shape()` finds the hero as the first `@` on
-            # the terminal, which is wrong whenever a human monster is on the
-            # map (see `features.adjacent_tiles`). Raw-prompt (NetCore)
-            # surfaces only, so the auto-dismiss arms render as before.
+            # `shape()` takes the first `@` on screen as the hero, which is wrong
+            # when a human monster is drawn above it.
             try:
                 from nethack_harness.prompt.features import adjacent_tiles
                 _adj = adjacent_tiles(state["raw_obs"])
@@ -1014,8 +1011,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                     state["structured_obs"].adjacent = _adj
             except Exception:
                 pass
-            # Inventory text as the game's own `i` listing shows it, while the
-            # engine's `inv_strs` has not caught up (tty_screen).
+            # The engine's `inv_strs` can lag behind the game's own `i` listing.
             try:
                 from nethack_harness.prompt.tty_screen import apply_inventory_listing
                 apply_inventory_listing(state, state["structured_obs"].inventory,
@@ -1031,8 +1027,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         )
         raw_surface = state.get("_auto_dismiss") is False
         _any_log = state.get("_call_log")
-        # Raw-prompt surfaces, plus any NetPlay (`np_*`) call: those used to
-        # carry "GAME: <last message>" in their feedback, now replaced by this.
+        # `np_*` skill feedback carries no game message, so those calls get it too.
         call_log = _any_log if (
             raw_surface or str(state.get("_last_skill_name") or "").startswith("np_")
         ) else None
@@ -1042,17 +1037,15 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         so = state.get("structured_obs")
         _bkw = {}
         if _any_log is not None:
-            # The window as tracked over every step of the call: a menu whose
-            # entry was just toggled is only partly repainted on the tty.
+            # Tracked across the call: a menu is only partly repainted after a toggle.
             _bkw["window"] = _any_log.window
         warning = detect_blocking_ui(
             state.get("raw_obs"), published_tools=state.get("_published_tools"),
             inventory=getattr(so, "inventory", None),
             getpos_pending=getpos_pending, **_bkw)
         if warning and raw_surface:
-            # Once HP is 0 the end-of-game screens (possessions list, ...) are
-            # up, but nothing the agent sends reaches the game: GAME OVER says
-            # so. A "waiting for input" banner beside it would contradict it.
+            # At HP 0 the end screens are up but input no longer reaches the
+            # game (GAME OVER says so), so a waiting-for-input banner is wrong.
             try:
                 if int((getattr(so, "status", None) or {}).get("hitpoints", 1)) <= 0:
                     warning = None
@@ -1060,13 +1053,6 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                 pass
         text = f"{warning}\n{obs_text}" if warning else obs_text
         if call_log is not None:
-            # Every message the game printed during THIS call, in order
-            # (`--More--` chains, text windows such as "Things that are
-            # here:", the death sequence). The skill feedback used to carry
-            # only the LAST observation's message, which lost thrown-weapon
-            # hits, "You dig a hole through the floor", auto-pickup lines and
-            # "You die...", and -- because this engine keeps the old message
-            # on screen -- re-reported "You kill the newt!" on later calls.
             from nethack_harness.prompt.tty_screen import bound_lines
             if call_log.lines:
                 block = ["=== GAME MESSAGES (printed during this call, in order) ==="]
@@ -1132,10 +1118,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         }
         clock_before = _game_clock(state)
         rec = TurnRecorder(state.get("env"), capture_frames=self.record_step_frames)
-        # Per-call screen log: every message / text window the game printed
-        # during this call, for `_render_obs_text`. Nested inside the recorder
-        # (installed after it, removed before it). Observation-only: it never
-        # steps the engine, so the recorded keystrokes are unchanged.
+        # Logs what the game prints during this call, for `_render_obs_text`.
+        # It only observes, so the recorded keystrokes are unchanged.
         from nethack_harness.prompt.tty_screen import CallScreenLog
         call_log = CallScreenLog(state.get("env"), baseline_obs=state.get("raw_obs"),
                                  prev_window=getattr(state.get("_call_log"), "window", None))
@@ -1387,8 +1371,6 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # Gate the descent ACTION, not one tool name: np_core has no np_down —
         # agents descend via np_press_key('>'). (Caught live in E8a attempt 1:
         # seeds reached Dlvl 8-11 with zero np_down calls and zero gate lines.)
-        # np_press_key takes a key SEQUENCE, so a '>' anywhere in it (or <GT>)
-        # counts as a descent, not only key == ">".
         _is_descent = (
             skill_name == "np_down"
             or (skill_name == "np_press_key"
@@ -2246,12 +2228,10 @@ def _native_tool_call_id(calls):
 
 
 def _press_key_sends_gt(key) -> bool:
-    """True when an np_press_key `key` argument would send a '>' keystroke.
+    """True when an np_press_key key sequence ("s>", "<GT>") would send '>'.
 
-    np_press_key accepts a key sequence ("s>", "<ESC>>", "<GT>"), so the
-    descent gate cannot compare the argument with ">" alone. Parsed with the
-    skill's own parser; an unparseable argument sends nothing, so it is not
-    a descent (the old exact check is kept as a fallback).
+    An unparseable sequence sends nothing; if the parser cannot load, fall
+    back to matching ">" exactly.
     """
     key = str(key or "")
     try:
@@ -2295,10 +2275,8 @@ def _obs_tty_has_more(obs) -> bool:
         tty = obs.get("tty_chars") if isinstance(obs, dict) else getattr(obs, "tty_chars", None)
         if tty is None:
             return False
-        # Rows joined, not searched one by one: a long first message wraps and
-        # splits the marker across rows ("...--" / "More--..."), which a per-row
-        # search misses (the Archeologist's welcome line does this). The replay
-        # grader in residency-environments mirrors this check exactly.
+        # Rows joined: a long message can wrap the marker across rows. The
+        # replay grader in residency-environments mirrors this check.
         return b"--More--" in b"".join(bytes(int(c) for c in row) for row in tty[:3])
     except Exception:
         return False
@@ -2334,11 +2312,8 @@ def _scrub_intro_banner(obs, window=None) -> None:
             return
         space = ord(" ")
         n_cols = min(tty.shape[1], chars.shape[1])
-        # An open menu / text window is drawn over cells that `chars` reports
-        # blank, so the rule below would erase it too: the inventory rendered
-        # as "an uncur         ration" because every character of the window
-        # that sat over blank map was scrubbed. Leave the window's rectangle
-        # alone (it starts at row 0, column `win.col`, down to its terminator).
+        # An open menu or text window covers cells `chars` reports blank; keep
+        # its rectangle (rows up to `end_row`, columns from `col`) intact.
         win_col, win_end = n_cols, -1
         try:
             from nethack_harness.prompt.tty_screen import find_window
@@ -2737,8 +2712,7 @@ def load_environment(
             spec = _dc.replace(
                 spec, system_prompt=spec.system_prompt + "\n\n" + "\n\n".join(_blocks))
 
-    # The dataset only feeds verifiers' rollout loop; the game box, which runs
-    # without verifiers, seeds each game through setup_state instead.
+    # Only verifiers' rollout loop reads the dataset.
     dataset = _build_task_dataset(
         n_examples, seed, explicit_seeds=explicit_seeds,
         system_prompt=spec.system_prompt,

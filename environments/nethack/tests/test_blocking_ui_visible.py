@@ -156,16 +156,10 @@ def test_no_bracket_group_yields_no_answer_list():
 def test_warning_embeds_the_answer_list_when_one_exists():
     from nethack_harness.prompt.interactive_state import detect_blocking_ui
 
-    # Wording changed on purpose (NetCore observation fixes): "ONLY these
-    # answers do anything" was false at an item prompt, where ANY inventory
-    # letter is accepted. The suggested letters are now listed as
-    # `letter: item`, and a y/n prompt's answers are "suggested".
     out = detect_blocking_ui(_FakeObs(misc=(1, 0, 0), row0="What do you want to read? [de or ?*]"))
     assert out is not None
-    assert "ONLY these answers" not in out
-    assert "ANY letter from your inventory is accepted" in out
+    assert "ANY letter from your inventory is accepted" in out and "ONLY these answers" not in out
     assert "  d: " in out and "  e: " in out
 
     out = detect_blocking_ui(_FakeObs(misc=(1, 0, 0), row0="Really attack the jackal? [yn] (n)"))
-    assert "Suggested answers" in out
-    assert "`bal_y`" in out and "`bal_n`" in out
+    assert "Suggested answers" in out and "`bal_y`" in out and "`bal_n`" in out

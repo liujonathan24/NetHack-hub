@@ -302,15 +302,9 @@ def get_agent(core_env) -> NetHackAgent:
 
 
 def _screen_descriptions_buffer(core_env):
-    """The engine's per-square farlook text buffer, or None.
+    """The engine's per-square farlook (`;`) text buffer, or None.
 
-    NLE-style engines fill `screen_descriptions` on every step with exactly
-    what NetHack's `;` (farlook) command would print for each map square --
-    "tame kitten", "peaceful gnome", "green gem". `CoreObservation` does not
-    carry it, so it is read from the ctypes engine wrapper's own buffer. That
-    is a read of what the player can already look at for free; it sends no
-    key and so cannot affect the recorded trace.
-    """
+    `CoreObservation` does not carry it, so it is read off the engine wrapper."""
     obj = core_env
     for _ in range(4):
         buf = getattr(obj, "_screen_descriptions", None)
@@ -323,8 +317,7 @@ def _screen_descriptions_buffer(core_env):
 
 
 def _tile_describer(core_env):
-    """`(x, y) -> farlook text or None` for the interrupt policy
-    (NetHackAgent.describe_tile). None when the engine has no descriptions."""
+    """`(x, y) -> farlook text or None` for `NetHackAgent.describe_tile`, or None."""
     try:
         buf = _screen_descriptions_buffer(core_env)
         if buf is None:
@@ -524,16 +517,11 @@ def _refuse_attack(core_env, kwargs):
     return None
 
 
-#: Skills whose job is to move the hero; an interrupt before the first move is
-#: "no progress" for them.
 _MOVEMENT_SKILLS = ("move_to", "explore_level", "go_to", "explore")
 
 
 def _where(raw):
-    """`(x, y, depth, dnum)` from an observation's blstats, or None.
-
-    depth is what the status line shows as Dlvl (NLE blstats 12), dnum the
-    dungeon branch (blstats 23)."""
+    """`(x, y, Dlvl, dungeon branch)` from an observation's blstats, or None."""
     try:
         bl = getattr(raw, "blstats", None)
         if bl is None:
@@ -544,15 +532,10 @@ def _where(raw):
 
 
 def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillResult:
-    """Drive one NetPlay skill to completion against the live engine.
-
-    Mirrors upstream's own execution pipeline (`agent.py::_solve_task`, lines
-    165-168): `_execute_skill` -> `_skip_more_messages` -> `_update_objects`.
-    The 100-in-game-turn cap and the level-change / teleport / low-HP
-    interrupts are NetPlay's. Upstream's interrupt on ANY newly-seen glyph is
-    replaced locally by a nearby-hostile-monster interrupt (see the LOCAL
-    CHANGE note in vendor/netplay/nethack_agent/agent.py); the HP-drop and
-    spoiling-food interrupts below are ours.
+    """Run one NetPlay skill to its end on the live engine, as upstream's
+    `_solve_task` does: `_execute_skill`, `_skip_more_messages`, `_update_objects`.
+    A skill stops after 100 game turns, on a level change, teleport, low HP or a
+    nearby hostile, and on an HP drop or spoiling food (below).
     """
     agent = get_agent(core_env)
     wrapped: NetPlayEngineEnv = agent.env
@@ -575,8 +558,6 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
             return _refusal
 
     step_observations: list = []
-    # What was on screen before the skill's first key: its message is old news
-    # for the kill-log harvest below.
     _baseline_obs = wrapped.last_raw
     original_step = wrapped.step
 
@@ -687,13 +668,8 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     # last message, so a 100-step macro surfaces one line and `You kill the X!`
     # is usually lost -- which is why the corpse-age kill log missed 25% of
     # kills. These observations already exist (`step_observations`); we read
-    # them for the log ONLY (the agent sees the call's messages through the
-    # harness's per-call log, `prompt/tty_screen.py`).
-    #
-    # Only NEWLY printed messages are fed. This engine keeps the last message
-    # on the message line until something else is printed, so feeding every
-    # step's message re-stamped one kill with each later step's turn and made
-    # the corpse look fresher than it was.
+    # them for the log ONLY. Only newly printed messages are fed: the engine
+    # keeps the last one on screen, which would re-stamp a kill with later turns.
     try:
         from nethack_harness.prompt.corpse_age import note_kills
         from nethack_harness.prompt.tty_screen import new_messages_per_step
@@ -710,32 +686,15 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
 
     feedback = " ".join(t for t in thoughts if t).strip() or "No effect."
 
-    # What the GAME said is no longer appended here. This used to add
-    # "GAME: <message of the final observation>", which (a) kept only the LAST
-    # message of the call -- a thrown dagger's hit, "You dig a hole through
-    # the floor", auto-pickup lines and "You die..." were all lost -- and (b)
-    # when the skill took no step, read the message still on screen from an
-    # EARLIER call ("You kill the newt!" came back on four later move_to
-    # calls; this engine never clears the message line). The harness now logs
-    # every message printed during the call, from every engine step, and
-    # renders them in order (`prompt/tty_screen.py::CallScreenLog`, rendered
-    # by `NetHackEnv._render_obs_text`).
-
-    # Cleanup on the event text before the agent sees it: numpy scalars repr
-    # as `np.int64(2)` under numpy 2.x.
+    # numpy 2.x scalars repr as `np.int64(2)` in the event text.
     try:
         import re as _re
         feedback = _re.sub(r"np\.(?:int|uint|float)\d+\(([-\d.]+)\)", r"\1", feedback)
     except Exception as exc:
         _swallowed("run_netplay_skill.feedback_cleanup", exc)
 
-    # Level changes the vendored interrupt cannot see. The agent reports a
-    # level change it observes inside the skill, in Dlvl terms. But the dig
-    # that goes through the floor ("You dig a hole through the floor ...
-    # --More--") and a fall through a trap door or hole only land on the new
-    # level after `_skip_more_messages` dismisses the --More--, outside the
-    # interrupt check -- so they used to produce no note at all. Compare where
-    # the call started with where it ended, in the depth the status line shows.
+    # Digging or falling through the floor lands only after `_skip_more_messages`,
+    # outside the agent's level-change interrupt, so compare start and end here.
     _where_end = _where(wrapped.last_raw)
     try:
         if (_where_start is not None and _where_end is not None
@@ -748,9 +707,6 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     except Exception as exc:
         _swallowed("run_netplay_skill.level_change", exc)
 
-    # An interrupted movement skill that did not move says so plainly: the
-    # play-tests had two explore calls in a row stop on the same monster with
-    # nothing to show for it, and the text did not make that obvious.
     try:
         _interrupted = _harness_interrupt or bool(getattr(agent, "last_interrupt", None))
         if (_interrupted and getattr(skill, "name", "") in _MOVEMENT_SKILLS
