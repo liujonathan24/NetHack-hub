@@ -211,17 +211,40 @@ MAX_MESSAGE_LINES = 40
 _HEAD_LINES = 12
 
 
+def awaiting_answer(obs) -> bool:
+    """Is the game reading an answer (a prompt, a --More--, a window) rather
+    than a command?"""
+    flags = misc_flags(obs)
+    cur = tty_cursor(obs)
+    return bool(flags and any(flags)) or (cur is not None and cur[0] == 0) or find_window(obs) is not None
+
+
+#: Keys that leave a command unfinished in command context: a count digit, or
+#: a prefix (`F`, `m`, `g`, `G`, `M`) that waits for its direction.
+_UNFINISHED_KEYS = frozenset(ord(c) for c in "0123456789FmgGM")
+
+
+def _key(action) -> Optional[int]:
+    try:
+        return int(action) if action is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class _HarvestState:
     """Running state for collecting new messages over consecutive engine steps.
 
-    The engine does not clear the message line between steps, so a message is
-    new only when it changes; `prev` starts as the message already on screen.
+    A completed command clears the message line before it runs, so after one
+    every message is new; while the game reads an answer, or the rest of a
+    command, the line persists, so only a change is new. `prev` starts as the
+    message already on screen.
     """
 
-    __slots__ = ("prev", "seen_windows", "held", "last_prompt")
+    __slots__ = ("prev", "waiting", "seen_windows", "held", "last_prompt")
 
     def __init__(self, baseline_obs=None) -> None:
         self.prev = obs_message(baseline_obs) if baseline_obs is not None else ""
+        self.waiting = baseline_obs is not None and awaiting_answer(baseline_obs)
         self.seen_windows: set = set()
         #: (signature, lines) of the text window on screen; its lines join the
         #: messages once it closes.
@@ -234,9 +257,11 @@ class _HarvestState:
                 self.last_prompt = self.prev.rstrip()
 
 
-def _step_text(obs, st: "_HarvestState") -> list[str]:
+def _step_text(obs, st: "_HarvestState", action=None) -> list[str]:
     """What one engine step newly printed, as display lines."""
     out: list[str] = []
+    if not st.waiting and _key(action) in _UNFINISHED_KEYS:
+        st.waiting = True
     win = find_window(obs)
     sig = win.signature() if (win is not None and not win.is_menu) else None
     if st.held is not None and st.held[0] != sig:
@@ -254,9 +279,10 @@ def _step_text(obs, st: "_HarvestState") -> list[str]:
         rest = msg[len(st.last_prompt):].lstrip()
         rest = rest[1:].strip() if rest else ""   # drop the one-key answer
         new = rest if len(rest) > 1 else ""
-    if new and msg != st.prev and not prompting:
+    if new and not prompting and (msg != st.prev or not st.waiting):
         out.append(new)
     st.prev = msg
+    st.waiting = awaiting_answer(obs)
     st.last_prompt = msg.rstrip() if (prompting and msg) else ""
     if sig is not None and sig not in st.seen_windows:
         st.seen_windows.add(sig)
@@ -264,11 +290,14 @@ def _step_text(obs, st: "_HarvestState") -> list[str]:
     return out
 
 
-def new_messages_per_step(observations, baseline_obs=None):
-    """Yield, for each observation, the list of lines it newly printed."""
+def new_messages_per_step(observations, baseline_obs=None, actions=None):
+    """Yield, for each observation, the list of lines it newly printed.
+
+    `actions`, when given, holds the key that produced each observation."""
     st = _HarvestState(baseline_obs)
-    for o in observations or ():
-        yield o, _step_text(o, st)
+    acts = list(actions or ())
+    for i, o in enumerate(observations or ()):
+        yield o, _step_text(o, st, acts[i] if i < len(acts) else None)
 
 
 def bound_lines(lines: list[str], cap: int = MAX_MESSAGE_LINES) -> list[str]:
@@ -326,7 +355,6 @@ class CallScreenLog:
         #: letter -> description from an inventory listing (`i`) seen this call.
         self.inventory_listing: Optional[dict] = None
         self._inv_open = False
-        self._waiting = False
         #: Game turn when the call started (None if unknown).
         self.start_turn = None
         try:
@@ -334,25 +362,16 @@ class CallScreenLog:
                 self.start_turn = int(np.asarray(getattr(baseline_obs, "blstats"))[20])
         except Exception:
             self.start_turn = None
-        if baseline_obs is not None:
-            _f, _c = misc_flags(baseline_obs), tty_cursor(baseline_obs)
-            self._waiting = bool(_f and any(_f)) or (_c is not None and _c[0] == 0)
 
     def _note(self, obs, action=None) -> None:
         self.steps += 1
         # An `i` typed as an answer (to a prompt, or in a menu) is not the
         # inventory command.
-        at_command = self.window is None and not self._waiting
+        at_command = self.window is None and not self._st.waiting
         self.window = resolve_window(obs, self.window)
-        flags = misc_flags(obs)
-        cur = tty_cursor(obs)
-        self._waiting = bool(flags and any(flags)) or (cur is not None and cur[0] == 0)
         # Keep the game's own `i` listing: `inv_strs` is refreshed only by
         # update_inventory(), so it can lag behind (a dagger that got dull).
-        try:
-            a = int(action) if action is not None else None
-        except (TypeError, ValueError):
-            a = None
+        a = _key(action)
         if a in _INVENTORY_KEYS and at_command:
             self._inv_open = True
         if self._inv_open:
@@ -364,7 +383,7 @@ class CallScreenLog:
             else:
                 self._inv_open = False
         before = self._st.prev
-        for ln in _step_text(obs, self._st):
+        for ln in _step_text(obs, self._st, a):
             if not self.lines or self.lines[-1] != ln:
                 self.lines.append(ln)
         if self._st.prev != before and is_getpos_text(self._st.prev):

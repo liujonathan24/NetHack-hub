@@ -43,7 +43,8 @@ no longer secret and the hero's remembered glyph is a wall, so the guard skips
 it: `chars` reverts to the wall face the hero remembers. `tty_chars` does not
 revert, because the overlay wrote it directly into the exported buffer and NLE
 only re-copies dirty terminal lines — so the exported tty keeps the last
-correct value.
+correct value until the next full repaint (a window closing, `^R`, a level
+change: the terminal is erased and redrawn from the hero's memory, as in NLE).
 
 So the engine emitted the truth once and then stopped repeating it, and the two
 planes disagree for exactly the class of cell where `tty_chars` is right.
@@ -69,8 +70,8 @@ A cell is restored only when ALL of:
     floor tile is not a cell `chars` calls solid, so over a wall the reading is
     unambiguous;
   * the tty row carries no 4+ consecutive-letter run — the exact prose detector
-    `tests/test_map_frame_bleed.py` uses. Menu/banner text is words; dungeon
-    rows never are. A row with prose on it is not trusted at all.
+    `tests/test_map_frame_bleed.py` uses. Menu text is words; dungeon rows
+    never are. A row with prose on it is not trusted at all.
 
 This is not "rewriting the grid to match a tracker": every character here came
 out of the engine, in the same frame, from the engine's own render of

@@ -16,10 +16,6 @@ import os
 
 from nethack_core import _engine
 
-# Dynamic dungeon-level files are "<s_lock>.<ledger>"; s_lock is empty in this
-# build, so they are ".<digits>" (e.g. ".50") in the hackdir.
-_LOCK_PREFIX = "."
-
 
 def _write(path, data: bytes):
     with open(path, "wb") as f:
@@ -29,6 +25,29 @@ def _write(path, data: bytes):
 def _read(path) -> bytes:
     with open(path, "rb") as f:
         return f.read()
+
+
+def _lock_prefix() -> str:
+    """The "<lock>." prefix of this engine's level files, read off what a restore brings back."""
+    env = _engine.RawEngine()
+    env.start(core=1, disp=1)
+    hd = env._hackdir
+    candidates = ("1lock.", ".")
+    for p in candidates:
+        _write(os.path.join(hd, p + "99"), b"x")
+    h = env.snapshot()
+    for p in candidates:
+        os.remove(os.path.join(hd, p + "99"))
+    env.restore(h)
+    found = [p for p in candidates if os.path.exists(os.path.join(hd, p + "99"))]
+    env.free_snapshot(h)
+    env.end()
+    assert len(found) == 1, found
+    return found[0]
+
+
+# Dynamic dungeon-level files are "<lock>.<ledger>" in the hackdir.
+_LOCK_PREFIX = _lock_prefix()
 
 
 def test_snapshot_bundles_and_restores_level_files():
@@ -84,9 +103,9 @@ def test_static_template_files_are_not_bundled():
     env.end()
 
 
-def test_levelfile_created_after_snapshot_is_left_alone():
-    """A level file that did not exist at snapshot time is not deleted on
-    restore (NetHack regenerates unvisited levels rather than reading them)."""
+def test_levelfile_created_after_snapshot_is_removed_on_restore():
+    """After a restore the level files on disk are exactly the snapshot's: one
+    the restored game does not know about would be a fake death on its stairs."""
     env = _engine.RawEngine()
     env.start(core=42, disp=42)
     hd = env._hackdir
@@ -97,8 +116,6 @@ def test_levelfile_created_after_snapshot_is_left_alone():
 
     env.restore(h)
 
-    assert os.path.exists(newfile) and _read(newfile) == b"CREATED-AFTER-SNAPSHOT", (
-        "restore should leave post-snapshot level files untouched"
-    )
+    assert not os.path.exists(newfile), "restore kept a level file the snapshot did not hold"
     env.free_snapshot(h)
     env.end()

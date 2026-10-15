@@ -147,10 +147,8 @@ def test_the_recorded_actions_replay_the_game_byte_for_byte(tmp_path):
 
     replayed = asyncio.run(replay())
     original = state["raw_obs"]
-    # `tty_chars` is deliberately NOT compared: the harness scrubs the intro
-    # banner out of it IN PLACE every turn for rendering (`_scrub_intro_banner`),
-    # so it is a presentation surface, not engine state. Everything the engine
-    # actually simulates must match exactly.
+    # `tty_chars` is the terminal, a presentation surface; everything the
+    # engine actually simulates must match exactly.
     for plane in ("glyphs", "chars", "colors", "blstats", "inv_strs",
                   "inv_letters", "inv_glyphs", "message"):
         a = np.asarray(getattr(original, plane))
@@ -360,16 +358,14 @@ def test_a_macro_keeps_every_message_not_just_the_last(driven):
 def test_messages_produced_mid_macro_are_not_dropped(tmp_path):
     """A message emitted at step k of a macro must survive to the trace.
 
-    Seed 0 opens with the welcome banner and then the pet picking up / dropping
-    gold several steps into the first `explore_level`; before this, only the
-    final observation's message was ever recorded.
+    On seed 0 the pet picks up and drops gold several steps into the first
+    `explore_level`; before this, only the final observation's message was
+    ever recorded.
     """
     _state, recs = _drive(tmp_path / "msgs", [("np_explore_level", {})])
     msgs = recs[0]["all_messages"]
     assert len(msgs) >= 2, msgs
-    # The welcome banner is emitted on the FIRST step of the macro and would be
-    # the first thing a last-message-only writer loses.
-    assert any("welcome to NetHack" in msg for msg in msgs), msgs
+    assert any("picks up a gold piece" in msg for msg in msgs), msgs
     assert msgs[0] != msgs[-1]
 
 

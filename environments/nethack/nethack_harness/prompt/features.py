@@ -15,10 +15,9 @@ index at map row 17: an agent copying a feature coordinate into `move_to`
 aimed one row past it, every single time.
 
 Reading `chars` instead of `tty_chars` removes the conversion entirely rather
-than papering over it with a `-1`, and it drops two incidental defects that came
-with the tty source: the startup copyright banner (tty rows 1-4 on reset) was
-being scanned for monster glyphs, and an open menu drawn over the dungeon was
-scanned for features. `chars` carries neither.
+than papering over it with a `-1`, and it drops an incidental defect that came
+with the tty source: an open menu drawn over the dungeon was scanned for
+features. `chars` carries no menu text.
 
 `environments/nethack/tests/test_observation_frame.py` asserts on a real seeded
 engine that `chars[y][x]` is the right glyph for every `<label> at (x,y)` the

@@ -9,7 +9,13 @@ tiles our own `chars` plane says they should.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
+
+_WRAPPER_PYTHON = os.environ.get("NLE_LANG_PYTHON", "")
+needs_wrapper = pytest.mark.skipif(not os.path.exists(_WRAPPER_PYTHON),
+                                   reason="NLE_LANG_PYTHON is not an interpreter with nle-language-wrapper")
 
 
 def _live_obs():
@@ -25,6 +31,7 @@ def _rows(obs):
     return ["".join(chr(int(c)) for c in row) for row in obs.chars]
 
 
+@needs_wrapper
 @pytest.mark.slow
 def test_converter_agrees_with_our_glyph_plane():
     """Seed 0/0 puts gold adjacent-southeast, the pet adjacent-northwest and a
@@ -47,6 +54,7 @@ def test_converter_agrees_with_our_glyph_plane():
     assert rows[y - 1][x - 2] == "x", "converter claims grid bug WNW; our map disagrees"
 
 
+@needs_wrapper
 @pytest.mark.slow
 def test_the_load_bearing_channels_are_populated():
     """`text_cursor` is deliberately NOT asserted: it describes whatever the
@@ -62,6 +70,7 @@ def test_the_load_bearing_channels_are_populated():
     assert "text_cursor" in o, "the channel must exist even when its body is empty"
 
 
+@needs_wrapper
 @pytest.mark.slow
 def test_variant_renders_language_and_omits_the_ascii_map():
     """NLE_LANG must not append our grid — that would recreate B_ASCII rather

@@ -53,17 +53,17 @@ class _Game:
 def test_inventory_menu_renders_every_entry_with_real_letters():
     g = _Game()
     g.call("i")
-    g.shows("A MENU IS OPEN", "  Weapons", "  b - a +1 long sword (weapon in hand)",
-            "  c - a +0 dagger (alternate weapon; not wielded)", "  Armor",
-            "  d - an uncursed +3 small shield (being worn)", "  Comestibles",
-            "  e - an uncursed food ration", "  (end)")
+    g.shows("A MENU IS OPEN", "  Weapons", "  a - a +1 long sword (weapon in hand)",
+            "  b - a +0 dagger (alternate weapon; not wielded)", "  Armor",
+            "  c - an uncursed +3 small shield (being worn)", "  Comestibles",
+            "  d - an uncursed food ration", "  (end)")
     g.call("ESC")
     assert g.banner() is None
 
 
 def test_pickup_menu_keeps_entries_and_selection_across_partial_redraws():
     g = _Game()
-    g.drop("ce")
+    g.drop("bd")
     g.call(",")
     g.shows("Pick up what?", "a - a +0 dagger", "b - an uncursed food ration")
     g.call("a")  # toggling an entry repaints only that row on this engine's tty
@@ -76,14 +76,14 @@ def test_pickup_menu_keeps_entries_and_selection_across_partial_redraws():
 def test_item_prompt_lists_inventory_letters_not_indices():
     g = _Game()
     g.call("d")
-    out = g.shows("What do you want to drop? [bcde or ?*]", "  b: a +1 long sword (weapon in hand)",
-                  "  e: an uncursed food ration", "ANY letter from your inventory is accepted")
+    out = g.shows("What do you want to drop? [abcd or ?*]", "  a: a +1 long sword (weapon in hand)",
+                  "  d: an uncursed food ration", "ANY letter from your inventory is accepted")
     assert "[0]" not in out and "ONLY these" not in out
 
 
 def test_look_here_window_is_reported_as_messages():
     g = _Game()
-    g.drop("ce")
+    g.drop("bd")
     lines = g.call(": SP").lines  # space dismisses the window, as skip_more does
     assert lines[:1] == ["There is a staircase up here."], lines
     assert {"Things that are here:", "a +0 dagger", "an uncursed food ration"} <= set(lines), lines
@@ -97,19 +97,37 @@ def test_more_chain_reports_every_message_in_order():
 
 def test_old_message_is_not_reported_again():
     g = _Game()
-    assert g.drop("c").lines == ["You drop a +0 dagger."]
+    assert g.drop("b").lines == ["You drop a +0 dagger."]
     assert g.call("s").lines == []  # `s` prints nothing
-    assert "You drop a +0 dagger." in ts.obs_message(g.obs), "the engine keeps the old message"
+
+
+def test_a_message_printed_again_by_the_next_command_is_reported_again():
+    g = _Game()
+    assert g.call(">").lines == ["You can't go down here."]
+    assert g.call(">").lines == ["You can't go down here."]
+
+
+def test_a_count_or_prefix_key_does_not_repeat_the_previous_message():
+    g = _Game()
+    g.call(">")
+    assert g.call("2 .").lines == []  # the count digit leaves the line as it was
+    assert g.call("F h").lines == ["You attack thin air."]
+
+
+def test_a_key_ignored_at_a_more_prompt_does_not_repeat_the_message():
+    g = _Game()
+    g.call("^240 y")  # M-p (pray), confirm: the first message waits at --More--
+    assert g.call("s").lines == []  # swallowed by the --More--; nothing new
+    assert g.call("CR").lines, "dismissing it prints the next message"
 
 
 def test_answered_yn_prompt_does_not_leave_a_stale_banner():
     g = _Game()
-    g.drop("e")
+    g.drop("d")
     g.call("e")  # eat the food ration on the floor
     g.shows("eat it? [ynq]", "Suggested answers")
     g.call("q")
     g.call("s")  # the clock advances: nothing is pending
-    assert "eat it?" in ts.row0(g.obs), "row 0 still shows the old prompt"
     assert g.banner() is None
 
 
@@ -135,16 +153,16 @@ def test_adjacent_is_computed_around_the_hero_not_the_first_at_sign():
 
 def test_inventory_listing_overrides_stale_inv_strs():
     g = _Game()
-    for keys in ("w", "c CR", "E", "c CR", *"nxyz"):  # wield the dagger (c), engrave "nxyz" with it
+    for keys in ("w", "b CR", "E", "b CR", *"nxyz"):  # wield the dagger (b), engrave "nxyz" with it
         g.call(keys)
     assert "Your dagger gets dull." in " ".join(g.call("CR").lines)
     inv = {it.letter: it.description for it in g.inventory()}
-    assert inv["c"].startswith("a +0 dagger"), "the engine's inv_strs is stale here"
+    assert inv["b"].startswith("a +0 dagger"), "inv_strs is refreshed only by update_inventory()"
     log = g.call("i")
-    assert log.inventory_listing and log.inventory_listing["c"].startswith("a -2 dagger")
+    assert log.inventory_listing and log.inventory_listing["b"].startswith("a -2 dagger")
     items = g.inventory()
     ts.apply_inventory_listing({}, items, log)
-    assert {it.letter: it.description for it in items}["c"].startswith("a -2 dagger")
+    assert {it.letter: it.description for it in items}["b"].startswith("a -2 dagger")
 
 
 def test_bound_lines_elides_the_middle():

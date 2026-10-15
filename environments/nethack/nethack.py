@@ -696,11 +696,6 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["_continual_lives_left"] = self.continual_lives if self.continual else 0
         state["spec"] = spec
         state["meta"] = meta
-        # Standard NLE tiers (full_nle etc.) paint the intro/copyright banner
-        # over the top tty rows on every step; the engine-driven CurriculumEnv
-        # does not, and owns its own map — so per-turn banner scrubbing is gated
-        # to the standard tiers only (see the render path in env_response).
-        state["_standard_tier"] = spec.nle_task != "engine"
         state["scout_tiles_seen"] = set()
         state["scout_delta"] = 0
         state["scout_reward_total"] = 0.0
@@ -708,11 +703,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         state["descent_count"] = 0
         state["raw_obs"] = obs
         state["structured_obs"] = shape_observation(obs, character)
-        # Drain the intro/startup screen (copyright + version banner) and any
-        # message-paging --More-- that NetHack gates behind --More-- on reset.
-        # Without this, turn 1's observation carries the banner bleeding into
-        # the rendered MAP plus a dangling --More--, garbling the agent's view.
-        # We only press MORE/CR (byte 13) while a --More-- is ACTUALLY present
+        # Drain the --More-- NetHack may page the welcome behind on reset. We
+        # only press MORE/CR (byte 13) while a --More-- is ACTUALLY present
         # (never blindly, so a real [yn]/getlin prompt is left for the agent),
         # and wrap defensively: a drain failure must never break the rollout.
         try:
@@ -732,13 +724,6 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                         state["structured_obs"] = shape_observation(obs, character)
                         break
                     state["structured_obs"] = shape_observation(obs, character)
-            # The intro/copyright banner is painted over the top tty rows and,
-            # in right-offset-map tiers, is never repainted by gameplay — so it
-            # bleeds into the rendered MAP. Scrub it from the raw obs before the
-            # first observation is shaped/shown. Mutates raw_obs.tty_chars, then
-            # re-shape so map_view reflects the cleaned tty.
-            _scrub_intro_banner(state["raw_obs"])
-            state["structured_obs"] = shape_observation(state["raw_obs"], character)
         except Exception:
             pass
         state["map_detail"] = self.map_detail
@@ -859,7 +844,6 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                             f"(turn {_r['turn']}) -- the recorded session did "
                             "not end here, so this is replay divergence")
             state["raw_obs"] = _obs
-            _scrub_intro_banner(state["raw_obs"])
             state["structured_obs"] = shape_observation(state["raw_obs"], character)
             # Verify the reconstruction against the recorded end state. dlvl
             # and hp together are a strong fingerprint; matching every turn
@@ -1191,7 +1175,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
 
         This is the whole `env_response` body minus tool-call parsing: the gate,
         journal short-circuit, registry dispatch, engine stepping, menu drain,
-        terminal detection, reward bookkeeping, banner re-scrub and render. Split
+        terminal detection, reward bookkeeping and render. Split
         out so MCP-driven CLI harnesses (which must return the observation from
         the tool call itself) share one code path with the native harness.
 
@@ -2006,19 +1990,6 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         else:
             state["consecutive_short_autoexplore"] = 0
 
-        # Re-scrub the intro/copyright banner before rendering. Each env.step
-        # re-carries the banner in the still-unexplored top tty rows, and in the
-        # right-offset-map standard tiers it is never repainted by gameplay — so
-        # the one-time scrub in setup_state is not enough: it must be reapplied
-        # to the freshly-stepped obs every turn or it bleeds into the rendered
-        # MAP (which reads the raw tty). Gated to standard tiers; defensive
-        # (never raises). Mutates raw_obs.tty_chars, then re-shape so the map
-        # view reflects the cleaned tty.
-        if state.get("_standard_tier", True):
-            _scrub_intro_banner(state["raw_obs"],
-                                window=getattr(state.get("_call_log"), "window", None))
-            state["structured_obs"] = shape_observation(state["raw_obs"], state["character"])
-
         # Build the per-turn user message from the spec's turn template.
         obs_text = self._render_obs_text(state)
         prefix_parts = []
@@ -2280,56 +2251,6 @@ def _obs_tty_has_more(obs) -> bool:
         return b"--More--" in b"".join(bytes(int(c) for c in row) for row in tty[:3])
     except Exception:
         return False
-
-
-# Substrings that identify the NetHack startup/intro banner. NLE paints this
-# copyright/version art over the top tty rows on reset, and — in tiers whose
-# map is offset to the right so the player never walks over those cells — the
-# banner is never repainted by gameplay. It then bleeds into the rendered MAP
-# (render_map_view reads the raw tty), garbling the agent's first observations.
-_INTRO_BANNER_MARKERS = (b"Copyright", b"Stichting", b"Version 3.6", b"See license")
-
-
-def _scrub_intro_banner(obs, window=None) -> None:
-    """Strip the stale intro/copyright banner from a CoreObservation's tty.
-
-    The authoritative dungeon map lives in ``obs.chars`` (one row above the
-    matching tty row, same columns). Wherever a top tty cell holds banner art
-    that the clean ``chars`` plane reports as blank, we overwrite it with a
-    space. Real map glyphs (which match ``chars`` exactly) are left untouched.
-    Mutates ``obs.tty_chars`` in place. Never raises — a scrub failure must
-    never break a rollout.
-    """
-    try:
-        tty = getattr(obs, "tty_chars", None)
-        chars = getattr(obs, "chars", None)
-        if tty is None or chars is None:
-            return
-        # Only act when a banner signature is actually present on the top rows,
-        # so we never disturb a normal observation.
-        top = bytes(int(c) for r in range(min(6, tty.shape[0])) for c in tty[r])
-        if not any(m in top for m in _INTRO_BANNER_MARKERS):
-            return
-        space = ord(" ")
-        n_cols = min(tty.shape[1], chars.shape[1])
-        # An open menu or text window covers cells `chars` reports blank; keep
-        # its rectangle (rows up to `end_row`, columns from `col`) intact.
-        win_col, win_end = n_cols, -1
-        try:
-            from nethack_harness.prompt.tty_screen import find_window
-            _win = window if window is not None else find_window(obs)
-            if _win is not None:
-                win_col, win_end = _win.col, _win.end_row
-        except Exception:
-            pass
-        # tty row r (1..21) corresponds to chars row r-1, same columns.
-        for r in range(1, min(tty.shape[0], chars.shape[0] + 1)):
-            cols = min(n_cols, win_col) if r <= win_end else n_cols
-            for x in range(cols):
-                if tty[r, x] != chars[r - 1, x] and chars[r - 1, x] == space:
-                    tty[r, x] = space
-    except Exception:
-        pass
 
 
 def _iterate_visible_tiles(obs):
