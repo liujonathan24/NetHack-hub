@@ -678,6 +678,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_character pins the role for standard tiers (e.g. full_nle);
         # None keeps the engine default. Curriculum envs own their character.
         obs, meta = env.reset(character=self._setup_character)
+        env.setup_character = self._setup_character
         from nethack_harness.tools.skills import bootstrap_character
         character = bootstrap_character(env)
 
@@ -1011,9 +1012,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         )
         raw_surface = state.get("_auto_dismiss") is False
         _any_log = state.get("_call_log")
-        # `np_*` skill feedback carries no game message, so those calls get it too.
+        # `np_*` and `ch_*` skill feedback carries no game message, so those calls get it too.
         call_log = _any_log if (
-            raw_surface or str(state.get("_last_skill_name") or "").startswith("np_")
+            raw_surface or str(state.get("_last_skill_name") or "").startswith(("np_", "ch_"))
         ) else None
         getpos_pending = bool(
             _any_log is not None and _any_log.getpos_step

@@ -1,7 +1,8 @@
 """Generate nle_shim_data/codehack_tables.py: the object and monster fields CodeHack reads.
 
-The data comes from the engine library's static tables (mons, objects_baseline,
-obj_descr_baseline), never from the per-game objects array, whose descriptions are shuffled.
+The data comes from the engine library's static template tables (nh_tmpl_mons,
+nh_tmpl_objects, nh_tmpl_obj_descr), never from a game's own arrays, whose object
+descriptions are shuffled.
 
 Run in the game image:
     python vendor/tools/gen_codehack_tables.py vendor/nle_shim_data/codehack_tables.py
@@ -56,9 +57,9 @@ def read_tables():
     """(OBJECTS, MONSTERS) as written to codehack_tables.py, read from the engine library."""
     assert C.sizeof(_PerMonst) == 72 and C.sizeof(_ObjClass) == 40, "engine struct layout changed"
     lib = _engine.load_library()
-    mons = (_PerMonst * glyphs.NUMMONS).in_dll(lib, "mons")
-    objs = (_ObjClass * glyphs.NUM_OBJECTS).in_dll(lib, "objects_baseline")
-    descr = (_ObjDescr * glyphs.NUM_OBJECTS).in_dll(lib, "obj_descr_baseline")
+    mons = (_PerMonst * glyphs.NUMMONS).in_dll(lib, "nh_tmpl_mons")
+    objs = (_ObjClass * glyphs.NUM_OBJECTS).in_dll(lib, "nh_tmpl_objects")
+    descr = (_ObjDescr * glyphs.NUM_OBJECTS).in_dll(lib, "nh_tmpl_obj_descr")
     assert tuple(_text(m.mname) for m in mons) == glyphs.MONSTER_NAMES
     names = [(_text(d.oc_name), _text(d.oc_descr), o.oc_class) for d, o in zip(descr, objs)]
     assert names == OBJECT_TABLE
