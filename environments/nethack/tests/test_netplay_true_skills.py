@@ -138,7 +138,7 @@ def _fresh_env():
 
 @pytest.mark.timeout(600)
 def test_explore_level_ends_an_iteration_that_sends_no_key():
-    """A doorway next to a declined peaceful monster: explore_level used to spin without a key."""
+    """A doorway next to a declined peaceful monster: explore_level must send a key or end."""
     from _golden_replays import core_from_golden
 
     env = core_from_golden("explore_spin")
