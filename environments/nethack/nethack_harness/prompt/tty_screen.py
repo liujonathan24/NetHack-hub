@@ -383,9 +383,7 @@ class CallScreenLog:
             else:
                 self._inv_open = False
         before = self._st.prev
-        for ln in _step_text(obs, self._st, a):
-            if not self.lines or self.lines[-1] != ln:
-                self.lines.append(ln)
+        self.lines.extend(_step_text(obs, self._st, a))
         if self._st.prev != before and is_getpos_text(self._st.prev):
             self.getpos_step = self.steps
 

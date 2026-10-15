@@ -105,6 +105,7 @@ def test_a_message_printed_again_by_the_next_command_is_reported_again():
     g = _Game()
     assert g.call(">").lines == ["You can't go down here."]
     assert g.call(">").lines == ["You can't go down here."]
+    assert g.call("> >").lines == ["You can't go down here."] * 2
 
 
 def test_a_count_or_prefix_key_does_not_repeat_the_previous_message():
