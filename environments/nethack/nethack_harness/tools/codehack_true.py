@@ -257,7 +257,8 @@ class CodeHackGame:
                 "text_message": text}
 
 
-#: core env -> [seeds, game, bot]: one Bot per game.
+#: core env -> [seeds, game, bot]: one Bot per game, kept through errors so its memory
+#: (last prayer, spells, levels) survives; the next call resyncs it to the screen.
 _BOTS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
@@ -265,10 +266,10 @@ def reset_bot_cache() -> None:
     _BOTS.clear()
 
 
-def _character(core) -> str:
-    """The setup character in CodeHack's form, or "@" for CodeHack to read it off ^X."""
-    char = (getattr(core, "setup_character", None) or "@").lower()
-    return char if char.count("-") == 3 and "@" not in char else "@"
+def _character(core) -> str | None:
+    """The game's character in CodeHack's form, or None: the Bot is never left to read it off ^X."""
+    char = (getattr(core, "setup_character", None) or "").lower()
+    return char if char.count("-") == 3 else None
 
 
 def _entry(core) -> list:
@@ -319,9 +320,11 @@ def run_codehack_skill(core, name: str) -> SkillResult:
             game.step(ACTIONS.index(_ANSWERS[name]))
         except BotPanic:
             pass
-        return _result(core, game, f"{tool}: done.")
+        return _result(core, game, tool, "done.")
     if waiting:
         return SkillResult(actions=[], feedback=f"{tool} did not run: the game is waiting for an answer to a prompt.")
+    if _character(core) is None:
+        return SkillResult(actions=[], feedback=f"{tool}: could not run here.")
     entry = _entry(core)
     game = entry[1]
     try:
@@ -336,20 +339,21 @@ def run_codehack_skill(core, name: str) -> SkillResult:
         logger.debug("%s stopped: %r", tool, exc)
         reason = "stopped early."
     except Exception as exc:
-        _BOTS.pop(core, None)
         _npt._swallowed(f"codehack.{name}", exc)
-        return _result(core, game, f"{tool}: could not run here.")
+        return _result(core, game, tool, "could not run here.")
     if not game.frames:
         reason = NO_PROGRESS
-    notes = " ".join(dict.fromkeys(game.notes))
-    return _result(core, game, f"{tool}: {reason}" + (f" {notes}" if notes else ""))
+    return _result(core, game, tool, reason, " ".join(dict.fromkeys(game.notes)))
 
 
-def _result(core, game: CodeHackGame, feedback: str) -> SkillResult:
+def _result(core, game: CodeHackGame, tool: str, reason: str, notes: str = "") -> SkillResult:
+    obs = core._last_observation
     if game.frames:
         _npt.reset_agent_cache()
-    return SkillResult(actions=[], feedback=feedback, pre_executed=True, pre_reward=game.reward,
-                       final_obs=core._last_observation, pre_terminated=game.done,
+    if reason in ("done.", "stopped before finishing.", "stopped early.") and any(_flags(obs)[:2]):
+        reason = "stopped at a question."
+    return SkillResult(actions=[], feedback=f"{tool}: {reason}" + (f" {notes}" if notes else ""),
+                       pre_executed=True, pre_reward=game.reward, final_obs=obs, pre_terminated=game.done,
                        pre_visible_obs=list(game.frames))
 
 

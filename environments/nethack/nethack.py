@@ -678,9 +678,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_character pins the role for standard tiers (e.g. full_nle);
         # None keeps the engine default. Curriculum envs own their character.
         obs, meta = env.reset(character=self._setup_character)
-        env.setup_character = self._setup_character
-        from nethack_harness.tools.skills import bootstrap_character
+        from nethack_harness.tools.skills import bootstrap_character, character_code
         character = bootstrap_character(env)
+        # The game's character in "rol-rac-ali-gen" form for CodeHack, so it never has to read ^X.
+        env.setup_character = self._setup_character or character_code(character)
 
         state["env"] = env
         state["character"] = character

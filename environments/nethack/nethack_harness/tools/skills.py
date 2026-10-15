@@ -663,6 +663,12 @@ _UNKNOWN_CHARACTER = {
 }
 
 
+def character_code(character: dict) -> Optional[str]:
+    """`wiz-elv-cha-mal` for a bootstrapped character, or None while any part is unknown."""
+    parts = [str(character.get(k, "unknown")).lower() for k in ("role", "race", "alignment", "gender")]
+    return None if "unknown" in parts else "-".join(part[:3] for part in parts)
+
+
 def parse_character_from_welcome(message: str) -> dict[str, str]:
     """
     Parse role/race/alignment/gender from the NetHack opening welcome line.

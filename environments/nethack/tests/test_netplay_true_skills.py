@@ -136,6 +136,38 @@ def _fresh_env():
     return env
 
 
+@pytest.mark.timeout(600)
+def test_explore_level_ends_an_iteration_that_sends_no_key():
+    """A doorway next to a declined peaceful monster: explore_level used to spin without a key."""
+    from _golden_replays import core_from_golden
+
+    env = core_from_golden("explore_spin")
+    try:
+        for _ in range(2):
+            res = registry.call("np_explore_level", env, None)
+            assert res.pre_executed and "raised" not in res.feedback
+            assert "Could not find anything to further explore" in res.feedback
+    finally:
+        env.close()
+
+
+def test_a_skill_that_yields_no_key_ends_quietly():
+    """The executor counts yielded steps while the clock stands still; a spinning skill ends."""
+    from netplay.core.agent_base import Step
+    from netplay.core.skill import Skill
+
+    def spin(agent):
+        while True:
+            yield Step.think("still thinking")
+
+    env = _fresh_env()
+    try:
+        res = npt_module.run_netplay_skill(env, Skill(spin, "spin", "", []), {})
+        assert res.pre_executed and res.pre_visible_obs == [] and "no progress" in res.feedback
+    finally:
+        env.close()
+
+
 def test_explore_level_moves_the_game():
     """NetPlay's explore_level must actually drive the engine, not no-op."""
     env = _fresh_env()
