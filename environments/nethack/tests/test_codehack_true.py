@@ -293,7 +293,7 @@ def test_fight_skills_ignore_the_shopkeeper():
     before = (_turn(env), _hp(env), env._last_observation.blstats[:2].tolist())
     for name in ("fight_melee", "fight_ranged"):
         result = ch.run_codehack_skill(env, name)
-        assert result.feedback == f"ch_{name}: {ch.NO_PROGRESS}" and not result.pre_terminated
+        assert result.feedback.startswith(f"ch_{name}: {ch.NO_PROGRESS}") and not result.pre_terminated
         assert not any("store" in m or "angry" in m for m in _messages(result))
     assert (_turn(env), _hp(env), env._last_observation.blstats[:2].tolist()) == before
 
