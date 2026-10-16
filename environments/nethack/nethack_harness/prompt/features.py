@@ -96,20 +96,11 @@ def _is_wallish(c: str) -> bool:
 def visible_features(raw_obs) -> list[Feature]:
     """Every navigable/notable tile on the currently-drawn map, in map coords.
 
-    Reads the RECONCILED grid (`prompt/engine_grid.py`), the same one the
-    `=== MAP ===` block renders, rather than `raw_obs.chars` directly. The two
-    used to be read off different planes, which is how the seed-0 starting room's
-    two converted secret doors managed to be visible on the engine's tty, absent
-    from the map, and absent from this list, all at once. One grid, one answer.
+    Reads `raw_obs.chars`, the same grid the `=== MAP ===` block renders.
     """
     if raw_obs is None:
         return []
-    from nethack_harness.prompt.engine_grid import engine_map_chars
-
-    chars = engine_map_chars(raw_obs)
-    if chars is None:
-        return []
-    return visible_features_from_chars(chars)
+    return visible_features_from_chars(getattr(raw_obs, "chars", None))
 
 
 def visible_features_from_chars(chars) -> list[Feature]:

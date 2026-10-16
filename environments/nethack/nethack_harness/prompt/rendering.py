@@ -434,10 +434,6 @@ def _render_ascii_map(structured, state) -> str:
         chars = getattr(raw, "chars", None) if raw is not None else None
         if chars is not None:
             from nethack_harness.prompt.ascii_map import render_map
-            # `render_map` (not `render_map_from_chars`) so the MAP is the
-            # RECONCILED engine grid: `chars` alone drops terrain the engine's
-            # own reveal overlay emitted once and then stopped repeating. See
-            # prompt/engine_grid.py.
             return render_map(raw)
     return _map_rows_only(structured.map_view)
 

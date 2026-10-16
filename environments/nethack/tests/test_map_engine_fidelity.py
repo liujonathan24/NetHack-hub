@@ -14,20 +14,15 @@ its only early exit. Reproduced in the committed trace
 `outputs/trace_probe/B0_reveal/turns/0_28800_1785554140.ndjson` (turn 1:
 `[(16,5,'+','|'), (11,10,'+','-')]`).
 
-CAUSE, and why it is not the tracker: see `prompt/engine_grid.py`. Short version
--- `reveal_map`'s overlay permanently converts secret doors to real doors in
-`levl[][]` but only paints a cell into the emitted obs while it is still
-*unknown or secret*, so `chars` reverts to the wall the hero remembers, while
-the exported `tty_chars` (a persistent buffer refreshed per dirty line) keeps
-the door.
+CAUSE: `reveal_map`'s overlay used to open secret doors while it rendered and
+paint the door into `chars` on that one frame only, while `tty_chars` (refreshed
+per dirty line) kept it. The engine now opens them in the hero's memory, so both
+planes show the door on every frame.
 
 WHAT THIS FILE PINS
 -------------------
-1. The MAP equals the engine's tty map rows, byte for byte, across the first N
-   turns, under both fog and `reveal_map` -- the diff the defect report asked
-   for, as a standing invariant.
-2. The reconciliation rule itself, in isolation, including that it cannot
-   reopen the menu-bleed defect `test_map_frame_bleed.py` pins.
+The MAP equals the engine's tty map rows, byte for byte, across the first N
+turns, under both fog and `reveal_map`.
 
 NOTE ON MONSTERS. The tty plane is refreshed per *dirty line*, so a monster that
 moved can linger on it for a frame or two while `chars` (a full snapshot) is
@@ -158,8 +153,7 @@ def test_the_two_seed0_doors_stay_on_the_map_and_in_the_features():
 def test_fog_does_not_invent_the_secret_doors():
     """Without `reveal_map` those doors are still SECRET and must stay hidden.
 
-    The reconciliation restores what the engine emitted; it must never
-    manufacture terrain the hero has not been given.
+    The MAP must never show terrain the hero has not been given.
     """
     per_turn = asyncio.run(_turn_diffs(None))
     for turn, (_diffs, rendered) in enumerate(per_turn, start=1):
@@ -168,56 +162,3 @@ def test_fog_does_not_invent_the_secret_doors():
         for ln in rendered.splitlines():
             if ln.startswith("=== VISIBLE FEATURES ==="):
                 assert "(16,5)" not in ln, f"turn {turn}: {ln}"
-
-
-# --------------------------------------------------------------------------- #
-# The reconciliation rule, in isolation                                        #
-# --------------------------------------------------------------------------- #
-
-def test_rule_restores_a_door_the_char_plane_dropped():
-    from nethack_harness.prompt.engine_grid import reconcile_rows
-
-    chars = ["  |$....|", "  |@....|"]
-    tty = ["a message line", "  |$....+", "  |@....|"]
-    assert reconcile_rows(chars, tty) == ["  |$....+", "  |@....|"]
-
-
-def test_rule_only_ever_touches_a_wall_face():
-    """Floor, items, monsters, the hero AND unseen rock are all off limits.
-
-    Every tty cell here says `+`; only the two wall faces may change. In
-    particular the two leading blanks (unseen rock) must stay blank -- restoring
-    there would show the agent terrain its own vision never revealed.
-    """
-    from nethack_harness.prompt.engine_grid import reconcile_rows
-
-    chars = ["  |.d..>|"]
-    tty = ["msg", "+++++++++"]
-    assert reconcile_rows(chars, tty) == ["  +.d..>+"]
-
-
-def test_rule_ignores_rows_carrying_menu_prose():
-    """The menu-bleed defect must not come back through this door.
-
-    `ascii_map.py`: 723 of 6,802 committed MAP blocks (10.6%) carried menu text
-    because the map was read off the tty. A tty row with prose on it is not a
-    dungeon row and none of it is trusted.
-    """
-    from nethack_harness.prompt.engine_grid import reconcile_rows
-
-    chars = ["  |$....|"]
-    tty = ["msg", "  |$..+ Unix post-details."]
-    assert reconcile_rows(chars, tty) == ["  |$....|"]
-
-
-def test_rule_degrades_to_chars_without_a_tty_plane():
-    import types
-
-    import numpy as np
-
-    from nethack_harness.prompt.engine_grid import engine_map_rows
-
-    rows = ["  |$....|", "  |@....|"]
-    raw = types.SimpleNamespace(
-        chars=np.array([[ord(c) for c in r] for r in rows], dtype=np.uint8))
-    assert engine_map_rows(raw) == rows

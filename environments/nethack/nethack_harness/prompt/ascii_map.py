@@ -50,17 +50,6 @@ def render_map_from_chars(chars) -> str:
 
 
 def render_map(raw_obs) -> str:
-    """The `=== MAP ===` body for a live observation.
-
-    Identical to `render_map_from_chars(raw_obs.chars)` except that it reads the
-    grid through `prompt/engine_grid.py`, which reconciles `chars` against the
-    engine's own tty plane so terrain the reveal overlay emitted once and then
-    stopped repeating (converted secret doors) is not silently dropped from the
-    map. See that module for the measurement and the (narrow) rule.
-    """
-    from nethack_harness.prompt.engine_grid import engine_map_rows
-
-    rows = engine_map_rows(raw_obs)
-    if not rows:
-        return ""
-    return "\n".join(r.rstrip() for r in rows)
+    """The `=== MAP ===` body for a live observation: its `chars` plane."""
+    chars = getattr(raw_obs, "chars", None) if raw_obs is not None else None
+    return render_map_from_chars(chars)
