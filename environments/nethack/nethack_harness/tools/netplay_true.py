@@ -558,12 +558,14 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
             return _refusal
 
     step_observations: list = []
+    step_actions: list = []
     _baseline_obs = wrapped.last_raw
     original_step = wrapped.step
 
     def _tracking_step(action):
         result = original_step(action)
         step_observations.append(wrapped.last_raw)
+        step_actions.append(action)
         return result
 
     wrapped.step = _tracking_step
@@ -668,12 +670,12 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     # last message, so a 100-step macro surfaces one line and `You kill the X!`
     # is usually lost -- which is why the corpse-age kill log missed 25% of
     # kills. These observations already exist (`step_observations`); we read
-    # them for the log ONLY. Only newly printed messages are fed: the engine
-    # keeps the last one on screen, which would re-stamp a kill with later turns.
+    # them for the log ONLY. Only newly printed messages are fed: one still on
+    # screen from before the call would re-stamp a kill with later turns.
     try:
         from nethack_harness.prompt.corpse_age import note_kills
         from nethack_harness.prompt.tty_screen import new_messages_per_step
-        for _o, _new in new_messages_per_step(step_observations, _baseline_obs):
+        for _o, _new in new_messages_per_step(step_observations, _baseline_obs, step_actions):
             if not _new:
                 continue
             try:

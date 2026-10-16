@@ -79,3 +79,6 @@ packages = ["nethack_core", "nethack_harness"]
 # hard-fail with "Forced include not found". The engine targets Linux x86-64.
 artifacts = ["nethack_core/libnethack.so", "nethack_core/dat/**/*"]
 force-include = { "nethack.py" = "nethack.py", "nethack_v1.py" = "nethack_v1.py", "wiki/snapshot.json" = "wiki/snapshot.json" }
+
+[tool.pytest.ini_options]
+markers = ["slow: drives a live game or a subprocess"]

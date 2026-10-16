@@ -13,9 +13,8 @@ the fork would put two NetHack implementations in one interpreter, so the
 converter stays behind a pipe (`nle_language_worker.py`). Cost is a JSON
 round-trip per turn -- sub-millisecond against a ~5s LLM call.
 
-Set ``NLE_LANG_PYTHON`` to the interpreter that has the wrapper installed. The
-default points at the build made for this experiment; when the wrapper is
-packaged for 3.12 this whole module collapses into a direct import.
+Set ``NLE_LANG_PYTHON`` to the interpreter that has the wrapper installed; when
+the wrapper is packaged for 3.12 this whole module collapses into a direct import.
 
 Glyph-numbering caveat, load-bearing: the converter maps *stock NLE* glyph ids
 to names. If the fork ever renumbers glyphs the text silently becomes wrong
@@ -31,7 +30,6 @@ import sys
 import threading
 from pathlib import Path
 
-_DEFAULT_PYTHON = "/home/jl0796/.claude/jobs/6389f3db/tmp/nlw-venv/bin/python"
 _WORKER = str(Path(__file__).with_name("nle_language_worker.py"))
 
 # One worker per process, guarded: a rollout renders from a single thread, but
@@ -48,10 +46,10 @@ class LanguageWrapperUnavailable(RuntimeError):
 
 
 def _start() -> subprocess.Popen:
-    python = os.environ.get("NLE_LANG_PYTHON", _DEFAULT_PYTHON)
+    python = os.environ.get("NLE_LANG_PYTHON", "")
     if not os.path.exists(python):
         raise LanguageWrapperUnavailable(
-            f"NLE_LANG_PYTHON={python!r} does not exist. Point it at an interpreter "
+            f"NLE_LANG_PYTHON={python!r} is not an interpreter. Point it at one "
             "with `nle-language-wrapper` installed."
         )
     proc = subprocess.Popen(
