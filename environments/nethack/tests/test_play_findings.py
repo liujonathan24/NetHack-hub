@@ -41,6 +41,23 @@ def test_game_over_shows_the_last_live_status_and_the_cause():
     assert rendering._death_cause(so, state) == "Killed by a crossbow bolt."
 
 
+def _agent(features, hero, time=1):
+    a = NetHackAgent.__new__(NetHackAgent)
+    level = tracking.Level(0, 1)
+    level.features[:] = features
+    a.data = SimpleNamespace(blstats=SimpleNamespace(x=hero[0], y=hero[1], time=time), current_level=level)
+    a.last_bfs_results = LevelPathfinder.from_level(hero[0], hero[1], level, False)
+    return a
+
+
+def test_a_run_or_travel_is_not_a_teleport():
+    a = _agent(SS.S_room, (30, 4), time=6)
+    walked = tracking.TeleportEvent((26, 4), (30, 4))
+    assert a._walked(SimpleNamespace(time=2), walked)
+    assert not a._walked(SimpleNamespace(time=5), tracking.TeleportEvent((10, 4), (30, 4)))
+    assert not a._walked(SimpleNamespace(time=6), walked)
+
+
 def test_live_spell_menu_stays_open_for_its_answer():
     from nethack_core.env import NetHackCoreEnv
     from nethack_harness.tools.skills import registry

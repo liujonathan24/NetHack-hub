@@ -203,7 +203,8 @@ class NetHackAgent(NethackBaseAgent):
                     # No NewGlyphEvent: see the module docstring.
                     interrupt_event_types = (tracking.DungeonLevelChangeEvent, tracking.TeleportEvent, tracking.LowHealthEvent)
                     interrupt_events = [event for event in step.step_data.events if isinstance(event, interrupt_event_types)
-                                        and not (isinstance(event, tracking.DungeonLevelChangeEvent) and not self.blstats.depth)]
+                                        and not (isinstance(event, tracking.DungeonLevelChangeEvent) and not self.blstats.depth)
+                                        and not (isinstance(event, tracking.TeleportEvent) and self._walked(prev_blstats, event))]
                     reason = None
                     if len(interrupt_events) != 0:
                         event = interrupt_events[0]
@@ -225,6 +226,11 @@ class NetHackAgent(NethackBaseAgent):
             self._end_monster_tracking()
 
     # Not upstream.
+
+    def _walked(self, prev_blstats, event) -> bool:
+        """A multi-square move a run or travel could make in the turns that passed (2 moves a turn at most)."""
+        turns = self.blstats.time - prev_blstats.time
+        return 0 < max(abs(event.to[0] - event.start[0]), abs(event.to[1] - event.start[1])) <= 2 * turns
 
     #: A hostile monster within this many squares (moves) interrupts: about a lit
     #: room, and ~6 turns before a speed-12 monster can attack.
