@@ -7,6 +7,7 @@ import gymnasium as gym
 import gradio
 
 import os
+import re
 from enum import Enum
 from functools import wraps
 from dataclasses import dataclass
@@ -258,7 +259,15 @@ class NethackBaseAgent:
         # screen after it is answered, which the scan below would still see.
         unwrapped = self.env.unwrapped
         if hasattr(unwrapped, "waiting_for_space"):
-            return bool(unwrapped.waiting_for_space)
+            if not unwrapped.waiting_for_space:
+                return False
+            # A menu ("(end)", "(1 of 2)") also sets it, but waits for its answer; the death
+            # screens' menus are only read.
+            if self.last_observation["blstats"][10] <= 0:
+                return True
+            rows = ["".join(chr(c) for c in line).rstrip() for line in self.last_observation["tty_chars"]]
+            return any("--More--" in row for row in rows) or not any(
+                re.search(r"\((end|\d+ of \d+)\)$", row) for row in rows)
         # Seems like this is the only way to detect --More-- messages
         # As last_observation["message"] does not contain this
         for line in self.last_observation["tty_chars"]:
