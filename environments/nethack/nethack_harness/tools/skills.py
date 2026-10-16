@@ -423,7 +423,7 @@ def ascend(env: NetHackCoreEnv, obs: StructuredObservation) -> SkillResult:
         "times": {
             "type": "integer",
             "default": 1,
-            "description": "Number of consecutive search actions (1-20).",
+            "description": "Number of consecutive search actions.",
         },
     },
 })
@@ -661,6 +661,12 @@ _UNKNOWN_CHARACTER = {
     "alignment": "unknown",
     "gender": "unknown",
 }
+
+
+def character_code(character: dict) -> Optional[str]:
+    """`wiz-elv-cha-mal` for a bootstrapped character, or None while any part is unknown."""
+    parts = [str(character.get(k, "unknown")).lower() for k in ("role", "race", "alignment", "gender")]
+    return None if "unknown" in parts else "-".join(part[:3] for part in parts)
 
 
 def parse_character_from_welcome(message: str) -> dict[str, str]:

@@ -703,9 +703,12 @@ def explore_level(agent: NetHackAgent, search_prio_limit=None, door_open_count=4
         return prio, prio >= prio_limit
     
     while True:
+        # An iteration that sends no key would repeat forever, so it ends the skill.
+        sent = False
         for step in open_neighbor_doors(agent):
             if step.is_done():
                 break
+            sent = True
             yield step
 
         dis = agent.get_distance_map()
@@ -734,6 +737,7 @@ def explore_level(agent: NetHackAgent, search_prio_limit=None, door_open_count=4
             explore_mask = (visit_mask | search_mask) & (dis != -1)
             if not explore_mask.any():
                 yield Step.failed("Could not find anything to further explore.")
+                return
             nonzero_y, nonzero_x = ((search_prio == search_prio[explore_mask].max()) & explore_mask).nonzero()
 
         # select first closest to_explore tile
@@ -745,14 +749,20 @@ def explore_level(agent: NetHackAgent, search_prio_limit=None, door_open_count=4
             failed = failed or step.has_failed()
             if step.is_done():
                 break
+            sent = True
             yield step
         
         if not failed and search_mask[target_y, target_x] and not visit_mask[target_y, target_x]:
+            sent = True
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
+
+        if not sent:
+            yield Step.failed("Could not find anything to further explore.")
+            return
         
 
 ### Skills for NetHack Commands

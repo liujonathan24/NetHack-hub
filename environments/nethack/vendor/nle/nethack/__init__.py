@@ -6,14 +6,17 @@ run our own NetHack fork behind ``nethack_core``, and ``nle`` is not installed,
 so this module re-exports the equivalents instead of pulling in a second engine.
 
 Everything here is either
-  (a) re-exported straight from ``nethack_core`` (actions, glyph offsets, glyph
-      predicates) -- ``nethack_core.actions`` mirrors NLE's enums verbatim, and
-      the glyph offsets are the same NetHack 3.6 layout; or
+  (a) re-exported straight from ``nethack_core`` (glyph offsets, glyph
+      predicates) -- the glyph offsets are the same NetHack 3.6 layout; or
   (b) derived with the exact arithmetic from the fork's ``include/display.h``
       (zap/explode/swallow/warning offsets and the ``glyph_to_*`` accessors); or
   (c) read from ``nle_shim_data.objects_table``, generated from the fork's
       ``src/objects.c`` by ``vendor/tools/gen_object_table.py`` (the same source
-      NetHack's own ``makedefs`` reads).
+      NetHack's own ``makedefs`` reads), and from ``nle_shim_data.codehack_tables``,
+      generated from the engine library by ``vendor/tools/gen_codehack_tables.py``.
+
+``actions`` is a copy of NLE's ``nle/nethack/actions.py``; every enum it shares
+with ``nethack_core.actions`` has the same members and values.
 
 This file is OURS, not upstream NetPlay code. See vendor/PROVENANCE.md.
 """
@@ -21,10 +24,13 @@ This file is OURS, not upstream NetPlay code. See vendor/PROVENANCE.md.
 from dataclasses import dataclass
 from typing import Optional
 
-from nethack_core import actions  # noqa: F401  (re-exported for NetPlay)
 from nethack_core import glyphs as _g
 
+from nle_shim_data.codehack_tables import MONSTERS, OBJECTS
 from nle_shim_data.objects_table import OBJECT_TABLE
+
+from . import actions  # noqa: F401
+from .actions import ACTIONS  # noqa: F401
 
 # --- core sizes -----------------------------------------------------------
 NUMMONS = _g.NUMMONS
@@ -121,6 +127,7 @@ def glyph_to_warning(glyph):
 
 
 # --- object classes (include/objclass.h) ----------------------------------
+RANDOM_CLASS = 0
 ILLOBJ_CLASS = 1
 WEAPON_CLASS = 2
 ARMOR_CLASS = 3
@@ -140,6 +147,12 @@ CHAIN_CLASS = 16
 VENOM_CLASS = 17
 MAXOCLASSES = 18
 
+# --- status condition masks (include/botl.h) ------------------------------
+(BL_MASK_STONE, BL_MASK_SLIME, BL_MASK_STRNGL, BL_MASK_FOODPOIS, BL_MASK_TERMILL, BL_MASK_BLIND,
+ BL_MASK_DEAF, BL_MASK_STUN, BL_MASK_CONF, BL_MASK_HALLU, BL_MASK_LEV, BL_MASK_FLY,
+ BL_MASK_RIDE) = (1 << i for i in range(13))
+BL_MASK_BITS = 13
+
 
 @dataclass(frozen=True)
 class _ObjClass:
@@ -148,10 +161,18 @@ class _ObjClass:
     NLE returns ``oc_class`` as a one-character ``bytes``/``str`` and NetPlay
     does ``ord(nh.objclass(i).oc_class)``, so we store the class as a 1-char
     string whose ordinal is the class number -- keeping the upstream ``ord(...)``
-    call correct and unmodified.
+    call correct and unmodified. ``oc_skill`` and ``oc_armcat`` are both
+    NetHack's ``oc_subtyp``, and ``a_ac`` is its ``oc_oc1``, as in NLE.
     """
 
     oc_class: str
+    oc_name_idx: int
+    oc_descr_idx: int
+    oc_skill: int
+    oc_armcat: int
+    a_ac: int
+    oc_nutrition: int
+    oc_weight: int
 
 
 @dataclass(frozen=True)
@@ -165,18 +186,45 @@ class _ObjDescr:
         return _ObjDescr(name, descr)
 
 
+_OBJCLASSES = tuple(
+    _ObjClass(chr(cls), i, i, subtyp, subtyp, oc1, nutrition, weight)
+    for i, ((_, _, cls), (subtyp, oc1, nutrition, weight)) in enumerate(zip(OBJECT_TABLE, OBJECTS))
+)
+
+
 def objclass(idx: int) -> _ObjClass:
-    return _ObjClass(chr(OBJECT_TABLE[int(idx)][2]))
+    return _OBJCLASSES[int(idx)]
 
 
-def permonst(mon_idx: int):
-    """Stands in for NLE's ``permonst``. NetPlay only ever reads ``.mname``."""
-    return _PerMonst(_g.monster_name(int(mon_idx)))
+def OBJ_NAME(obj: _ObjClass) -> Optional[str]:
+    return OBJECT_TABLE[obj.oc_name_idx][0]
+
+
+def OBJ_DESCR(obj: _ObjClass) -> Optional[str]:
+    return OBJECT_TABLE[obj.oc_descr_idx][1]
 
 
 @dataclass(frozen=True)
 class _PerMonst:
+    """Stands in for NLE's ``permonst``; ``mlet`` is a 1-char string, as NLE gives it."""
+
     mname: Optional[str]
+    mlet: Optional[str] = None
+    difficulty: Optional[int] = None
+    ac: Optional[int] = None
+    cnutrit: Optional[int] = None
+    cwt: Optional[int] = None
+
+
+_PERMONSTS = tuple(
+    _PerMonst(_g.monster_name(i), chr(mlet), *rest) for i, (mlet, *rest) in enumerate(MONSTERS)
+)
+
+
+def permonst(mon_idx: int) -> _PerMonst:
+    """A monster index out of range gives a record whose fields are all None."""
+    i = int(mon_idx)
+    return _PERMONSTS[i] if 0 <= i < NUMMONS else _PerMonst(None)
 
 
 objdescr = _ObjDescr
