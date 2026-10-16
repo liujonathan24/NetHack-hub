@@ -18,7 +18,7 @@ from nethack_harness.vf_compat import HAVE_VERIFIERS, vf
 
 from nethack_core.env import NetHackCoreEnv
 from nethack_harness.memory.journal import Journal
-from nethack_core.observations import shape as shape_observation
+from nethack_core.observations import parse_status, shape as shape_observation
 from nethack_harness.tools.skills import registry as skill_registry, list_skills
 
 # Load the harness overlay from the file that sits next to *this* module, by
@@ -1763,6 +1763,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["died"] = True
             state["terminated"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+        if state["died"]:
+            _keep_live_status(state)
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.
         spec = state.get("spec")
@@ -2213,6 +2215,15 @@ def _press_key_sends_gt(key) -> bool:
         return False
     except Exception:
         return key.strip() == ">"
+
+
+def _keep_live_status(state) -> None:
+    """NLE zeroes blstats once the game is over: show the hero's last live status, at 0 HP."""
+    so = state.get("structured_obs")
+    live = getattr(state.get("_call_log"), "live_blstats", None)
+    if so is None or live is None or (so.status or {}).get("depth"):
+        return
+    so.status = {**parse_status(live), "hitpoints": 0}
 
 
 def _game_clock(state) -> Optional[int]:

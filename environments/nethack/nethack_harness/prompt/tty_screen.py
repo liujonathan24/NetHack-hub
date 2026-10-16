@@ -129,6 +129,9 @@ def find_window(obs) -> Optional[TtyWindow]:
         col = m.start(1)
         if rows[r][col:].strip() != m.group(1):
             continue
+        # A full-screen text window starts at column 0, one left of its --More--.
+        if col == 1 and any(row[:1].strip() for row in rows[:r]):
+            col = 0
         # A window left over on screen does not hold the cursor.
         if cur is not None and not (0 <= cur[0] <= r and cur[1] >= col):
             continue
@@ -357,14 +360,23 @@ class CallScreenLog:
         self._inv_open = False
         #: Game turn when the call started (None if unknown).
         self.start_turn = None
+        #: blstats of the latest step that still had them (NLE zeroes them at game over).
+        self.live_blstats = None
+        self._keep_live(baseline_obs)
         try:
             if baseline_obs is not None:
                 self.start_turn = int(np.asarray(getattr(baseline_obs, "blstats"))[20])
         except Exception:
             self.start_turn = None
 
+    def _keep_live(self, obs) -> None:
+        bl = getattr(obs, "blstats", None)
+        if bl is not None and np.asarray(bl).any():
+            self.live_blstats = np.array(bl)
+
     def _note(self, obs, action=None) -> None:
         self.steps += 1
+        self._keep_live(obs)
         # An `i` typed as an answer (to a prompt, or in a menu) is not the
         # inventory command.
         at_command = self.window is None and not self._st.waiting

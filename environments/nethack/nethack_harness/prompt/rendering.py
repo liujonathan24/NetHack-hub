@@ -823,8 +823,21 @@ def _tty_lines(state) -> list[str]:
         return []
 
 
+#: The top-ten entry's second line ("... on level 4.  Killed by a crossbow bolt.").
+_TOPTEN_CAUSE_RE = re.compile(r"on level \d+(?: \[max \d+\])?\.\s+([A-Z][^.]*\.)")
+#: The dungeon overview's grave ("Final resting place for / you, killed by a newt.").
+_GRAVE_CAUSE_RE = re.compile(r"^you, (killed by [^.]*\.)$")
+
+
 def _death_cause(structured, state) -> Optional[str]:
     """The game's own words for how the run ended, or None."""
+    m = _TOPTEN_CAUSE_RE.search(" ".join(" ".join(_tty_lines(state)).split()))
+    if m:
+        return m.group(1)
+    for line in reversed(getattr((state or {}).get("_call_log"), "lines", None) or []):
+        m = _GRAVE_CAUSE_RE.match(line.strip())
+        if m:
+            return m.group(1)[0].upper() + m.group(1)[1:]
     msgs = list(getattr(structured, "messages", None) or [])
     for msg in reversed(msgs):
         if any(m in msg for m in _DEATH_SCREEN_MARKERS):

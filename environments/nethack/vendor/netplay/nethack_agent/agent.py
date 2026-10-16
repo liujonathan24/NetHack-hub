@@ -202,7 +202,8 @@ class NetHackAgent(NethackBaseAgent):
                 if step.executed_action():
                     # No NewGlyphEvent: see the module docstring.
                     interrupt_event_types = (tracking.DungeonLevelChangeEvent, tracking.TeleportEvent, tracking.LowHealthEvent)
-                    interrupt_events = [event for event in step.step_data.events if isinstance(event, interrupt_event_types)]
+                    interrupt_events = [event for event in step.step_data.events if isinstance(event, interrupt_event_types)
+                                        and not (isinstance(event, tracking.DungeonLevelChangeEvent) and not self.blstats.depth)]
                     reason = None
                     if len(interrupt_events) != 0:
                         event = interrupt_events[0]
