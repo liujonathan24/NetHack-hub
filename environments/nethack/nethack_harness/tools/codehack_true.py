@@ -24,6 +24,13 @@ from nethack_harness.tools import netplay_true as _npt  # registers np_press_key
 from nethack_harness.tools.skills import SkillResult, registry
 
 import codehack.bot.strategies as strategies  # noqa: E402
+import codehack.bot.strategies.fight_monster as _fight  # noqa: E402
+import codehack.bot.strategies.zap_monster as _zap  # noqa: E402
+from codehack.bot.inventory import ArmorClass  # noqa: E402
+from codehack.bot.strategies.goto import get_other_features  # noqa: E402
+from codehack.bot.strategies.open_doors import find_nearest_door  # noqa: E402
+from codehack.bot.strategies.wear import _get_best_armor  # noqa: E402
+from codehack.utils.strategies import corridor_detection, room_detection  # noqa: E402
 from codehack.bot import Bot  # noqa: E402
 from codehack.bot.exceptions import BotFinished, BotPanic, EnemyAppeared, LostHP  # noqa: E402
 from codehack.bot.level import LEVEL_CHANGERS  # noqa: E402
@@ -131,6 +138,57 @@ _GETPOS_OPEN = {ord(";"), ord("_")}
 _GETPOS_PICK = {ord("."), ord(","), ord(";"), ord(":"), _ESC}
 _CALL_ITEM = re.compile(r"Call (a|an|the) .*:")
 _NO_CLASSES = np.zeros(55, np.uint8)
+
+
+_hostile_targets = _fight.hostile_targets
+
+
+def _counted_targets(bot):
+    targets = _hostile_targets(bot)
+    bot.hostile_seen = len(targets)
+    return targets
+
+
+_fight.hostile_targets = _zap.hostile_targets = _counted_targets
+
+_TARGET_SKILLS = {"fight_melee", "fight_ranged", "approach_monster", "zap_monster", "wait_for_monster"}
+_GOTO_SKILL = re.compile(r"goto_(room|corridor)(?:_(east|west|north|south))?$")
+_SIDE = {"east": lambda p, q: p[1] > q[1], "west": lambda p, q: p[1] < q[1],
+         "north": lambda p, q: p[0] < q[0], "south": lambda p, q: p[0] > q[0]}
+
+
+def _why_not(bot, name: str) -> str:
+    """Why a skill that stopped or did nothing had nothing to do, as CodeHack sees it, or ''."""
+    if name in _TARGET_SKILLS:
+        seen = getattr(bot, "hostile_seen", None)
+        if seen == 0:
+            return "No hostile monster in sight that you can reach."
+        if seen and name == "wait_for_monster":
+            return "A hostile monster is already next to you."
+        if seen and name == "approach_monster":
+            return "The closest hostile monster is already in wand range."
+        return ""
+    goto = _GOTO_SKILL.match(name)
+    if goto:
+        kind, side = goto.groups()
+        here = bot.entity.position
+        found = get_other_features(bot, room_detection if kind == "room" else corridor_detection)
+        dist = bot.pathfinder.distances(here)
+        if not any(p is not None and dist.get(tuple(p), np.inf) < np.inf and (side is None or _SIDE[side](p, here))
+                   for p in found):
+            return f"No other {kind}{' to the ' + side if side else ''} that you can reach."
+        return ""
+    if name in ("open_doors", "open_doors_kick", "open_doors_key"):
+        if name == "open_doors_key" and not any(t.is_key for t in bot.inventory["tools"]):
+            return "No key in your inventory."
+        return "" if find_nearest_door(bot) else "No closed door that you can reach."
+    if name.startswith("pickup_"):
+        return f"No {name[7:]} where you stand or at the nearest item."
+    if name.startswith("wear_"):
+        cls = getattr(ArmorClass, name[5:].upper(), None)
+        if cls is not None and _get_best_armor(bot, cls) is None:
+            return f"No {name[5:]} in your inventory that you can put on."
+    return ""
 
 
 class _Stop(BotPanic):
@@ -314,7 +372,7 @@ def run_codehack_skill(core, name: str) -> SkillResult:
     waiting = _waiting(core._last_observation)
     if name in _ANSWERS:
         if not waiting:
-            return SkillResult(actions=[], feedback=f"{tool}: {NO_PROGRESS}")
+            return SkillResult(actions=[], feedback=f"{tool}: {NO_PROGRESS} The game is not waiting for an answer.")
         game = CodeHackGame(core, "@")
         try:
             game.step(ACTIONS.index(_ANSWERS[name]))
@@ -327,9 +385,14 @@ def run_codehack_skill(core, name: str) -> SkillResult:
         return SkillResult(actions=[], feedback=f"{tool}: could not run here.")
     entry = _entry(core)
     game = entry[1]
+    why = ""
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            returned = getattr(strategies, name)(_ready_bot(entry))
+            bot = _ready_bot(entry)
+            bot.hostile_seen = None
+            returned = getattr(strategies, name)(bot)
+            if returned is False or not game.frames:
+                why = _why_not(bot, name)
         reason = "stopped before finishing." if returned is False else "done."
     except EnemyAppeared:
         reason = "stopped early, a monster came into reach."
@@ -343,10 +406,12 @@ def run_codehack_skill(core, name: str) -> SkillResult:
         return _result(core, game, tool, "could not run here.")
     if not game.frames:
         reason = NO_PROGRESS
-    return _result(core, game, tool, reason, " ".join(dict.fromkeys(game.notes)))
+    return _result(core, game, tool, reason, " ".join(dict.fromkeys(game.notes + [why] if why else game.notes)))
 
 
 def _result(core, game: CodeHackGame, tool: str, reason: str, notes: str = "") -> SkillResult:
+    if game.getpos and not game.done:
+        game._send(_ESC)
     obs = core._last_observation
     if game.frames:
         _npt.reset_agent_cache()

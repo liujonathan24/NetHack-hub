@@ -309,3 +309,28 @@ def test_open_question_is_reported(monkeypatch):
     assert ch.run_codehack_skill(env, "ask").feedback == "ch_ask: stopped at a question."
     assert ch._flags(env._last_observation)[0]
     assert ch.run_codehack_skill(env, "no").feedback == "ch_no: done." and not ch._waiting(env._last_observation)
+
+
+def test_a_position_prompt_is_never_left_open(monkeypatch):
+    env = core_env()
+
+    def glance(bot):
+        bot.step(A.Command.GLANCE)
+        return True
+
+    monkeypatch.setattr(ch.strategies, "glance", glance, raising=False)
+    ch.run_codehack_skill(env, "glance")
+    assert not ch._waiting(env._last_observation)
+    assert ch.run_codehack_skill(env, "cancel").feedback.endswith("The game is not waiting for an answer.")
+
+
+@pytest.mark.parametrize("name,seen,why", [
+    ("fight_melee", 0, "No hostile monster in sight that you can reach."),
+    ("wait_for_monster", 1, "A hostile monster is already next to you."),
+    ("approach_monster", 1, "The closest hostile monster is already in wand range."),
+    ("fight_ranged", 1, ""),
+])
+def test_why_a_fight_skill_had_nothing_to_do(name, seen, why):
+    from types import SimpleNamespace
+
+    assert ch._why_not(SimpleNamespace(hostile_seen=seen), name) == why
