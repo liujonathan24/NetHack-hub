@@ -58,6 +58,20 @@ def test_a_run_or_travel_is_not_a_teleport():
     assert not a._walked(SimpleNamespace(time=6), walked)
 
 
+def test_move_to_names_the_closed_door_on_the_pathfinders_own_route():
+    features = np.full((21, 79), SS.S_stone)
+    features[5, 5:20] = SS.S_room
+    features[5, 8] = SS.S_vodoor
+    features[5, 12] = SS.S_vcdoor
+    a = _agent(features, (5, 5))
+    assert a.last_bfs_results.get_path_to(18, 5) is None
+    assert skills._why_no_path(a, 18, 5) == (
+        " [why: the route passes a CLOSED door at (12,5) -- move next to it and open or kick it first]")
+    features[5, 12] = SS.S_stone
+    assert "no explored route connects you to (18,5). The nearest square you can reach is (11,5)" in (
+        skills._why_no_path(_agent(features, (5, 5)), 18, 5))
+
+
 def test_live_spell_menu_stays_open_for_its_answer():
     from nethack_core.env import NetHackCoreEnv
     from nethack_harness.tools.skills import registry
@@ -71,4 +85,3 @@ def test_live_spell_menu_stays_open_for_its_answer():
     screen = "\n".join(ts.tty_rows(res.final_obs))
     assert "Choose which spell to cast" in screen and "a - force bolt" in screen
     env.close()
-

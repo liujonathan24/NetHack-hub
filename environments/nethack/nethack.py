@@ -1807,7 +1807,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # reachable tile when no explored route exists at all.
         if (skill_name in ("np_move_to", "np_go_to", "move_to")
                 and result.feedback
-                and ("No valid path" in result.feedback or "No path found" in result.feedback)):
+                and ("No valid path" in result.feedback or "No path found" in result.feedback)
+                and "[why:" not in result.feedback):
             try:
                 from nethack_harness.navigation.path_explain import explain_path_failure
                 extra = explain_path_failure(
