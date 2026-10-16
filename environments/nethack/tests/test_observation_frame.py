@@ -147,7 +147,7 @@ def test_status_position_indexes_the_player_glyph():
 
 
 def test_rendered_map_row_index_equals_map_y():
-    """Row N of the `=== MAP ===` block must be map row N.
+    """Row N of the `=== MAP ===` block must be map row N, and start with N.
 
     BALROG strips the tty message row for exactly this reason
     (`nle/base.py:184`); we did not, so a model counting rows landed one off.
@@ -165,9 +165,10 @@ def test_rendered_map_row_index_equals_map_y():
         px = int(structured.status["x"])
         py = int(structured.status["y"])
         assert len(rows) > py, "map block is shorter than the player's row"
-        assert len(rows[py]) > px and rows[py][px] == "@", (
+        row = rows[py]
+        assert row[:3] == f"{py:>2} " and row[3 + px:4 + px] == "@", (
             f"map row {py} col {px} is "
-            f"{rows[py][px:px+1]!r}, expected '@'\nrow={rows[py]!r}"
+            f"{row[3 + px:4 + px]!r}, expected '@'\nrow={row!r}"
         )
 
 
@@ -417,3 +418,9 @@ def test_hint_does_not_repeat_verbatim_forever(seed):
         assert not (hints[i] == hints[i - 1] == hints[i - 2]), (
             f"identical hint emitted 3 turns running: {hints[i]!r}"
         )
+
+
+def test_compact_map_keeps_each_rows_own_number():
+    from nethack_harness.prompt.rendering import _number_rows
+
+    assert _number_rows("\n  |@.|\n\n  ---", drop_blank=True) == " 1   |@.|\n 3   ---"

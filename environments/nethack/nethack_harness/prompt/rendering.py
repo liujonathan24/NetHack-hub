@@ -434,12 +434,21 @@ def _render_ascii_map(structured, state) -> str:
         chars = getattr(raw, "chars", None) if raw is not None else None
         if chars is not None:
             from nethack_harness.prompt.ascii_map import render_map
-            # `render_map` (not `render_map_from_chars`) so the MAP is the
-            # RECONCILED engine grid: `chars` alone drops terrain the engine's
-            # own reveal overlay emitted once and then stopped repeating. See
-            # prompt/engine_grid.py.
             return render_map(raw)
     return _map_rows_only(structured.map_view)
+
+
+def _number_rows(map_view: str, drop_blank: bool = False) -> str:
+    """Start each map row with its row number y, two wide, then a space: the
+    model reads y off the row, and x is still the column after the number.
+    `drop_blank` leaves out the rows with nothing on them; the others keep
+    their own numbers."""
+    out = []
+    for y, row in enumerate(map_view.split("\n")):
+        row = row.rstrip()
+        if row or not drop_blank:
+            out.append(f"{y:>2} {row}".rstrip())
+    return "\n".join(out)
 
 
 def _strip_blank_rows(map_view: str) -> str:
@@ -823,8 +832,21 @@ def _tty_lines(state) -> list[str]:
         return []
 
 
+#: The top-ten entry's second line ("... on level 4.  Killed by a crossbow bolt.").
+_TOPTEN_CAUSE_RE = re.compile(r"on level \d+(?: \[max \d+\])?\.\s+([A-Z][^.]*\.)")
+#: The dungeon overview's grave ("Final resting place for / you, killed by a newt.").
+_GRAVE_CAUSE_RE = re.compile(r"^you, (killed by [^.]*\.)$")
+
+
 def _death_cause(structured, state) -> Optional[str]:
     """The game's own words for how the run ended, or None."""
+    m = _TOPTEN_CAUSE_RE.search(" ".join(" ".join(_tty_lines(state)).split()))
+    if m:
+        return m.group(1)
+    for line in reversed(getattr((state or {}).get("_call_log"), "lines", None) or []):
+        m = _GRAVE_CAUSE_RE.match(line.strip())
+        if m:
+            return m.group(1)[0].upper() + m.group(1)[1:]
     msgs = list(getattr(structured, "messages", None) or [])
     for msg in reversed(msgs):
         if any(m in msg for m in _DEATH_SCREEN_MARKERS):
@@ -1413,8 +1435,8 @@ def format_observation_as_chat(
                     map_view = _paint_frontiers_on_map(map_view, chars, frontiers)
             except Exception:
                 pass
+        map_view = _number_rows(map_view, drop_blank=compact)
         if compact:
-            map_view = _strip_blank_rows(map_view)
             map_view = _glyph_run_encode(map_view)
         lines.append(map_view)
         lines.append("")

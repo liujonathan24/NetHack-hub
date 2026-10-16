@@ -18,7 +18,7 @@ from nethack_harness.vf_compat import HAVE_VERIFIERS, vf
 
 from nethack_core.env import NetHackCoreEnv
 from nethack_harness.memory.journal import Journal
-from nethack_core.observations import shape as shape_observation
+from nethack_core.observations import parse_status, shape as shape_observation
 from nethack_harness.tools.skills import registry as skill_registry, list_skills
 
 # Load the harness overlay from the file that sits next to *this* module, by
@@ -678,8 +678,10 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # setup_character pins the role for standard tiers (e.g. full_nle);
         # None keeps the engine default. Curriculum envs own their character.
         obs, meta = env.reset(character=self._setup_character)
-        from nethack_harness.tools.skills import bootstrap_character
+        from nethack_harness.tools.skills import bootstrap_character, character_code
         character = bootstrap_character(env)
+        # The game's character in "rol-rac-ali-gen" form for CodeHack, so it never has to read ^X.
+        env.setup_character = self._setup_character or character_code(character)
 
         state["env"] = env
         state["character"] = character
@@ -1011,9 +1013,9 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         )
         raw_surface = state.get("_auto_dismiss") is False
         _any_log = state.get("_call_log")
-        # `np_*` skill feedback carries no game message, so those calls get it too.
+        # `np_*` and `ch_*` skill feedback carries no game message, so those calls get it too.
         call_log = _any_log if (
-            raw_surface or str(state.get("_last_skill_name") or "").startswith("np_")
+            raw_surface or str(state.get("_last_skill_name") or "").startswith(("np_", "ch_"))
         ) else None
         getpos_pending = bool(
             _any_log is not None and _any_log.getpos_step
@@ -1699,10 +1701,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["_stuck_n"] = int(state.get("_stuck_n", 0)) + 1 if _frozen else 0
             state["_sig_prev"] = state.get("_sig_now")
             if int(state.get("_stuck_n", 0)) >= 2:
-                _n = int(state["_stuck_n"]) + 1
                 halt_reason = ((halt_reason or "") +
-                    f" [STUCK: this exact call has run {_n} times and the game "
-                    f"clock has not advanced once. Do something DIFFERENT.]").strip()
+                    " [STUCK: the game clock has not advanced. Do something different.]").strip()
         except Exception:
             pass
         state["last_reward"] = total_reward
@@ -1763,6 +1763,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             state["died"] = True
             state["terminated"] = True
             state.setdefault("death_dlvl", state.get("max_dlvl_reached", 1))
+        if state["died"]:
+            _keep_live_status(state)
         # Milestone-driven success: if the tier's success_milestone fires, we
         # treat the rollout as won and let success_reward pay out.
         spec = state.get("spec")
@@ -1805,7 +1807,8 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # reachable tile when no explored route exists at all.
         if (skill_name in ("np_move_to", "np_go_to", "move_to")
                 and result.feedback
-                and ("No valid path" in result.feedback or "No path found" in result.feedback)):
+                and ("No valid path" in result.feedback or "No path found" in result.feedback)
+                and "[why:" not in result.feedback):
             try:
                 from nethack_harness.navigation.path_explain import explain_path_failure
                 extra = explain_path_failure(
@@ -2213,6 +2216,15 @@ def _press_key_sends_gt(key) -> bool:
         return False
     except Exception:
         return key.strip() == ">"
+
+
+def _keep_live_status(state) -> None:
+    """NLE zeroes blstats once the game is over: show the hero's last live status, at 0 HP."""
+    so = state.get("structured_obs")
+    live = getattr(state.get("_call_log"), "live_blstats", None)
+    if so is None or live is None or (so.status or {}).get("depth"):
+        return
+    so.status = {**parse_status(live), "hitpoints": 0}
 
 
 def _game_clock(state) -> Optional[int]:

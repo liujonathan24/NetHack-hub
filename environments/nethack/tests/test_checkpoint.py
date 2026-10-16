@@ -98,6 +98,8 @@ def test_checkpoint_resume_deep_floor(tmp_path):
     e.reset(seeds=(21, 21))
     e.modify(goto_depth=5)
     obs, _, _ = e.step(ord("l"))
+    while obs.misc[2]:  # the engine refuses a checkpoint while a --More-- is open
+        obs, _, _ = e.step(13)
     assert bl(obs, "depth") == 5
     ck = tmp_path / "deep.ckpt"
     e.checkpoint(ck)

@@ -1,20 +1,14 @@
 """
-Tests for the reveal_map knob as a *render-time observation overlay* rather
-than a permanent mutation of the hero's remembered map.
+Tests for the reveal_map knob: the hero remembers the whole level, as after
+magic mapping.
 
-The fork engine fills any still-unknown map cell from the actual level terrain
-(``back_to_glyph``) directly into the emitted observation in
-``NetHackRL::fill_obs`` -- never touching ``gbuf`` / ``levl[][].seenv`` / calling
-``newsym``. That makes the knobs:
-
-  * reversible: turning the knob back to its default instantly re-hides the
-    previously-shown terrain on the next emitted obs (the old behavior could
-    never un-reveal, because the terrain had been written into hero memory);
-  * side-effect-free: a reveal-on/reveal-off cycle leaves game state -- and the
-    remembered map -- byte-identical to a run that never touched the knob.
+With the knob on, the engine maps every square the hero cannot see into his
+memory each time his view is recomputed (``reveal_map_memory`` in vision.c),
+secret doors opened; the rl window port overlays the live monsters. What he has
+remembered stays when the knob is turned off, as it would after magic mapping.
 
 ``step(18)`` is ctrl-R (redraw): it re-emits the observation without advancing
-game time, so it applies the current knob value to the existing frame.
+game time.
 """
 
 from __future__ import annotations
@@ -26,26 +20,16 @@ def _visible(env) -> int:
     return int((env.engine.chars != ord(" ")).sum())
 
 
-def test_reveal_map_is_reversible():
-    """reveal_map on expands the obs; turning it back off restores the base."""
+def test_reveal_map_shows_the_level_at_once():
     env = EngineEnv()
     env.seed(42, 42)
     env.reset()
     base = _visible(env)
-
     env.set_tune(reveal_map=1.0)
-    env.step(18)  # ctrl-R redraw: re-emit obs with the overlay applied
+    env.step(18)  # ctrl-R redraw: the overlay fills what the hero has not seen
     on = _visible(env)
-
-    env.set_tune(reveal_map=0.0)
-    env.step(18)  # re-emit obs with overlay disabled
-    off = _visible(env)
     env.close()
-
     assert on > base + 50, f"reveal_map=1 should reveal much more (base={base}, on={on})"
-    # The whole point of the overlay: turning it back off un-reveals instantly.
-    assert off < on - 50, f"reveal_map=0 failed to un-reveal (on={on}, off={off})"
-    assert off == base, f"off should return to the base obs (base={base}, off={off})"
 
 
 def _wall_count(env) -> int:
@@ -80,47 +64,26 @@ def test_reveal_map_reveals_walls():
     )
 
 
-def test_reveal_does_not_leak_into_game_state():
-    """A reveal-on/reveal-off cycle must not pollute the remembered map.
-
-    Control run: never set reveal_map, take a movement step.
-    Test run: reveal_map=1, step, reveal_map=0, step -- the same movement.
-    The remembered terrain (visible-cell count) must match the control exactly;
-    if reveal had written into gbuf, the test run would show extra cells.
-    """
-    move = ord("l")  # move east; triggers a vision recompute
-
+def test_the_revealed_level_stays_in_memory():
+    """Like magic mapping: once his view is recomputed under reveal_map, the hero
+    remembers the level after the knob is turned off."""
+    move = ord("l")
     control = EngineEnv()
     control.seed(42, 42)
     control.reset()
     control.step(move)
+    control.step(move)
     control_count = _visible(control)
     control.close()
 
-    leaky = EngineEnv()
-    leaky.seed(42, 42)
-    leaky.reset()
-    leaky.set_tune(reveal_map=1.0)
-    leaky.step(move)
-    leaky.set_tune(reveal_map=0.0)
-    leaky.step(move)
-    leaky_count = _visible(leaky)
-    leaky.close()
+    revealed = EngineEnv()
+    revealed.seed(42, 42)
+    revealed.reset()
+    revealed.set_tune(reveal_map=1.0)
+    revealed.step(move)
+    revealed.set_tune(reveal_map=0.0)
+    revealed.step(move)
+    revealed_count = _visible(revealed)
+    revealed.close()
 
-    # The control took one move; the leaky run took the same first move plus a
-    # second identical move. To compare apples to apples, replay the control's
-    # second move too.
-    control2 = EngineEnv()
-    control2.seed(42, 42)
-    control2.reset()
-    control2.step(move)
-    control2.step(move)
-    control2_count = _visible(control2)
-    control2.close()
-
-    assert leaky_count == control2_count, (
-        "reveal-on/off polluted the remembered map: "
-        f"leaky={leaky_count} vs control={control2_count}"
-    )
-    # Sanity: the control actually explored something.
-    assert control_count > 0
+    assert revealed_count > control_count + 50, (revealed_count, control_count)

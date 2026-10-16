@@ -1440,6 +1440,18 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
             params = schema.get("parameters", {}) or {}
             out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
         return out
+    elif skill_set == "codehack":
+        # CodeHack's skills (tools/codehack_true.py) plus NetPlay's key tool.
+        from nethack_harness.tools import codehack_true as _ch  # registers ch_* and np_*
+        keep = set(_ch.CODEHACK_TOOL_NAMES) | {"np_press_key"}
+        missing = keep - set(skill_registry.all_schemas())
+        assert not missing, f"codehack tools not registered: {missing}"
+        out = []
+        for name, schema in skill_registry.all_schemas().items():
+            if name not in keep: continue
+            params = schema.get("parameters", {}) or {}
+            out.append(_make_skill_adapter(name, schema.get("description", ""), params, describe_args))
+        return out
     elif skill_set == "balrog80":
         # BALROG's published NLE action surface: the 80 text commands in their
         # `balrog/environments/nle/__init__.py` ACTIONS dict, and nothing else.
@@ -1476,7 +1488,7 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         # `request_map` (1 tool). Expanding presets by recursion keeps this
         # correct as the presets themselves change.
         tokens = [s.strip() for s in skill_set.split(",") if s.strip()]
-        presets = {"netplay", "netplay_true", "np_core", "dir8", "move", "full", "balrog80"}
+        presets = {"netplay", "netplay_true", "np_core", "codehack", "dir8", "move", "full", "balrog80"}
         out = []
         seen: set = set()
         for tok in tokens:
@@ -1510,6 +1522,9 @@ def _build_skill_adapter_callables(skill_set: str = "full", describe_args: bool 
         # tools.balrog_actions registers them globally, and they are an
         # alternative ACTION SURFACE, not extra tools.
         if name.startswith(_BALROG_PREFIX):
+            continue
+        # The same for CodeHack's skills (tools/codehack_true.py).
+        if name.startswith("ch_"):
             continue
         # `rollback` is an opt-in CAPABILITY (engine snapshot/restore), not a
         # default tool. It is registered globally the moment tools.skills is
@@ -1573,7 +1588,7 @@ _ARG_HINTS = {
     "item_letter": "inventory letter (a-z, A-Z), e.g. 'f'",
     "direction": "n/e/s/w or ne/se/sw/nw (or 'self' for np_zap)",
     "count": "number of turns",
-    "times": "number of searches (1-20)",
+    "times": "number of searches",
     "x1": "left column 0-78", "y1": "top row 0-20",
     "x2": "right column 0-78", "y2": "bottom row 0-20",
     "n": "number of turns to undo (1-15)",

@@ -163,6 +163,30 @@ def _peaceful_name_at(agent: NetHackAgent, px, py) -> str:
     return f"peaceful {name}" if name else "peaceful monster"
 
 
+def _why_no_path(agent: NetHackAgent, x: int, y: int) -> str:
+    """Why the pathfinder found no route to (x, y): a closed door or a trap on the one route it
+    has, else no explored route at all."""
+    level = agent.current_level
+    closed = np.isin(level.features, G.CLOSED_DOORS)
+    traps = np.isin(level.features, [t for t in G.TRAPS if t not in (G.SS.S_hole, G.SS.S_trap_door)])
+    bfs = nethack_bfs(agent.blstats.x, agent.blstats.y, level.get_walkable_mask() | closed | traps,
+                      level.get_diagonal_walkable_mask() | traps, agent.can_squeeze)
+    path = LevelPathfinder(level, bfs, bfs).get_path_to(x, y)
+    if path is not None:
+        for what, mask, tip in (("a CLOSED door", closed, "move next to it and open or kick it first"),
+                                ("a trap", traps, "step onto it with a move key if you accept the risk")):
+            on_route = [(px, py) for px, py in path.positions[1:] if mask[py, px]]
+            if on_route:
+                return f" [why: the route passes {what} at ({on_route[0][0]},{on_route[0][1]}) -- {tip}]"
+    ys, xs = np.nonzero(agent.last_bfs_results.bfs_results.reachable)
+    if not len(xs):
+        return ""
+    gaps = np.maximum(abs(xs - x), abs(ys - y))
+    i = int(np.argmin(gaps))
+    return (f" [why: no explored route connects you to ({x},{y}). The nearest square you can reach is "
+            f"({xs[i]},{ys[i]}), {gaps[i]} away -- the way between is unexplored or hidden; search near dead ends]")
+
+
 @skill(
     name="move_to",
     description="Move to the specified position using pathfinding.",
@@ -201,7 +225,7 @@ def move_to(agent: NetHackAgent, x: int, y: int, avoid_monsters=False):
         else:
             path = agent.get_path_to(x, y, avoid_monsters=avoid_monsters)
         if path is None:
-            yield Step.failed(f"No valid path found to reach position {x, y}.")
+            yield Step.failed(f"No valid path found to reach position {x, y}.{_why_no_path(agent, x, y)}")
             return
 
         next_x, next_y = path[1] # Skip first position since its our own position
@@ -703,9 +727,12 @@ def explore_level(agent: NetHackAgent, search_prio_limit=None, door_open_count=4
         return prio, prio >= prio_limit
     
     while True:
+        # An iteration that sends no key would repeat forever, so it ends the skill.
+        sent = False
         for step in open_neighbor_doors(agent):
             if step.is_done():
                 break
+            sent = True
             yield step
 
         dis = agent.get_distance_map()
@@ -734,6 +761,7 @@ def explore_level(agent: NetHackAgent, search_prio_limit=None, door_open_count=4
             explore_mask = (visit_mask | search_mask) & (dis != -1)
             if not explore_mask.any():
                 yield Step.failed("Could not find anything to further explore.")
+                return
             nonzero_y, nonzero_x = ((search_prio == search_prio[explore_mask].max()) & explore_mask).nonzero()
 
         # select first closest to_explore tile
@@ -745,14 +773,20 @@ def explore_level(agent: NetHackAgent, search_prio_limit=None, door_open_count=4
             failed = failed or step.has_failed()
             if step.is_done():
                 break
+            sent = True
             yield step
         
         if not failed and search_mask[target_y, target_x] and not visit_mask[target_y, target_x]:
+            sent = True
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
             yield agent.step(actions.Command.SEARCH)
+
+        if not sent:
+            yield Step.failed("Could not find anything to further explore.")
+            return
         
 
 ### Skills for NetHack Commands

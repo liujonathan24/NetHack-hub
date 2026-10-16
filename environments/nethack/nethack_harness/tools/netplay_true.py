@@ -699,7 +699,7 @@ def run_netplay_skill(core_env, skill: Skill, kwargs: Dict[str, Any]) -> SkillRe
     # outside the agent's level-change interrupt, so compare start and end here.
     _where_end = _where(wrapped.last_raw)
     try:
-        if (_where_start is not None and _where_end is not None
+        if (_where_start is not None and _where_end is not None and _where_end[2] > 0
                 and _where_start[2:] != _where_end[2:]):
             from netplay.nethack_agent.agent import describe_level_change
             _note = describe_level_change(_where_start[2], _where_start[3],
