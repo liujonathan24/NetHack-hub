@@ -59,8 +59,10 @@ def _tty_map_rows(raw_obs) -> list[str]:
 
 def _map_block(rendered: str) -> list[str]:
     body = rendered.split("=== MAP ===\n", 1)[1]
-    body = body.split("\n=== ", 1)[0]
-    rows = [r.rstrip() for r in body.split("\n")]
+    body = body.split("\n=== ", 1)[0].rstrip("\n")
+    rows = body.split("\n")
+    assert [r[:2] for r in rows] == [f"{y:>2}" for y in range(len(rows))]
+    rows = [r[3:].rstrip() for r in rows]
     while rows and not rows[-1]:
         rows.pop()
     return rows

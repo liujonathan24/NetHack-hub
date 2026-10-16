@@ -95,7 +95,8 @@ def test_map_frame_preserved_hero_at_pos():
     px = int(structured.status["x"])
     py = int(structured.status["y"])
     assert len(rows) > py, "map block is shorter than the player's row"
-    assert len(rows[py]) > px and rows[py][px] == "@", (
-        f"map row {py} col {px} is {rows[py][px:px + 1]!r}, expected '@'\n"
-        f"row={rows[py]!r}"
+    row = rows[py]
+    assert row[:3] == f"{py:>2} " and row[3 + px:4 + px] == "@", (
+        f"map row {py} col {px} is {row[3 + px:4 + px]!r}, expected '@'\n"
+        f"row={row!r}"
     )

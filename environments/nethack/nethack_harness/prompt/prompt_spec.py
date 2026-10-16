@@ -35,8 +35,8 @@ from nethack_harness.prompt.rendering import (
     _format_obs_glyphbox_native,
     _format_obs_summarize_reset,
     _glyph_run_encode,
+    _number_rows,
     _render_ascii_map,
-    _strip_blank_rows,
 )
 from nethack_harness.helpers import (
     _refinement_directive,
@@ -199,9 +199,9 @@ def _balrog_plus_map_template(fmt):
                 chars=raw.chars,
             )
             return f"{desc}\n=== MAP (JSON) ===\n{body}\n"
-        map_view = _render_ascii_map(structured, state)
+        map_view = _number_rows(_render_ascii_map(structured, state), drop_blank=compact)
         if compact:
-            map_view = _glyph_run_encode(_strip_blank_rows(map_view))
+            map_view = _glyph_run_encode(map_view)
         return f"{desc}\n=== MAP ===\n{map_view}\n"
 
     return _render
@@ -404,9 +404,9 @@ def _balrog_delayed_map_template():
         desc = _format_obs_balrog(structured, journal, state, journal_max_chars)
         if not show_map:
             return f"{desc}\n{_DELAYED_MAP_PLACEHOLDER}\n"
-        map_view = _render_ascii_map(structured, state)
+        map_view = _number_rows(_render_ascii_map(structured, state), drop_blank=compact)
         if compact:
-            map_view = _glyph_run_encode(_strip_blank_rows(map_view))
+            map_view = _glyph_run_encode(map_view)
         return f"{desc}\n=== MAP ===\n{map_view}\n"
 
     return _render

@@ -438,6 +438,19 @@ def _render_ascii_map(structured, state) -> str:
     return _map_rows_only(structured.map_view)
 
 
+def _number_rows(map_view: str, drop_blank: bool = False) -> str:
+    """Start each map row with its row number y, two wide, then a space: the
+    model reads y off the row, and x is still the column after the number.
+    `drop_blank` leaves out the rows with nothing on them; the others keep
+    their own numbers."""
+    out = []
+    for y, row in enumerate(map_view.split("\n")):
+        row = row.rstrip()
+        if row or not drop_blank:
+            out.append(f"{y:>2} {row}".rstrip())
+    return "\n".join(out)
+
+
 def _strip_blank_rows(map_view: str) -> str:
     """Drop fully-blank rows; trim trailing whitespace per row."""
     out = []
@@ -1422,8 +1435,8 @@ def format_observation_as_chat(
                     map_view = _paint_frontiers_on_map(map_view, chars, frontiers)
             except Exception:
                 pass
+        map_view = _number_rows(map_view, drop_blank=compact)
         if compact:
-            map_view = _strip_blank_rows(map_view)
             map_view = _glyph_run_encode(map_view)
         lines.append(map_view)
         lines.append("")
