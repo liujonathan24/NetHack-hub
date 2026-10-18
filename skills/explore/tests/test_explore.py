@@ -144,7 +144,11 @@ class SelectTest(unittest.TestCase):
             nxt = result["decision"]["next"]
             self.assertEqual(nxt["checkpoint"], "c0")
             self.assertEqual(nxt["attempt"], 1)
-            self.assertEqual(nxt["session_ref"], {"session_file": str(path), "entry_id": "r0"})
+            # The player forks a one-time handoff COPY of the conversation.
+            handoff = Path(nxt["session_ref"]["session_file"])
+            self.assertEqual(nxt["session_ref"]["entry_id"], "r0")
+            self.assertEqual((handoff.parent.name, handoff.name), ("handoff", f"attempt-{nxt['attempt']}.jsonl"))
+            self.assertEqual(handoff.read_bytes(), path.read_bytes())
             self.assertEqual(nxt["mcp_servers"], [])
             selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
             self.assertEqual(selection["directive"], "Find the downstairs before you fight.")

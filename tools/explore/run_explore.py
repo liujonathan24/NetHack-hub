@@ -218,21 +218,119 @@ def control_opener_machine(text: str, task_prompt: str) -> str:
     return text[: match.start(1)] + json.dumps(spec, indent=2) + text[match.end(1) :]
 
 
-def materialize_control_skill(dest: pathlib.Path) -> None:
-    """The skill files the control harness wrote (`PrimeAgentHarness.setup`):
-    SKILL.md with the baseline coordinate sentence (`skill_doc_coords=False`)."""
-    sys.path.insert(0, str(REPO / "harnesses" / "nethack-prime-agent"))
-    from nethack_prime_agent import _SKILL_FILES, _restore_baseline_coord_note
+def start_service(run_dir: pathlib.Path, *, python: str, pythonpath: list[str]) -> dict:
+    """Start the run's explore service and wait for its URL."""
+    port_file = run_dir / "service.json"
+    port_file.unlink(missing_ok=True)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath)
+    env.pop("EXPLORE_SERVICE_URL", None)
+    log = open(run_dir / "service.log", "ab")
+    process = subprocess.Popen(
+        [python, "-m", "explore.service", "--run-dir", str(run_dir), "--port-file", str(port_file)],
+        cwd=str(run_dir), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+    )
+    for _ in range(300):
+        if port_file.exists():
+            return {"url": json.loads(port_file.read_text())["url"], "process": process}
+        if process.poll() is not None:
+            raise RuntimeError(f"explore service exited (rc={process.returncode}); see {run_dir / 'service.log'}")
+        time.sleep(0.1)
+    process.kill()
+    raise RuntimeError("explore service never wrote its port file")
 
-    if dest.is_symlink():
-        dest.unlink()
-    for name in _SKILL_FILES:
-        data = (NETHACK_SKILL / name).read_bytes()
-        if name == "SKILL.md":
-            data = _restore_baseline_coord_note(data)
-        target = dest / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+
+def build_kernel_venv(prime_agent: str, agent_dir: pathlib.Path, venv: pathlib.Path, env: dict, run_dir: pathlib.Path) -> None:
+    """Build the kernel venv BEFORE the sandbox wraps it: a throwaway daemon's
+    session create bootstraps it (runtime, default packages, the skills as
+    editable installs). No model call is made."""
+    marker = "_editable_impl_prime_agent_skill_nethack.pth"
+    if any(venv.glob(f"lib/python*/site-packages/{marker}")):
+        return
+    socket_path = run_dir / "bootstrap.sock"
+    socket_path.unlink(missing_ok=True)
+    log = open(run_dir / "bootstrap.log", "ab")
+    daemon = subprocess.Popen(
+        [prime_agent, "--mode", "daemon", "--daemon-socket", str(socket_path)],
+        cwd=str(run_dir), env={k: v for k, v in env.items() if k != "PRIME_AGENT_KERNEL_PYTHON"},
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+    )
+    try:
+        client = DaemonClient(socket_path)
+        client.command({"type": "create", "config": {"cwd": str(run_dir), "sessionDir": str(run_dir / "bootstrap-sessions"), "executionMode": "print"}})
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            if any(venv.glob(f"lib/python*/site-packages/{marker}")):
+                time.sleep(2.0)
+                return
+            time.sleep(2.0)
+        raise RuntimeError(f"the kernel venv was not built in 600 s; see {run_dir / 'bootstrap.log'}")
+    finally:
+        daemon.terminate()
+        socket_path.unlink(missing_ok=True)
+
+
+def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: pathlib.Path, workspace: pathlib.Path, machines_dir: pathlib.Path) -> pathlib.Path:
+    """The kernel interpreter, wrapped in one bwrap per kernel process.
+
+    Prime Agent runs every agent action in its python kernel (`python_repl`;
+    `bash()` spawns from the kernel too), so this is the whole sandbox. A
+    kernel sees: system files, the venv and the code it imports (read-only),
+    the skills' files (read-only), the workspace, and its OWN session
+    directory. It does not see the run directory, the agent dir (other
+    sessions, the shared memory store), /root/nld, or any other repo. The
+    root kernel (RLM_DEPTH=0) also sees the machines dir: it starts the
+    factory. Network stays shared (the game's MCP server and the explore
+    service are on localhost)."""
+    site = next(venv.glob("lib/python*/site-packages"))
+    code_dirs: set[str] = set()
+    for pth in site.glob("*.pth"):
+        for line in pth.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("/") and pathlib.Path(line).is_dir():
+                code_dirs.add(line)
+    base = None
+    cfg = venv / "pyvenv.cfg"
+    for line in cfg.read_text().splitlines():
+        if line.startswith("home ="):
+            base = str(pathlib.Path(line.split("=", 1)[1].strip()).parent)
+    skills = []
+    for skill in sorted((agent_dir / "skills").iterdir()):
+        skills.append((str(skill.resolve()), str(skill)))
+    ro = [str(venv)] + ([base] if base else []) + sorted(code_dirs)
+    lines = [
+        "#!/bin/bash",
+        "# Generated by run_explore.py: one bwrap per kernel (see write_kernel_sandbox).",
+        "set -e",
+        f'REAL="{venv}/bin/python"',
+        # A private pid namespace, or /proc/<pid>/root of any outside process
+        # would lead straight back to the host filesystem. The kernel watches
+        # its owner's pid to exit with it; inside the namespace that owner is
+        # bwrap's init (pid 1), which --die-with-parent ties to the worker.
+        "args=(--die-with-parent --unshare-pid --unshare-ipc --unshare-uts --setenv PRIME_AGENT_KERNEL_OWNER_PID 1",
+        "  --ro-bind /usr /usr --ro-bind-try /bin /bin --ro-bind-try /sbin /sbin",
+        "  --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 --ro-bind-try /lib32 /lib32",
+        "  --ro-bind /etc /etc --proc /proc --dev /dev --tmpfs /tmp --tmpfs /root --tmpfs /run)",
+    ]
+    for path in ro:
+        lines.append(f'args+=(--ro-bind "{path}" "{path}")')
+    for target, where in skills:
+        lines.append(f'args+=(--ro-bind "{target}" "{where}")')
+    # settings.json is read-only and holds no secret (the game server's URL
+    # and the NAME of its token variable): the runtime reads factory.enabled
+    # and similar switches from it.
+    lines.append(f'args+=(--ro-bind "{agent_dir / "settings.json"}" "{agent_dir / "settings.json"}")')
+    lines += [
+        f'args+=(--bind "{workspace}" "{workspace}" --chdir "{workspace}")',
+        'if [ -n "$RLM_SESSION_DIR" ]; then mkdir -p "$RLM_SESSION_DIR"; args+=(--bind "$RLM_SESSION_DIR" "$RLM_SESSION_DIR"); fi',
+        'if [ -n "$RLM_HARNESS_STATE_DIR" ]; then mkdir -p "$RLM_HARNESS_STATE_DIR"; args+=(--bind "$RLM_HARNESS_STATE_DIR" "$RLM_HARNESS_STATE_DIR"); fi',
+        f'if [ "${{RLM_DEPTH:-0}}" = "0" ]; then args+=(--ro-bind "{machines_dir}" "{machines_dir}"); fi',
+        'exec bwrap "${args[@]}" "$REAL" "$@"',
+    ]
+    wrapper = run_dir / "kernel-python"
+    wrapper.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+    return wrapper
 
 
 def single_life_machine(text: str) -> str:
@@ -267,6 +365,7 @@ def main(argv=None) -> int:
     parser.add_argument("--thinking", default=None, help="off, minimal, low, medium, high")
     parser.add_argument("--mode", choices=("daemon", "print"), default="daemon", help="daemon (subagents work) or the in-process --print path (no subagents)")
     parser.add_argument("--wait-hours", type=float, default=6.0, help="how long to wait for the run to finish")
+    parser.add_argument("--no-sandbox", dest="sandbox", action="store_false", help="run the agents' kernels unsandboxed (default: one bwrap per kernel, which sees only the workspace and its own session)")
     parser.add_argument("--dry-run", action="store_true", help="set everything up and print the command; do not start prime-agent")
     parser.add_argument("prime_agent_args", nargs="*", help="arguments after -- go to prime-agent")
     args = parser.parse_args(argv)
@@ -280,9 +379,13 @@ def main(argv=None) -> int:
             args.skill_set = taskset.get("env_args", {}).get("skill_set")
         taskset_json = run_dir / "taskset.json"
         write_json(taskset_json, taskset)
-        workspace = run_dir / "workspace"
+    # The agents work here and nowhere else: a sandboxed kernel sees this
+    # directory, its own session directory, and read-only code, never the run
+    # directory (ledger, archive, servers) or the agent dir.
+    workspace = run_dir / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
     if args.skill_set is None:
-        args.skill_set = "np_core,request_map,search,save"
+        args.skill_set = "np_core,request_map,search"
     pythonpath = [str(REPO / "tools" / "pycompat"), str(ENGINE), str(REPO), str(ENV_DIR), str(SKILLS_DIR / "explore" / "src")]
     write_json(
         run_dir / "explore.json",
@@ -335,17 +438,14 @@ def main(argv=None) -> int:
     opener = adapter.fresh(attempt=0, run_dir=run_dir)
     server = opener["mcp_servers"][0]
     print(f"attempt 0: {server['url']}", flush=True)
-    if workspace is not None:
+    if taskset_json is not None:
         task = json.loads((run_dir / "servers" / "task.json").read_text(encoding="utf-8"))
         machine = machines_dir / "explore" / "MACHINE.md"
         machine.write_text(control_opener_machine(machine.read_text(encoding="utf-8"), task["prompt"]), encoding="utf-8")
 
     agent_dir = pathlib.Path(args.agent_dir).resolve() if args.agent_dir else run_dir / "agent"
     link(SKILLS_DIR / "explore", agent_dir / "skills" / "explore")
-    if workspace is not None:
-        materialize_control_skill(agent_dir / "skills" / "nethack")
-    else:
-        link(NETHACK_SKILL, agent_dir / "skills" / "nethack")
+    link(NETHACK_SKILL, agent_dir / "skills" / "nethack")
     # Merge into the existing settings (a logged-in agent dir keeps its
     # provider, model, and auth); this run's keys win.
     settings = {}
@@ -391,6 +491,14 @@ def main(argv=None) -> int:
         }
     )
     env.pop("PYTHONPATH", None)
+    # The run's explore service: the ledger, archive and game servers stay
+    # outside the agents' sandbox; kernels reach them only through it.
+    service = start_service(run_dir, python=args.python, pythonpath=pythonpath)
+    env["EXPLORE_SERVICE_URL"] = service["url"]
+    if args.sandbox:
+        venv = pathlib.Path(env["PRIME_AGENT_KERNEL_VENV"])
+        build_kernel_venv(args.prime_agent, agent_dir, venv, env, run_dir)
+        env["PRIME_AGENT_KERNEL_PYTHON"] = str(write_kernel_sandbox(run_dir, venv, agent_dir, workspace, machines_dir))
     model_flags = []
     for flag, value in (("--provider", args.provider), ("--model", args.model), ("--thinking", args.thinking)):
         if value:
@@ -403,6 +511,7 @@ def main(argv=None) -> int:
     else:
         print(f"daemon mode: socket {run_dir / 'daemon.sock'}, model {args.provider}/{args.model}", flush=True)
     if args.dry_run:
+        service["process"].terminate()
         return 0
     if args.mode == "print":
         with open(run_dir / "root.log", "ab") as log:
@@ -415,6 +524,7 @@ def main(argv=None) -> int:
         prompt=ROOT_PROMPT.replace("{{EXPLORE_TOKEN}}", orchestrator_token), wait_hours=args.wait_hours,
         cwd=workspace,
     )
+    service["process"].terminate()
     print(f"run ended ({code}); see {run_dir / 'ledger.jsonl'} and {run_dir / 'root.log'}", flush=True)
     return code
 

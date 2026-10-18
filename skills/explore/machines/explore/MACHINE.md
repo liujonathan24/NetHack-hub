@@ -57,7 +57,6 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
       "id": "orchestrator",
       "max_entries": 29,
       "retries": 2,
-      "retry_missing_outputs": true,
       "failure_policy": "continue",
       "inputs": [
         {"name": "summary", "type": "json", "from": "player.summary", "optional": true}

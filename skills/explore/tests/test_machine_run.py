@@ -214,14 +214,16 @@ class ExploreMachineRunTest(unittest.TestCase):
             players = self.host.spawn_calls("explore-player")
             self.assertEqual(len(players), 2)
             opener_ids = self.host.session_ids["child-1"]
+            # Players fork one-time handoff copies (handoff/attempt-<N>.jsonl)
+            # of the checkpoint's player conversation.
             self.assertEqual(
                 players[0]["kwargs"]["fork_from"],
-                {"session_file": str(self.run_dir / "sessions" / "child-1.jsonl"), "entry_id": opener_ids[3]},
+                {"session_file": str(self.run_dir / "handoff" / "attempt-1.jsonl"), "entry_id": opener_ids[3]},
             )
             player1_ids = self.host.session_ids["child-3"]
             self.assertEqual(
                 players[1]["kwargs"]["fork_from"],
-                {"session_file": str(self.run_dir / "sessions" / "child-3.jsonl"), "entry_id": player1_ids[3]},
+                {"session_file": str(self.run_dir / "handoff" / "attempt-2.jsonl"), "entry_id": player1_ids[3]},
             )
             self.assertEqual(players[0]["kwargs"]["mcp_servers"], [])
             # The directive reaches the player verbatim: no quotes, no escapes.

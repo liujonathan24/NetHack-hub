@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +79,37 @@ MACHINE_NAME = "explore"
 class NotTheOrchestrator(PermissionError):
     """Raised when a ledger read or a selection is attempted without the
     run's orchestrator token."""
+
+
+class ExploreServiceError(RuntimeError):
+    """A remote explore call failed in the service (message and type kept)."""
+
+
+def _remote(call: str, **kwargs: Any) -> Any:
+    """Run ``call`` in the run's explore service (``EXPLORE_SERVICE_URL``).
+
+    A sandboxed kernel cannot see the run directory, so the ledger, archive
+    and game servers live in the service; this sends it the call and returns
+    its result, re-raising the service's error type where it is ours."""
+    import urllib.request
+
+    url = os.environ["EXPLORE_SERVICE_URL"].rstrip("/") + "/call"
+    body = json.dumps({"call": call, "kwargs": kwargs}).encode()
+    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=3600) as response:
+        reply = json.loads(response.read())
+    if reply.get("ok"):
+        return reply.get("result")
+    kind, message = reply.get("type"), reply.get("error") or "explore service error"
+    if kind == "NotTheOrchestrator":
+        raise NotTheOrchestrator(message)
+    if kind in ("ValueError", "KeyError", "FileNotFoundError"):
+        raise ValueError(message)
+    raise ExploreServiceError(f"{kind}: {message}")
+
+
+def _use_service(run_dir: Any, adapter: Any) -> bool:
+    return bool(os.environ.get("EXPLORE_SERVICE_URL")) and run_dir is None and adapter is None
 
 
 def _require_token(token: str | None, ledger: Ledger, what: str) -> None:
@@ -152,6 +185,8 @@ def _settle_previous(ledger: Ledger, adapter: EnvFork | None) -> None:
 
 
 def leaderboard(limit: int = 30, *, token: str | None = None, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> str:
+    if _use_service(run_dir, adapter):
+        return _remote("leaderboard", limit=limit, token=token)
     """The leaderboard text: one line per checkpoint with its harness-computed
     numbers, how many attempts started there, and how they ended. Orchestrator
     only (``token``). Waits for the previous attempt's game to be over first."""
@@ -162,6 +197,8 @@ def leaderboard(limit: int = 30, *, token: str | None = None, run_dir: str | Pat
 
 
 def rows(*, token: str | None = None, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> list[dict[str, Any]]:
+    if _use_service(run_dir, adapter):
+        return _remote("rows", token=token)
     """The leaderboard as data. Orchestrator only (``token``)."""
     ledger = Ledger(run_dir)
     _require_token(token, ledger, "explore.rows")
@@ -220,6 +257,8 @@ def select(
     A directive that fails ``validate_directive`` raises ``ValueError``: fix
     it and call again.
     """
+    if _use_service(run_dir, adapter):
+        return _remote("select", checkpoint_id=checkpoint_id, directive=directive, token=token, blind=blind)
     ledger = Ledger(run_dir)
     _require_token(token, ledger, "explore.select")
     adapter = adapter or load_adapter(run_dir=ledger.dir)
@@ -242,6 +281,21 @@ def select(
         cut = SessionCut(ok=False, session_file="", reason=f"no player session recorded for attempt {chosen.attempt}")
     else:
         cut = cut_session(session_file, chosen.call)
+    # The player forks from a PRIVATE copy of the cut conversation, which this
+    # attempt's game server deletes at the player's first game call. A decision
+    # block re-emitted from an orchestrator's memory therefore names a copy that
+    # is gone, and its player's spawn fails before any model call instead of
+    # replaying a finished attempt.
+    session_ref = cut.fork_source()
+    if session_ref:
+        source = Path(session_ref["session_file"] if isinstance(session_ref, dict) else session_ref)
+        handoff = ledger.dir / "handoff" / f"attempt-{attempt}.jsonl"
+        handoff.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, handoff)
+        session_ref = {**session_ref, "session_file": str(handoff)} if isinstance(session_ref, dict) else str(handoff)
+        arm = getattr(adapter, "arm_handoff", None)
+        if arm is not None:
+            arm(ledger.dir, attempt, handoff)
     # The block the machine binds stays small: the child's final answer is
     # the binding lane and hosts cap it, so only what the player's spawn
     # needs rides here. The cut's details go to the ledger.
@@ -249,7 +303,7 @@ def select(
         "next": {
             "checkpoint": chosen.id,
             "attempt": attempt,
-            "session_ref": cut.fork_source(),
+            "session_ref": session_ref,
             "mcp_servers": list(restored.get("mcp_servers") or []),
         }
     }
@@ -283,6 +337,8 @@ def answer(result: dict[str, Any]) -> str:
 def select_fixed(*, run_dir: str | Path | None = None) -> str | None:
     """The A2 rule: the latest checkpoint the previous attempt wrote, else
     the latest checkpoint overall, else None (nothing to resume)."""
+    if _use_service(run_dir, None):
+        return _remote("select_fixed")
     ledger = Ledger(run_dir)
     checkpoints = ledger.checkpoints()
     if not checkpoints:
@@ -317,7 +373,8 @@ async def watch_players(
     run ends. Runs in the root kernel beside ``rlm.factory.run``."""
     from rlm import rlm as _rlm  # the kernel namespace; imported late so tests can patch it
 
-    ledger = Ledger(run_dir)
+    remote = bool(os.environ.get("EXPLORE_SERVICE_URL")) and run_dir is None
+    ledger = None if remote else Ledger(run_dir)
     seen: set[str] = set()
     while True:
         snapshot = await _rlm.factory.watch(run_id, poll_seconds)
@@ -334,7 +391,10 @@ async def watch_players(
                 if attempt is None:
                     continue
                 seen.add(child)
-                ledger.add_player(attempt=attempt, child=str(child), session_file=session_file)
+                if remote:
+                    _remote("record_player", state=str(state_id), attempt=attempt, child=str(child), session_file=session_file)
+                else:
+                    ledger.add_player(attempt=attempt, child=str(child), session_file=session_file)
         if snapshot.get("state") not in ("running", "stopping", "paused"):
             return
         if not snapshot.get("changed", True):
@@ -346,8 +406,11 @@ async def run(machine: str = MACHINE_NAME, *, run_dir: str | Path | None = None,
     ``rlm.factory.run`` result; the watcher task rides ``result["watcher"]``."""
     from rlm import rlm as _rlm
 
-    directory = Ledger(run_dir).dir
-    directory.mkdir(parents=True, exist_ok=True)
+    remote = bool(os.environ.get("EXPLORE_SERVICE_URL")) and run_dir is None
+    directory = None
+    if not remote:
+        directory = Ledger(run_dir).dir
+        directory.mkdir(parents=True, exist_ok=True)
     result = await _rlm.factory.run(machine, name=name)
     task = asyncio.create_task(watch_players(result["run_id"], run_dir=directory))
     result["watcher"] = task

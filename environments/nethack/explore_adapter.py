@@ -89,13 +89,19 @@ class NetHackAdapter:
         self.finalize(run_dir, attempt - 1, reason="next attempt started")
         return self._boot(run_dir, attempt, resume=None, checkpoint_from=None)
 
+    def arm_handoff(self, run_dir, attempt: int, handoff) -> None:
+        """Tell attempt ``attempt``'s game server which handoff conversation to
+        delete at its player's first game call."""
+        marker = self.ready_path(pathlib.Path(run_dir), attempt).with_suffix(".handoff")
+        marker.write_text(str(handoff), encoding="utf-8")
+
     def restore(self, env_handle: Any, *, attempt: int, run_dir: pathlib.Path) -> dict[str, Any]:
         run_dir = pathlib.Path(run_dir)
         if not isinstance(env_handle, dict) or not env_handle.get("checkpoint_dir"):
             raise ValueError(f"env_handle must be {{'checkpoint_dir', 'id'}}, got {env_handle!r}")
         directory = pathlib.Path(env_handle["checkpoint_dir"])
-        if not (directory / "state.bundle").is_file():
-            raise FileNotFoundError(f"checkpoint {directory} has no state.bundle")
+        if not (directory / "checkpoint.json").is_file():
+            raise FileNotFoundError(f"checkpoint {directory} has no checkpoint.json")
         self.finalize(run_dir, attempt - 1, reason="next attempt selected")
         return self._boot(run_dir, attempt, resume=str(directory), checkpoint_from=str(env_handle.get("id") or directory.name))
 

@@ -42,9 +42,11 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import nethack_v1 as m  # noqa: E402
-from nethack_harness.checkpoints import CheckpointIntegrityError, checkpoint_list, checkpoint_meta  # noqa: E402
+from nethack_harness.explore_checkpoints import CheckpointMetaError, list_checkpoints, read_meta  # noqa: E402
 
 #: The meta.json fields that become the ledger score (all harness-computed).
+GAME_OVER_GRACE_S = 10.0
+
 SCORE_FIELDS = (
     "dlvl", "xl", "hp", "max_hp", "hunger_state", "gameturn", "score",
     "balrog", "balrog_min", "max_dlvl_reached", "max_xp_level",
@@ -138,6 +140,7 @@ class Server:
         self.archive = pathlib.Path(args.archive)
         self.ready_path = pathlib.Path(args.ready)
         self.stop_path = pathlib.Path(str(self.ready_path) + ".stop")
+        self.game_over_seen: float = 0.0
         self.started_at = time.time()
         self.mirrored: set[str] = set()
         self.proc: subprocess.Popen | None = None
@@ -156,12 +159,12 @@ class Server:
         """Append this attempt's new checkpoints to the ledger."""
         ledger = self._ledger()
         known = {checkpoint.id for checkpoint in ledger.checkpoints()}
-        for directory in checkpoint_list(self.archive):
+        for directory in list_checkpoints(self.archive):
             if directory.name in self.mirrored:
                 continue
             try:
-                meta = checkpoint_meta(directory)
-            except CheckpointIntegrityError:
+                meta = read_meta(directory)
+            except CheckpointMetaError:
                 continue
             created = float(meta.get("created_at") or 0.0)
             if created < self.started_at:
@@ -204,6 +207,19 @@ class Server:
             json.dumps({"prompt": data.prompt, "system_prompt": data.system_prompt, "tier": data.tier}, indent=2) + "\n",
         )
 
+    def consume_handoff(self) -> None:
+        """Delete this attempt's handoff conversation once its player has made
+        a game call (explore.select wrote it; see there for why)."""
+        marker = self.ready_path.with_suffix(".handoff")
+        state = self.trace.state if self.trace is not None else None
+        if state is None or int(state.skill_calls or 0) < 1 or not marker.exists():
+            return
+        target = pathlib.Path(marker.read_text(encoding="utf-8").strip())
+        with contextlib.suppress(FileNotFoundError):
+            target.unlink()
+        marker.unlink()
+        self.log(f"handoff consumed: {target.name}")
+
     def write_outcome(self) -> None:
         state = self.trace.state if self.trace is not None else None
         final = {}
@@ -240,8 +256,8 @@ class Server:
         env_args.update({
             "skill_set": self.args.skill_set,
             "checkpoint_archive": str(self.archive),
-            "auto_checkpoint": True,
             "auto_checkpoint_every_n_calls": int(self.args.every),
+            "restore_rng": bool(self.args.restore_rng),
         })
         if self.args.resume_checkpoint:
             env_args["resume_checkpoint"] = self.args.resume_checkpoint
@@ -366,6 +382,17 @@ class Server:
                     reason = self.stop_path.read_text(encoding="utf-8").strip() or "stop requested"
                     self.request_stop(reason)
                     break
+                self.consume_handoff()
+                # The game is over: stop now, not when the next attempt is
+                # selected (a server left up after its game ended once wrote a
+                # second, wall-clock outcome for one attempt). The grace lets
+                # the final observation reach the player.
+                state = self.trace.state if self.trace is not None else None
+                if state is not None and (state.died or state.ascended or state.terminated):
+                    self.game_over_seen = self.game_over_seen or time.time()
+                    if time.time() - self.game_over_seen > GAME_OVER_GRACE_S:
+                        self.request_stop("game over")
+                        break
                 # The single-life harness's rollout timeout, per attempt. The
                 # outcome is censored (wall clock), never merged with death.
                 wall = float(self.args.wall_clock_s or 0.0)
@@ -426,6 +453,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--skill-set", default="np_core,request_map,search,save")
     parser.add_argument("--max-skill-calls", type=int, default=150)
     parser.add_argument("--every", type=int, default=20, help="auto-checkpoint every N calls")
+    parser.add_argument("--restore-rng", action="store_true", help="restore the checkpoint's RNG blob too (default: the stream restarts from the seed, as in the paper)")
     parser.add_argument("--taskset-json", default=None, help="the control arm's [taskset] config as JSON (game knobs)")
     parser.add_argument("--workspace", default=None, help="write the control arm's agent workspace here (attempt 0)")
     parser.add_argument("--wall-clock-s", type=float, default=0.0, help="end the attempt this many seconds after boot (0 = no limit)")
