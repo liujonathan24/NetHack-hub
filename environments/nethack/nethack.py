@@ -493,9 +493,24 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         # costs a few result tokens per call). The published tool schemas are
         # never touched either way.
         call_id_in_results: bool = True,
+        # Checkpointed exploration (nethack_harness/explore_checkpoints.py).
+        # `checkpoint_archive` turns on automatic checkpoints into that
+        # directory (every `auto_checkpoint_every_n_calls` calls, each new
+        # Dlvl, each XL gain); `resume_checkpoint` starts the game from one
+        # checkpoint directory instead of the seed's turn 1, and the `[call#N]`
+        # counter continues from the checkpoint's call. The RNG blob is not
+        # restored unless `restore_rng` (the paper's PAE semantics).
+        checkpoint_archive: Optional[str] = None,
+        auto_checkpoint_every_n_calls: int = 20,
+        resume_checkpoint: Optional[str] = None,
+        restore_rng: bool = False,
         **kwargs,
     ):
         self.interface = interface
+        self._checkpoint_archive = checkpoint_archive or None
+        self._auto_checkpoint_every = int(auto_checkpoint_every_n_calls or 0)
+        self._resume_checkpoint = resume_checkpoint or None
+        self._restore_rng = str(restore_rng).lower() in ("1", "true", "yes")
         self.task_spec = task_spec
         self.call_id_in_results = bool(call_id_in_results)
         self._resume_from = resume_from or None
@@ -728,6 +743,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
                     state["structured_obs"] = shape_observation(obs, character)
         except Exception:
             pass
+        self._setup_checkpoints(state, env, character)
         state["map_detail"] = self.map_detail
         # Sub-experiment 1b: the requested per-cell attribute set (consumed by
         # the JSON template) and the per-level visited-tile tracker. The tracker
@@ -1113,6 +1129,7 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
         with rec:
             with call_log:
                 content = await self._apply_tool_call_inner(state, skill_name, skill_args)
+        self._after_call_checkpoint(state, call_id)
         clock_after = _game_clock(state)
         # Echo the correlation id into the RESULT payload -- the one channel
         # that reaches the model transcript verbatim in every scaffold (an MCP
@@ -1171,6 +1188,42 @@ class NetHackVerifiersEnv(vf.StatefulToolEnv):
             dispatch_route=route,
         )
         return content
+
+    def _setup_checkpoints(self, state: vf.State, env, character) -> None:
+        """Resume from a checkpoint and/or arm the automatic checkpoints."""
+        if not (self._checkpoint_archive or self._resume_checkpoint):
+            return
+        from nethack_harness import explore_checkpoints as ck
+
+        base: dict = {}
+        if self._resume_checkpoint:
+            obs, base = ck.resume(env, self._resume_checkpoint, restore_rng=self._restore_rng)
+            state["raw_obs"] = obs
+            state["structured_obs"] = shape_observation(obs, character)
+            state["max_dlvl_reached"] = int(base.get("max_dlvl_reached") or base.get("dlvl") or 1)
+            # The model's conversation was cut at this checkpoint's [call#K];
+            # the counter continues from there so the cut rule keeps matching.
+            state["_trace_call_seq"] = int(base.get("call") or 0)
+            state["_resumed_from_checkpoint"] = str(base.get("id") or "")
+        if self._checkpoint_archive:
+            state["_auto_ck"] = ck.AutoCheckpointer(
+                self._checkpoint_archive,
+                every_n=self._auto_checkpoint_every,
+                attempt_base=base,
+                start_call=int(state.get("_trace_call_seq") or 0),
+            )
+
+    def _after_call_checkpoint(self, state: vf.State, call_id: int) -> None:
+        auto = state.get("_auto_ck")
+        if auto is None:
+            return
+        so = state.get("structured_obs")
+        status = (getattr(so, "status", None) or {}) if so is not None else {}
+        finished = bool(state.get("died") or state.get("ascended") or state.get("terminated"))
+        try:
+            auto.after_call(state["env"], call=int(call_id), status=status, finished=finished)
+        except Exception as error:  # noqa: BLE001 - bookkeeping never breaks the game
+            auto.errors.append(f"call {call_id}: {type(error).__name__}: {error}")
 
     async def _apply_tool_call_inner(self, state: vf.State, skill_name: str, skill_args: dict):
         """Execute one skill against the engine and return the rendered observation.

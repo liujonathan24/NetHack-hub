@@ -149,6 +149,9 @@ class NetHackState(vf.State):
     scout_reward_total: float = 0.0
     descent_count: float = 0.0
     max_dlvl_reached: int = 1
+    # Best experience level this rollout reached (a resumed explore attempt
+    # starts from its checkpoint lineage's best; see explore_checkpoints).
+    max_xp_level: int = 0
     succeeded: bool = False
     ascended: bool = False
     died: bool = False
@@ -566,6 +569,13 @@ class NetHackToolset(vf.Toolset[NetHackToolsetConfig, NetHackState]):
         state.scout_reward_total = float(v0.get("scout_reward_total", 0.0) or 0.0)
         state.descent_count = float(v0.get("descent_count", 0.0) or 0.0)
         state.max_dlvl_reached = int(v0.get("max_dlvl_reached", 1) or 1)
+        so = v0.get("structured_obs")
+        try:
+            xl_now = int(((getattr(so, "status", None) or {}).get("experience_level")) or 0)
+        except (TypeError, ValueError):
+            xl_now = 0
+        auto = v0.get("_auto_ck")
+        state.max_xp_level = max(state.max_xp_level, xl_now, int(getattr(auto, "max_xl", 0) or 0))
         state.succeeded = bool(v0.get("succeeded"))
         state.ascended = bool(v0.get("ascended"))
         state.died = bool(v0.get("died"))
