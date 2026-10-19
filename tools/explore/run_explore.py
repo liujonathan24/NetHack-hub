@@ -550,7 +550,12 @@ def main(argv=None) -> int:
     # The final leaderboard, read here, outside the sandbox: no kernel needs
     # ledger access after the orchestrator's last round.
     import explore  # noqa: E402
+    from explore.service import sync_players  # noqa: E402
 
+    # The service records players only on an orchestrator call, so the last
+    # attempt's player is recorded here.
+    with contextlib.suppress(Exception):
+        sync_players(run_dir)
     with contextlib.suppress(Exception):
         print("--- final leaderboard ---\n" + explore.leaderboard(100, run_dir=run_dir), flush=True)
     print(f"run ended ({code}); see {run_dir / 'ledger.jsonl'} and {run_dir / 'root.log'}", flush=True)
