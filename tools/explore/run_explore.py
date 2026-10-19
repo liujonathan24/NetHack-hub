@@ -478,8 +478,19 @@ def main(argv=None) -> int:
         provider_id = args.provider or "prime-inference"
         models_path = agent_dir / "models.json"
         models = json.loads(models_path.read_text(encoding="utf-8")) if models_path.is_file() else {}
-        overrides = models.setdefault("providers", {}).setdefault(provider_id, {}).setdefault("modelOverrides", {})
-        overrides[args.model] = {"contextWindow": int(args.context_window), "maxTokens": int(args.max_output_tokens)}
+        # A FULL definition, not modelOverrides: Prime's hosted models reach
+        # the registry through a path that overrides never touch (measured:
+        # `prime-agent model list` showed no Qwen/Qwen3.5-9B at all, so the
+        # session fell back to a default window). A custom model wins on
+        # provider+id.
+        defined = models.setdefault("providers", {}).setdefault(provider_id, {}).setdefault("models", [])
+        defined[:] = [m for m in defined if m.get("id") != args.model]
+        defined.append({
+            "id": args.model, "name": f"{args.model} ({args.context_window // 1024}K served)",
+            "api": "openai-completions", "baseUrl": "https://api.pinference.ai/api/v1",
+            "reasoning": True, "input": ["text"],
+            "contextWindow": int(args.context_window), "maxTokens": int(args.max_output_tokens),
+        })
         write_json(models_path, models)
         settings.setdefault("compaction", {}).update({"enabled": True, "thresholdPercent": float(args.compaction_threshold_percent)})
     write_json(agent_dir / "settings.json", settings)
