@@ -134,7 +134,6 @@ def dispatch(run_dir: pathlib.Path, call: str, kwargs: dict[str, Any], caller: s
             f"explore.{call} is for the orchestrator only; a player never reads the leaderboard or selects a checkpoint"
         )
     sync_players(run_dir)
-    kwargs.pop("token", None)
     function = getattr(explore, call)
     return function(**{**kwargs, "run_dir": run_dir})
 

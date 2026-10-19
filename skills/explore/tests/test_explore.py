@@ -210,24 +210,16 @@ class SelectTest(unittest.TestCase):
             self.assertFalse(first_handoff.exists())  # a stale block now fails at spawn
             self.assertTrue(second_handoff.exists())
 
-    def test_orchestrator_token_gates_the_ledger_reads(self) -> None:
-        with TemporaryDirectory() as temp:
-            run = Path(temp)
-            (run / "explore.json").write_text(json.dumps({"orchestrator_token": "t0k3n"}), encoding="utf-8")
-            ledger = Ledger(run)
-            ledger.add_checkpoint(attempt=0, score={"dlvl": 1}, env_handle="h", call=1, parent=None)
-            with self.assertRaises(explore.NotTheOrchestrator):
-                explore.leaderboard(run_dir=run)
-            with self.assertRaises(explore.NotTheOrchestrator):
-                explore.select("c0", "Explore.", run_dir=run, adapter=explore.ScriptedAdapter())
-            self.assertIn("c0", explore.leaderboard(token="t0k3n", run_dir=run))
-            result = explore.select("c0", "Explore.", token="t0k3n", run_dir=run, adapter=explore.ScriptedAdapter())
-            self.assertEqual(result["decision"]["next"]["checkpoint"], "c0")
-            # No key rides any prompt: in a sandboxed run the explore service
-            # authorizes the orchestrator by its session (test_service.py).
-            machine = (HERE.parent / "machines" / "explore" / "MACHINE.md").read_text(encoding="utf-8")
-            self.assertNotIn("TOKEN", machine)
-            self.assertNotIn("token=", machine)
+    def test_no_key_in_any_prompt_or_signature(self) -> None:
+        # The explore service authorizes the orchestrator by its session
+        # (test_service.py); no call takes a key and no prompt carries one.
+        import inspect
+
+        for function in (explore.leaderboard, explore.rows, explore.select, explore.stop):
+            self.assertNotIn("token", inspect.signature(function).parameters)
+        machine = (HERE.parent / "machines" / "explore" / "MACHINE.md").read_text(encoding="utf-8")
+        self.assertNotIn("TOKEN", machine)
+        self.assertNotIn("token=", machine)
 
     def test_leaderboard_and_select_settle_the_previous_attempt_first(self) -> None:
         class RecordingAdapter(explore.ScriptedAdapter):
@@ -252,7 +244,7 @@ class SelectTest(unittest.TestCase):
             explore.rows(run_dir=run, adapter=adapter)
             explore.select("c0", "Go.", run_dir=run, adapter=adapter)
             self.assertEqual(adapter.settled, [0])
-            self.assertEqual(explore.stop("x", token="ignored")["decision"]["stop"], True)
+            self.assertEqual(explore.stop("x")["decision"]["stop"], True)
 
     def test_fixed_rule_takes_the_previous_attempts_latest_checkpoint(self) -> None:
         with TemporaryDirectory() as temp:

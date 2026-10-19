@@ -77,8 +77,8 @@ MACHINE_NAME = "explore"
 
 
 class NotTheOrchestrator(PermissionError):
-    """Raised when a ledger read or a selection is attempted without the
-    run's orchestrator token."""
+    """Raised by the explore service when a session other than the
+    orchestrator (or the root) reads the ledger or selects a checkpoint."""
 
 
 class ExploreServiceError(RuntimeError):
@@ -116,20 +116,6 @@ def _use_service(run_dir: Any, adapter: Any) -> bool:
     return bool(os.environ.get("EXPLORE_SERVICE_URL")) and run_dir is None and adapter is None
 
 
-def _require_token(token: str | None, ledger: Ledger, what: str) -> None:
-    """The orchestrator token gates the leaderboard and select(). Every child
-    of the run has this package; only the orchestrator's prompt carries the
-    token (``explore.json`` holds it). A player that calls these by mistake
-    gets a clear refusal instead of another attempt's numbers."""
-    from .adapters import read_config
-
-    expected = read_config(ledger.dir).get("orchestrator_token")
-    if not expected:
-        return  # an ungated run (tests, local use)
-    if token != expected:
-        raise NotTheOrchestrator(
-            f"{what} is for the orchestrator only; a player never reads the leaderboard or selects a checkpoint"
-        )
 
 # -- the environment's side ------------------------------------------------
 
@@ -188,24 +174,23 @@ def _settle_previous(ledger: Ledger, adapter: EnvFork | None) -> None:
         settle(attempt=previous, run_dir=ledger.dir)
 
 
-def leaderboard(limit: int = 30, *, token: str | None = None, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> str:
-    if _use_service(run_dir, adapter):
-        return _remote("leaderboard", limit=limit, token=token)
+def leaderboard(limit: int = 30, *, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> str:
     """The leaderboard text: one line per checkpoint with its harness-computed
     numbers, how many attempts started there, and how they ended. Orchestrator
-    only (``token``). Waits for the previous attempt's game to be over first."""
+    only (the explore service checks the caller's session). Waits for the
+    previous attempt's game to be over first."""
+    if _use_service(run_dir, adapter):
+        return _remote("leaderboard", limit=limit)
     ledger = Ledger(run_dir)
-    _require_token(token, ledger, "explore.leaderboard")
     _settle_previous(ledger, adapter)
     return leaderboard_text(ledger, limit=limit)
 
 
-def rows(*, token: str | None = None, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> list[dict[str, Any]]:
+def rows(*, run_dir: str | Path | None = None, adapter: EnvFork | None = None) -> list[dict[str, Any]]:
+    """The leaderboard as data. Orchestrator only."""
     if _use_service(run_dir, adapter):
-        return _remote("rows", token=token)
-    """The leaderboard as data. Orchestrator only (``token``)."""
+        return _remote("rows")
     ledger = Ledger(run_dir)
-    _require_token(token, ledger, "explore.rows")
     _settle_previous(ledger, adapter)
     return leaderboard_rows(ledger)
 
@@ -237,7 +222,6 @@ def select(
     checkpoint_id: str,
     directive: str = "",
     *,
-    token: str | None = None,
     blind: bool = False,
     run_dir: str | Path | None = None,
     adapter: EnvFork | None = None,
@@ -262,9 +246,8 @@ def select(
     it and call again.
     """
     if _use_service(run_dir, adapter):
-        return _remote("select", checkpoint_id=checkpoint_id, directive=directive, token=token, blind=blind)
+        return _remote("select", checkpoint_id=checkpoint_id, directive=directive, blind=blind)
     ledger = Ledger(run_dir)
-    _require_token(token, ledger, "explore.select")
     adapter = adapter or load_adapter(run_dir=ledger.dir)
     _settle_previous(ledger, adapter)
     chosen = ledger.checkpoint(str(checkpoint_id))
@@ -337,10 +320,9 @@ def select(
     return {"decision": decision, "directive": DIRECTIVE_BLOCK_FORMAT.format(directive=directive_text)}
 
 
-def stop(reason: str = "", *, token: str | None = None) -> dict[str, Any]:
+def stop(reason: str = "") -> dict[str, Any]:
     """End the run. The decision has NO ``next`` key, so the machine's guard
-    ``decision.next exists`` fails (a ``null`` value would still exist).
-    ``token`` is accepted for symmetry with select() and not checked."""
+    ``decision.next exists`` fails (a ``null`` value would still exist)."""
     return {"decision": {"stop": True, "reason": reason}, "directive": ""}
 
 
