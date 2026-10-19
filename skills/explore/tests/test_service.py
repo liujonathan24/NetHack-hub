@@ -34,6 +34,9 @@ class ServiceRolesTest(unittest.TestCase):
             ("sub-3", "s-player", "ab-explore-player", self.root_file, 1),
             # The factory's retry of a round that bound no decision.
             ("sub-5", "s-orch-retry", "ab-explore-orchestrator-a2", self.root_file, 1),
+            # Later rounds (re-entries), and a retry of one.
+            ("sub-6", "s-orch-r2", "ab-explore-orchestrator-i1", self.root_file, 1),
+            ("sub-7", "s-orch-r2-retry", "ab-explore-orchestrator-i1-a2", self.root_file, 1),
             # A player's own spawn, named to look like the orchestrator.
             ("sub-4", "s-fake", "ab-explore-orchestrator", str(art / "sub-3" / "s-player.jsonl"), 2),
         ]:
@@ -54,7 +57,8 @@ class ServiceRolesTest(unittest.TestCase):
 
     def test_roles_come_from_the_daemon_spawn_ledger(self) -> None:
         self.assertEqual(service.caller_role(self.run, self.session_dir("s-orch")), "orchestrator")
-        self.assertEqual(service.caller_role(self.run, self.session_dir("s-orch-retry")), "orchestrator")
+        for sid in ("s-orch-retry", "s-orch-r2", "s-orch-r2-retry"):
+            self.assertEqual(service.caller_role(self.run, self.session_dir(sid)), "orchestrator")
         self.assertEqual(service.caller_role(self.run, self.session_dir("s-player")), "player")
         self.assertIsNone(service.caller_role(self.run, self.session_dir("s-fake")))  # depth 2, not the root's child
         self.assertIsNone(service.caller_role(self.run, self.session_dir("nobody")))

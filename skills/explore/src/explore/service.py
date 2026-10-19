@@ -33,9 +33,10 @@ from typing import Any
 
 #: The calls a kernel may make, all orchestrator-only. Anything else is refused.
 CALLS = ("leaderboard", "rows", "select", "select_fixed")
-# Factory child names: "<run prefix>-explore-<state>", and "-a<N>" on a
-# retry the factory re-spawns (a round that bound no decision).
-ROLE_NAME = re.compile(r"-explore-(orchestrator|player|opener)(?:-a\d+)?$")
+# Factory child names (factory._child_name): "<run prefix>-explore-<state>",
+# then "-i<N>" on a state's re-entry and "-a<N>" on a retry of a round that
+# bound no decision, in that order.
+ROLE_NAME = re.compile(r"-explore-(orchestrator|player|opener)(?:-i\d+)?(?:-a\d+)?$")
 #: How long a caller the spawn ledger does not know yet is waited for.
 ROLE_WAIT_S = 30.0
 
