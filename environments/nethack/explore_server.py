@@ -222,6 +222,9 @@ class Server:
 
     def write_outcome(self) -> None:
         state = self.trace.state if self.trace is not None else None
+        if self.stop_reason.startswith("superseded") and (state is None or int(state.skill_calls or 0) == 0):
+            self.log("superseded before any game call: no outcome")
+            return
         final = {}
         if state is not None:
             final = {"max_dlvl_reached": int(state.max_dlvl_reached), "max_xp_level": int(state.max_xp_level), "skill_calls": int(state.skill_calls)}

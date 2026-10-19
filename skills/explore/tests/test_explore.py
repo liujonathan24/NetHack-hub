@@ -147,7 +147,7 @@ class SelectTest(unittest.TestCase):
             # The player forks a one-time handoff COPY of the conversation.
             handoff = Path(nxt["session_ref"]["session_file"])
             self.assertEqual(nxt["session_ref"]["entry_id"], "r0")
-            self.assertEqual((handoff.parent.name, handoff.name), ("handoff", f"attempt-{nxt['attempt']}.jsonl"))
+            self.assertEqual((handoff.parent.name, handoff.name), ("handoff", f"attempt-{nxt['attempt']}-1.jsonl"))
             self.assertEqual(handoff.read_bytes(), path.read_bytes())
             self.assertEqual(nxt["mcp_servers"], [])
             selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
@@ -180,6 +180,35 @@ class SelectTest(unittest.TestCase):
             self.assertIn("no player session recorded", selection["memory"]["reason"])
             self.assertEqual(explore.stop("done")["decision"], {"stop": True, "reason": "done"})
             self.assertNotIn("next", explore.stop()["decision"])
+
+    def test_a_later_select_supersedes_the_earlier_one(self) -> None:
+        class Recording(explore.ScriptedAdapter):
+            def __init__(self):
+                super().__init__()
+                self.finalized = []
+
+            def finalize(self, run_dir, attempt, *, reason):
+                self.finalized.append((attempt, reason))
+                return True
+
+        with TemporaryDirectory() as temp:
+            run = Path(temp)
+            session = run / "opener.jsonl"
+            session.write_text(json.dumps({"type": "session", "id": "s"}) + "\n" + json.dumps(
+                {"type": "message", "id": "r0", "message": {"role": "toolResult", "content": [{"type": "text", "text": "[call#1]"}]}}
+            ) + "\n", encoding="utf-8")
+            ledger = Ledger(run)
+            ledger.add_player(attempt=0, child="c", session_file=str(session))
+            ledger.add_checkpoint(attempt=0, score={"dlvl": 1}, env_handle="h", call=1, parent=None)
+            adapter = Recording()
+            first = explore.select("c0", "Explore.", run_dir=run, adapter=adapter)
+            second = explore.select("c0", "Descend.", run_dir=run, adapter=adapter)
+            self.assertEqual(first["decision"]["next"]["attempt"], second["decision"]["next"]["attempt"])
+            self.assertEqual(adapter.finalized, [(1, "superseded by a later select")])
+            first_handoff = Path(first["decision"]["next"]["session_ref"]["session_file"])
+            second_handoff = Path(second["decision"]["next"]["session_ref"]["session_file"])
+            self.assertFalse(first_handoff.exists())  # a stale block now fails at spawn
+            self.assertTrue(second_handoff.exists())
 
     def test_orchestrator_token_gates_the_ledger_reads(self) -> None:
         with TemporaryDirectory() as temp:

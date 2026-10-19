@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import os
 import pathlib
 import sys
@@ -32,8 +33,9 @@ from typing import Any
 
 #: The calls a kernel may make, all orchestrator-only. Anything else is refused.
 CALLS = ("leaderboard", "rows", "select", "select_fixed")
-ORCHESTRATOR_NAME_SUFFIX = "-explore-orchestrator"
-PLAYER_NAME_SUFFIXES = ("-explore-player", "-explore-opener")
+# Factory child names: "<run prefix>-explore-<state>", and "-a<N>" on a
+# retry the factory re-spawns (a round that bound no decision).
+ROLE_NAME = re.compile(r"-explore-(orchestrator|player|opener)(?:-a\d+)?$")
 #: How long a caller the spawn ledger does not know yet is waited for.
 ROLE_WAIT_S = 30.0
 
@@ -45,8 +47,8 @@ _LOCK = Lock()
 
 def handoff_attempt(session_file: str | None) -> int | None:
     """The attempt a forked player belongs to: its session header's
-    ``parentSession`` is the handoff copy ``handoff/attempt-<N>.jsonl``
-    that select() wrote for exactly that attempt."""
+    ``parentSession`` is the handoff copy ``handoff/attempt-<N>-<k>.jsonl``
+    that select() wrote for exactly that attempt (k-th selection)."""
     if not session_file:
         return None
     try:
@@ -57,7 +59,7 @@ def handoff_attempt(session_file: str | None) -> int | None:
     parent = pathlib.Path(str(header.get("parentSession") or ""))
     if parent.parent.name == "handoff" and parent.stem.startswith("attempt-"):
         try:
-            return int(parent.stem.split("-", 1)[1])
+            return int(parent.stem.split("-")[1])
         except ValueError:
             return None
     return None
@@ -93,11 +95,9 @@ def caller_role(run_dir: pathlib.Path, caller: str) -> str | None:
     for record in spawn_records(run_dir):
         if pathlib.Path(str(record.get("child") or "")).stem != session_id:
             continue
-        name = str(record.get("name") or "")
-        if name.endswith(ORCHESTRATOR_NAME_SUFFIX):
-            return "orchestrator"
-        if name.endswith(PLAYER_NAME_SUFFIXES):
-            return "player"
+        match = ROLE_NAME.search(str(record.get("name") or ""))
+        if match:
+            return "orchestrator" if match.group(1) == "orchestrator" else "player"
     return None
 
 
@@ -108,13 +108,11 @@ def sync_players(run_dir: pathlib.Path) -> None:
 
     ledger = explore.Ledger(run_dir)
     for record in spawn_records(run_dir):
-        name, child_file = str(record.get("name") or ""), str(record.get("child") or "")
-        if name.endswith("-explore-opener"):
-            attempt = 0
-        elif name.endswith("-explore-player"):
-            attempt = handoff_attempt(child_file)
-        else:
+        match = ROLE_NAME.search(str(record.get("name") or ""))
+        child_file = str(record.get("child") or "")
+        if match is None or match.group(1) == "orchestrator":
             continue
+        attempt = 0 if match.group(1) == "opener" else handoff_attempt(child_file)
         if attempt is None or ledger.player_session(attempt) is not None:
             continue
         ledger.add_player(attempt=attempt, child=str(record.get("childId") or ""), session_file=child_file)
@@ -176,11 +174,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--port-file", required=True)
+    parser.add_argument("--port", type=int, default=0, help="bind this port (a restart keeps the URL the daemon already has)")
     args = parser.parse_args(argv)
     run_dir = pathlib.Path(args.run_dir).resolve()
     os.environ["EXPLORE_RUN_DIR"] = str(run_dir)
     os.environ.pop("EXPLORE_SERVICE_URL", None)  # this process IS the service
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(run_dir))
+    ThreadingHTTPServer.allow_reuse_address = True
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(run_dir))
     port_file = pathlib.Path(args.port_file)
     tmp = port_file.with_suffix(".tmp")
     tmp.write_text(json.dumps({"url": f"http://127.0.0.1:{server.server_port}", "pid": os.getpid()}))

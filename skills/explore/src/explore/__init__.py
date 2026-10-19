@@ -279,6 +279,17 @@ def select(
         if problems:
             raise ValueError("; ".join(problems))
     attempt = ledger.attempts_started()
+    # A later select() in the same round (the orchestrator changed its mind,
+    # or a retried orchestrator chose again) SUPERSEDES the earlier one: its
+    # game server stops and its handoff goes, so only the latest decision
+    # block can start a player; an earlier block fails at spawn.
+    earlier = [r for r in ledger.records() if r.get("kind") == "selection" and r.get("attempt") == attempt]
+    if earlier:
+        finalize = getattr(adapter, "finalize", None)
+        if finalize is not None:
+            finalize(ledger.dir, attempt, reason="superseded by a later select")
+        for stale in (ledger.dir / "handoff").glob(f"attempt-{attempt}-*.jsonl"):
+            stale.unlink()
     restored = adapter.restore(chosen.env_handle, attempt=attempt, run_dir=ledger.dir)
     session_file = ledger.player_session(chosen.attempt)
     if session_file is None:
@@ -293,7 +304,7 @@ def select(
     session_ref = cut.fork_source()
     if session_ref:
         source = Path(session_ref["session_file"] if isinstance(session_ref, dict) else session_ref)
-        handoff = ledger.dir / "handoff" / f"attempt-{attempt}.jsonl"
+        handoff = ledger.dir / "handoff" / f"attempt-{attempt}-{len(earlier) + 1}.jsonl"
         handoff.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, handoff)
         session_ref = {**session_ref, "session_file": str(handoff)} if isinstance(session_ref, dict) else str(handoff)
