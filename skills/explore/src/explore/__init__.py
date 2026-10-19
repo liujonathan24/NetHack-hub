@@ -94,7 +94,11 @@ def _remote(call: str, **kwargs: Any) -> Any:
     import urllib.request
 
     url = os.environ["EXPLORE_SERVICE_URL"].rstrip("/") + "/call"
-    body = json.dumps({"call": call, "kwargs": kwargs}).encode()
+    # The caller's identity, attached by the client, never by the model: the
+    # kernel's private session directory (the sandbox shows each kernel only
+    # its own). The service maps it to the factory state that spawned it.
+    caller = os.environ.get("RLM_SESSION_DIR", "")
+    body = json.dumps({"call": call, "kwargs": kwargs, "caller": caller}).encode()
     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=3600) as response:
         reply = json.loads(response.read())
@@ -373,8 +377,9 @@ async def watch_players(
     run ends. Runs in the root kernel beside ``rlm.factory.run``."""
     from rlm import rlm as _rlm  # the kernel namespace; imported late so tests can patch it
 
-    remote = bool(os.environ.get("EXPLORE_SERVICE_URL")) and run_dir is None
-    ledger = None if remote else Ledger(run_dir)
+    if os.environ.get("EXPLORE_SERVICE_URL") and run_dir is None:
+        return  # the service reads players from the daemon's spawn ledger
+    ledger = Ledger(run_dir)
     seen: set[str] = set()
     while True:
         snapshot = await _rlm.factory.watch(run_id, poll_seconds)
@@ -391,10 +396,7 @@ async def watch_players(
                 if attempt is None:
                     continue
                 seen.add(child)
-                if remote:
-                    _remote("record_player", state=str(state_id), attempt=attempt, child=str(child), session_file=session_file)
-                else:
-                    ledger.add_player(attempt=attempt, child=str(child), session_file=session_file)
+                ledger.add_player(attempt=attempt, child=str(child), session_file=session_file)
         if snapshot.get("state") not in ("running", "stopping", "paused"):
             return
         if not snapshot.get("changed", True):

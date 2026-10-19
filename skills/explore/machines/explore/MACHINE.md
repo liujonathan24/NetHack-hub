@@ -20,13 +20,14 @@ The run ends when the orchestrator answers a decision without `next`
 (`explore.stop()`), or when the player state reaches its run limit.
 
 What each role sees. The orchestrator sees the leaderboard (through
-`explore.leaderboard(token=...)`) and the previous player's one-line
-summary. A player sees only the directive and the resume note: the
-`decision` input is hidden, so no leaderboard, no other attempt, no path,
-and no server token reaches a player. The ledger reads are gated by the
-run's orchestrator token (`{{EXPLORE_TOKEN}}` in this file, filled in per
-run; `explore.json` holds it), so a player that calls them by mistake is
-refused.
+`explore.leaderboard()`) and the previous player's one-line summary. A
+player sees only the directive and the resume note: the `decision` input
+is hidden, so no leaderboard, no other attempt, no path, and no server
+token reaches a player. The ledger calls are gated by the HARNESS, not by
+a key in a prompt: in a sandboxed run the explore client sends its kernel's
+private session directory with each call, and the explore service answers
+only the sessions the factory spawned as the orchestrator (and the root),
+so a player that calls them by mistake is refused.
 
 ## How to run it
 
@@ -68,7 +69,7 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
       "subagent": {
         "name": "explore-orchestrator",
         "fork_from": "self",
-        "prompt": "You are the orchestrator of a checkpointed exploration run. Your token is {{EXPLORE_TOKEN}}. An attempt just ended. Run `print(explore.leaderboard(token=\"{{EXPLORE_TOKEN}}\"))` and read it. Pick the one checkpoint the next player must start from, and write a directive for that player: strategy only, at most two sentences, at most 300 characters, no key names. Then run `result = explore.select(\"<checkpoint id>\", \"<directive>\", token=\"{{EXPLORE_TOKEN}}\")` and `print(explore.answer(result))`. If the run must end, run `print(explore.answer(explore.stop(\"<reason>\")))` instead. Every `run` above means: execute the code with your ipython tool. Code written in your message text runs nothing and ends the round with no decision. Your final answer is the printed fenced json block, copied exactly as printed, character for character, and nothing else. The previous player's summary, when it wrote one: {summary}"
+        "prompt": "You are the orchestrator of a checkpointed exploration run. An attempt just ended. Run `print(explore.leaderboard())` and read it. Pick the one checkpoint the next player must start from, and write a directive for that player: strategy only, at most two sentences, at most 300 characters, no key names. Then run `result = explore.select(\"<checkpoint id>\", \"<directive>\")` and `print(explore.answer(result))`. If the run must end, run `print(explore.answer(explore.stop(\"<reason>\")))` instead. Every `run` above means: execute the code with your ipython tool. Code written in your message text runs nothing and ends the round with no decision. Your final answer is the printed fenced json block, copied exactly as printed, character for character, and nothing else. The previous player's summary, when it wrote one: {summary}"
       }
     },
     {

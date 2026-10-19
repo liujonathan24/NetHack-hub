@@ -6,8 +6,12 @@ session directory, so it cannot read the ledger, the archive, another
 player's conversation, or our code. The orchestrator still needs
 ``leaderboard()`` and ``select()``; with ``EXPLORE_SERVICE_URL`` set, the
 ``explore`` package sends those calls here (``explore._remote``), and this
-process runs them against the run directory with the real adapter. The
-orchestrator token gates them exactly as in-process.
+process runs them against the run directory with the real adapter.
+
+Authorization is the harness's, never a key in a prompt: the client sends
+its kernel's private session directory (``RLM_SESSION_DIR``), and this
+service answers only the session the DAEMON's spawn ledger records as the
+root's ``explore-orchestrator`` child.
 
 Run by the driver::
 
@@ -26,8 +30,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from typing import Any
 
-#: The calls a kernel may make. Anything else is refused.
-CALLS = ("leaderboard", "rows", "select", "select_fixed", "record_player")
+#: The calls a kernel may make, all orchestrator-only. Anything else is refused.
+CALLS = ("leaderboard", "rows", "select", "select_fixed")
+ORCHESTRATOR_NAME_SUFFIX = "-explore-orchestrator"
+PLAYER_NAME_SUFFIXES = ("-explore-player", "-explore-opener")
+#: How long a caller the spawn ledger does not know yet is waited for.
+ROLE_WAIT_S = 30.0
 
 # One call at a time: select() boots and finalizes game servers and appends to
 # the ledger; the ledger is append-only but a selection must see the settle of
@@ -55,18 +63,79 @@ def handoff_attempt(session_file: str | None) -> int | None:
     return None
 
 
-def dispatch(run_dir: pathlib.Path, call: str, kwargs: dict[str, Any]) -> Any:
+def spawn_records(run_dir: pathlib.Path) -> list[dict]:
+    """The root's depth-1 children, from the DAEMON's spawn ledger
+    (``<agent>/rlm-ledger/*.jsonl``). Only the daemon writes it, outside the
+    agents' sandbox, so it is the authority on who is which role: a kernel
+    can neither write it nor see it."""
+    config = json.loads((run_dir / "explore.json").read_text(encoding="utf-8"))
+    agent_dir = pathlib.Path(config["agent_dir"])
+    root_file = json.loads((run_dir / "root_session.json").read_text(encoding="utf-8"))["sessionFile"]
+    records = []
+    for ledger_file in sorted((agent_dir / "rlm-ledger").glob("*.jsonl")):
+        for line in ledger_file.read_text(encoding="utf-8").splitlines():
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("op") == "spawn" and record.get("depth") == 1 and record.get("parent") == root_file:
+                records.append(record)
+    return records
+
+
+def caller_role(run_dir: pathlib.Path, caller: str) -> str | None:
+    """``orchestrator``, ``player`` or None for the kernel whose private
+    session directory is ``caller``. A child kernel's directory is named by
+    its session id, which is its spawn record's session file stem."""
+    session_id = pathlib.Path(caller or "/").name
+    if not session_id:
+        return None
+    for record in spawn_records(run_dir):
+        if pathlib.Path(str(record.get("child") or "")).stem != session_id:
+            continue
+        name = str(record.get("name") or "")
+        if name.endswith(ORCHESTRATOR_NAME_SUFFIX):
+            return "orchestrator"
+        if name.endswith(PLAYER_NAME_SUFFIXES):
+            return "player"
+    return None
+
+
+def sync_players(run_dir: pathlib.Path) -> None:
+    """Record each player's session file in the explore ledger from the spawn
+    ledger: the opener is attempt 0, a player is the attempt its handoff names."""
     import explore
 
-    if call == "record_player":
-        ledger = explore.Ledger(run_dir)
-        attempt = kwargs.get("attempt")
-        if kwargs.get("state") != "opener":
-            attempt = handoff_attempt(kwargs.get("session_file"))
-        if attempt is None:
-            return None  # a player that never forked from a handoff is no attempt
-        ledger.add_player(attempt=int(attempt), child=str(kwargs["child"]), session_file=kwargs.get("session_file"))
-        return int(attempt)
+    ledger = explore.Ledger(run_dir)
+    for record in spawn_records(run_dir):
+        name, child_file = str(record.get("name") or ""), str(record.get("child") or "")
+        if name.endswith("-explore-opener"):
+            attempt = 0
+        elif name.endswith("-explore-player"):
+            attempt = handoff_attempt(child_file)
+        else:
+            continue
+        if attempt is None or ledger.player_session(attempt) is not None:
+            continue
+        ledger.add_player(attempt=attempt, child=str(record.get("childId") or ""), session_file=child_file)
+
+
+def dispatch(run_dir: pathlib.Path, call: str, kwargs: dict[str, Any], caller: str) -> Any:
+    import time as _time
+
+    import explore
+
+    deadline = _time.time() + ROLE_WAIT_S
+    role = caller_role(run_dir, caller)
+    while role is None and _time.time() < deadline:
+        _time.sleep(1.0)
+        role = caller_role(run_dir, caller)
+    if role != "orchestrator":
+        raise explore.NotTheOrchestrator(
+            f"explore.{call} is for the orchestrator only; a player never reads the leaderboard or selects a checkpoint"
+        )
+    sync_players(run_dir)
+    kwargs.pop("token", None)
     function = getattr(explore, call)
     return function(**{**kwargs, "run_dir": run_dir})
 
@@ -84,7 +153,7 @@ def make_handler(run_dir: pathlib.Path):
                 if call not in CALLS:
                     raise PermissionError(f"explore service: {call!r} is not a remote call")
                 with _LOCK:
-                    result = dispatch(run_dir, call, dict(body.get("kwargs") or {}))
+                    result = dispatch(run_dir, call, dict(body.get("kwargs") or {}), str(body.get("caller") or ""))
                 reply = {"ok": True, "result": result}
             except Exception as error:  # noqa: BLE001 - the kernel re-raises it
                 reply = {

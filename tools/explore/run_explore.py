@@ -136,6 +136,7 @@ def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pa
 
 
 import argparse
+import contextlib
 import json
 import re
 import os
@@ -162,8 +163,8 @@ ROOT_PROMPT = """You run a checkpointed-exploration experiment. Do exactly this 
    Stop looping when `snap["state"]` is not "running" and not "stopping".
    If it is "paused", print `snap["pause_reason"]` and run
    `await rlm.factory.resume(result["run_id"])`, then keep looping.
-3. When the run has ended, print `explore.leaderboard(100, token="{{EXPLORE_TOKEN}}")`
-   and the run's `rlm.factory.status(result["run_id"])["usage"]` and `["events"]`. Then stop.
+3. When the run has ended, print the run's `rlm.factory.status(result["run_id"])["usage"]`
+   and `["events"]`. Then stop.
 
 Rules. Never start a second run. Never install, upgrade, or remove Python
 packages. Never edit files. Do not try to repair anything: if something fails,
@@ -398,6 +399,8 @@ def main(argv=None) -> int:
             "pythonpath": pythonpath,
             "env_dir": str(ENV_DIR),
             "archive": str(run_dir / "archive"),
+            # The service reads roles from the daemon's spawn ledger here.
+            "agent_dir": str(pathlib.Path(args.agent_dir).resolve() if args.agent_dir else run_dir / "agent"),
             "seed": args.seed,
             "character": args.character,
             "task_spec": "full_nle",
@@ -410,13 +413,8 @@ def main(argv=None) -> int:
             "workspace": str(workspace) if workspace else None,
             "single_life": args.single_life,
             "attempts": args.attempts,
-            # The orchestrator-only token: gates explore.leaderboard() and
-            # explore.select(); the machine copy below carries it in the
-            # orchestrator's prompt, and only there.
-            "orchestrator_token": uuid.uuid4().hex,
         },
     )
-    orchestrator_token = json.loads((run_dir / "explore.json").read_text(encoding="utf-8"))["orchestrator_token"]
 
     # The machine with this run's attempt count (a copy of the library machine).
     machines_dir = run_dir / "machines"
@@ -424,7 +422,6 @@ def main(argv=None) -> int:
     text = source.read_text(encoding="utf-8")
     text = text.replace('"max_entries": 29', f'"max_entries": {max(1, args.attempts - 1)}')
     text = text.replace('"max_transitions": 64', f'"max_transitions": {2 * args.attempts + 2}')
-    text = text.replace("{{EXPLORE_TOKEN}}", orchestrator_token)
     if args.single_life:
         text = single_life_machine(text)
     (machines_dir / "explore").mkdir(parents=True, exist_ok=True)
@@ -529,7 +526,7 @@ def main(argv=None) -> int:
         if value:
             model_flags += [flag, value]
     # The Rust CLI takes the print-mode message right after --print (no `--` arm).
-    command = [args.prime_agent, "--print", ROOT_PROMPT.replace("{{EXPLORE_TOKEN}}", orchestrator_token), *model_flags, *args.prime_agent_args]
+    command = [args.prime_agent, "--print", ROOT_PROMPT, *model_flags, *args.prime_agent_args]
     (run_dir / "command.json").write_text(json.dumps({"mode": args.mode, "print_command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "PRIME_AGENT_MACHINES_DIR", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER")}}, indent=2) + "\n", encoding="utf-8")
     if args.mode == "print":
         print("prime-agent command:", " ".join([command[0], "--print", "<prompt>", *command[3:]]), flush=True)
@@ -546,10 +543,16 @@ def main(argv=None) -> int:
     code = run_daemon_session(
         prime_agent=args.prime_agent, run_dir=run_dir, agent_dir=agent_dir, env=env,
         provider=args.provider, model=args.model, thinking=args.thinking,
-        prompt=ROOT_PROMPT.replace("{{EXPLORE_TOKEN}}", orchestrator_token), wait_hours=args.wait_hours,
+        prompt=ROOT_PROMPT, wait_hours=args.wait_hours,
         cwd=workspace,
     )
     service["process"].terminate()
+    # The final leaderboard, read here, outside the sandbox: no kernel needs
+    # ledger access after the orchestrator's last round.
+    import explore  # noqa: E402
+
+    with contextlib.suppress(Exception):
+        print("--- final leaderboard ---\n" + explore.leaderboard(100, run_dir=run_dir), flush=True)
     print(f"run ended ({code}); see {run_dir / 'ledger.jsonl'} and {run_dir / 'root.log'}", flush=True)
     return code
 

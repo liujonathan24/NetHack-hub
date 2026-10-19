@@ -194,9 +194,11 @@ class SelectTest(unittest.TestCase):
             self.assertIn("c0", explore.leaderboard(token="t0k3n", run_dir=run))
             result = explore.select("c0", "Explore.", token="t0k3n", run_dir=run, adapter=explore.ScriptedAdapter())
             self.assertEqual(result["decision"]["next"]["checkpoint"], "c0")
-            # The machine's prompt carries the placeholder the driver fills.
+            # No key rides any prompt: in a sandboxed run the explore service
+            # authorizes the orchestrator by its session (test_service.py).
             machine = (HERE.parent / "machines" / "explore" / "MACHINE.md").read_text(encoding="utf-8")
-            self.assertIn("{{EXPLORE_TOKEN}}", machine)
+            self.assertNotIn("TOKEN", machine)
+            self.assertNotIn("token=", machine)
 
     def test_leaderboard_and_select_settle_the_previous_attempt_first(self) -> None:
         class RecordingAdapter(explore.ScriptedAdapter):
