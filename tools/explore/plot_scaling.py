@@ -38,13 +38,14 @@ def attempt_scores(run_dir: pathlib.Path) -> list[dict]:
         if best is None or (dlvl, xl) > (best["dlvl"], best["xl"]):
             outcomes[attempt] = {"attempt": attempt, "dlvl": dlvl, "xl": xl, "result": record.get("result"),
                                  "reason": record.get("reason") or ""}
-    rows, best_max, best_min, best_dlvl = [], 0.0, 0.0, 0
+    rows, best_max, best_min, best_dlvl, best_xl = [], 0.0, 0.0, 0, 0
     for attempt in sorted(outcomes):
         o = outcomes[attempt]
         bmax, bmin = balrog_both(o["dlvl"], o["xl"])
-        best_max, best_min, best_dlvl = max(best_max, bmax), max(best_min, bmin), max(best_dlvl, o["dlvl"])
-        rows.append({**o, "balrog_max": bmax, "balrog_min": bmin,
-                     "best_balrog_max": best_max, "best_balrog_min": best_min, "best_dlvl": best_dlvl})
+        best_max, best_min = max(best_max, bmax), max(best_min, bmin)
+        best_dlvl, best_xl = max(best_dlvl, o["dlvl"]), max(best_xl, o["xl"])
+        rows.append({**o, "balrog_max": bmax, "balrog_min": bmin, "best_balrog_max": best_max,
+                     "best_balrog_min": best_min, "best_dlvl": best_dlvl, "best_xl": best_xl})
     return rows
 
 
@@ -63,25 +64,26 @@ def main(argv=None) -> int:
     for spec in args.runs:
         label, _, path = spec.partition("=")
         series[label] = attempt_scores(pathlib.Path(path))
-    fig, (ax_score, ax_dlvl) = plt.subplots(1, 2, figsize=(9.0, 3.4), gridspec_kw={"width_ratios": [1.6, 1]})
-    for label, rows in series.items():
-        if not rows:
-            continue
-        x = [r["attempt"] + 1 for r in rows]
-        line, = ax_score.plot(x, [100 * r["best_balrog_max"] for r in rows], marker="o", label=label)
-        ax_score.plot(x, [100 * r["best_balrog_min"] for r in rows], marker="o", linestyle="--",
-                      color=line.get_color(), alpha=0.6)
-        ax_dlvl.plot(x, [r["best_dlvl"] for r in rows], marker="o", color=line.get_color())
-    ax_score.set_xlabel("attempt")
-    ax_score.set_ylabel("best BALROG progression so far (%)\nsolid: max, dashed: min")
-    ax_dlvl.set_xlabel("attempt")
-    ax_dlvl.set_ylabel("best Dlvl so far")
-    for ax in (ax_score, ax_dlvl):
+    panels = [
+        ("best_balrog_min", 100, "BALROG progression, min (%)"),
+        ("best_balrog_max", 100, "BALROG progression, max (%)"),
+        ("best_dlvl", 1, "deepest Dlvl"),
+        ("best_xl", 1, "highest XL"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(9.0, 6.4), sharex=True)
+    for ax, (key, scale, title) in zip(axes.flat, panels):
+        for label, rows in series.items():
+            if rows:
+                ax.plot([r["attempt"] + 1 for r in rows], [scale * r[key] for r in rows], marker="o", label=label)
+        ax.set_title(f"{title}, best so far", fontsize=10)
         ax.grid(alpha=0.3)
         ax.xaxis.get_major_locator().set_params(integer=True)
-    ax_score.legend(fontsize=8, frameon=False)
-    fig.suptitle("Prime-Agent-Explore on NetHack, seed 1 (attempt 1 = a plain first life)", fontsize=10)
-    fig.tight_layout()
+    for ax in axes[1]:
+        ax.set_xlabel("attempt")
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False, fontsize=9)
+    fig.suptitle("Prime-Agent-Explore on NetHack, seed 1 (attempt 1 = a plain first life)", fontsize=11)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
     out = pathlib.Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out.with_suffix(".pdf"))
