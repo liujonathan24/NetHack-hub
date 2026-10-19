@@ -365,6 +365,9 @@ def main(argv=None) -> int:
     parser.add_argument("--thinking", default=None, help="off, minimal, low, medium, high")
     parser.add_argument("--mode", choices=("daemon", "print"), default="daemon", help="daemon (subagents work) or the in-process --print path (no subagents)")
     parser.add_argument("--wait-hours", type=float, default=6.0, help="how long to wait for the run to finish")
+    parser.add_argument("--context-window", type=int, default=None, help="the model's REAL context window in tokens, when Prime Agent's catalog overstates it (Qwen/Qwen3.5-9B on Prime: catalog 262144, served 65536); compaction is computed against it")
+    parser.add_argument("--max-output-tokens", type=int, default=8192, help="with --context-window: the reply budget, so prompt + reply fits the window")
+    parser.add_argument("--compaction-threshold-percent", type=float, default=80.0, help="with --context-window: compact at this share of the window")
     parser.add_argument("--no-sandbox", dest="sandbox", action="store_false", help="run the agents' kernels unsandboxed (default: one bwrap per kernel, which sees only the workspace and its own session)")
     parser.add_argument("--dry-run", action="store_true", help="set everything up and print the command; do not start prime-agent")
     parser.add_argument("prime_agent_args", nargs="*", help="arguments after -- go to prime-agent")
@@ -468,6 +471,17 @@ def main(argv=None) -> int:
     servers = settings.get("mcpServers") if isinstance(settings.get("mcpServers"), dict) else {}
     servers["nethack"] = {"type": "http", "url": server["url"], "bearerTokenEnvVar": "NETHACK_MCP_TOKEN"}
     settings["mcpServers"] = servers
+    if args.context_window:
+        # Prime Agent compacts against the model's catalog window; a provider
+        # that serves less overflows before compaction ever runs. Override the
+        # window (and cap the reply) for this model in this run's agent dir.
+        provider_id = args.provider or "prime-inference"
+        models_path = agent_dir / "models.json"
+        models = json.loads(models_path.read_text(encoding="utf-8")) if models_path.is_file() else {}
+        overrides = models.setdefault("providers", {}).setdefault(provider_id, {}).setdefault("modelOverrides", {})
+        overrides[args.model] = {"contextWindow": int(args.context_window), "maxTokens": int(args.max_output_tokens)}
+        write_json(models_path, models)
+        settings.setdefault("compaction", {}).update({"enabled": True, "thresholdPercent": float(args.compaction_threshold_percent)})
     write_json(agent_dir / "settings.json", settings)
     env = dict(os.environ)
     env.update(
