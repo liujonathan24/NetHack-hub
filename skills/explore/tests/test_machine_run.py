@@ -287,6 +287,51 @@ class WatchPlayersTest(unittest.TestCase):
             players = Ledger(temp).players()
             self.assertEqual([(p.attempt, p.child, p.session_file) for p in players], [(0, "sub-a", "/s/a.jsonl"), (1, "sub-p", "/s/p.jsonl")])
 
+    def test_watch_players_resumes_a_pause_and_reports_the_end_in_service_mode(self) -> None:
+        # The root ends its turn after starting the run, so its kernel's
+        # watcher resumes a paused run and reports the end to the service.
+        snapshots = [{"state": "paused"}, {"state": "running"}, {"state": "done"}]
+        calls: list[tuple] = []
+
+        class FakeFactory:
+            async def watch(self, run_id, timeout):
+                return snapshots.pop(0)
+
+            async def resume(self, run_id):
+                calls.append(("resume", run_id))
+
+            async def status(self, run_id):
+                return {"state": "done", "usage": {"turns": 3}, "events": [{"seq": 1}]}
+
+        class FakeRlm:
+            factory = FakeFactory()
+
+        import types
+
+        fake_module = types.SimpleNamespace(rlm=FakeRlm())
+        remote = lambda call, **kwargs: calls.append((call, kwargs))  # noqa: E731
+        with patch.dict(sys.modules, {"rlm": fake_module}), patch.dict(
+            os.environ, {"EXPLORE_SERVICE_URL": "http://127.0.0.1:9"}
+        ), patch.object(explore, "_remote", remote):
+            asyncio.run(explore.watch_players("run-1", poll_seconds=0))
+        self.assertEqual(
+            calls,
+            [
+                ("resume", "run-1"),
+                (
+                    "run_ended",
+                    {
+                        "run_id": "run-1",
+                        "state": "done",
+                        "resumes": 1,
+                        "pause_reason": None,
+                        "usage": {"turns": 3},
+                        "events": [{"seq": 1}],
+                    },
+                ),
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

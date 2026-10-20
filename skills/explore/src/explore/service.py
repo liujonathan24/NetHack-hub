@@ -11,7 +11,8 @@ process runs them against the run directory with the real adapter.
 Authorization is the harness's, never a key in a prompt: the client sends
 its kernel's private session directory (``RLM_SESSION_DIR``), and this
 service answers only the session the DAEMON's spawn ledger records as the
-root's ``explore-orchestrator`` child.
+root's ``explore-orchestrator`` child, and ``run_ended`` only from the root
+session itself (its watcher reports the run's end; the driver waits for it).
 
 Run by the driver::
 
@@ -31,8 +32,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Lock
 from typing import Any
 
-#: The calls a kernel may make, all orchestrator-only. Anything else is refused.
-CALLS = ("leaderboard", "rows", "select", "select_fixed")
+#: The calls a kernel may make. Anything else is refused.
+ORCHESTRATOR_CALLS = ("leaderboard", "rows", "select", "select_fixed")
+ROOT_CALLS = ("run_ended",)
+CALLS = ORCHESTRATOR_CALLS + ROOT_CALLS
+#: Where ``run_ended`` writes the run's final factory status.
+RUN_END_FILE = "run_end.json"
 # Factory child names (factory._child_name): "<run prefix>-explore-<state>",
 # then "-i<N>" on a state's re-entry and "-a<N>" on a retry of a round that
 # bound no decision, in that order.
@@ -87,12 +92,16 @@ def spawn_records(run_dir: pathlib.Path) -> list[dict]:
 
 
 def caller_role(run_dir: pathlib.Path, caller: str) -> str | None:
-    """``orchestrator``, ``player`` or None for the kernel whose private
-    session directory is ``caller``. A child kernel's directory is named by
-    its session id, which is its spawn record's session file stem."""
+    """``root``, ``orchestrator``, ``player`` or None for the kernel whose
+    private session directory is ``caller``. A kernel's directory is named by
+    its session id, which is its session file's stem (the root's is in
+    ``root_session.json``, a child's in its spawn record)."""
     session_id = pathlib.Path(caller or "/").name
     if not session_id:
         return None
+    root_file = json.loads((run_dir / "root_session.json").read_text(encoding="utf-8"))["sessionFile"]
+    if pathlib.Path(root_file).stem == session_id:
+        return "root"
     for record in spawn_records(run_dir):
         if pathlib.Path(str(record.get("child") or "")).stem != session_id:
             continue
@@ -129,6 +138,11 @@ def dispatch(run_dir: pathlib.Path, call: str, kwargs: dict[str, Any], caller: s
     while role is None and _time.time() < deadline:
         _time.sleep(1.0)
         role = caller_role(run_dir, caller)
+    if call in ROOT_CALLS:
+        if role != "root":
+            raise explore.NotTheOrchestrator(f"explore.{call} is for the root session only")
+        (run_dir / RUN_END_FILE).write_text(json.dumps(kwargs, indent=2, default=str) + "\n", encoding="utf-8")
+        return None
     if role != "orchestrator":
         raise explore.NotTheOrchestrator(
             f"explore.{call} is for the orchestrator only; a player never reads the leaderboard or selects a checkpoint"

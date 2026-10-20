@@ -71,6 +71,17 @@ class ServiceRolesTest(unittest.TestCase):
         text = service.dispatch(self.run, "leaderboard", {}, self.session_dir("s-orch"))
         self.assertIsInstance(text, str)
 
+    def test_only_the_root_may_report_the_run_end(self) -> None:
+        self.assertEqual(service.caller_role(self.run, self.session_dir("root-0")), "root")
+        for caller in ("s-orch", "s-player", "nobody"):
+            with self.assertRaises(explore.NotTheOrchestrator):
+                service.dispatch(self.run, "run_ended", {"state": "done"}, self.session_dir(caller))
+        self.assertFalse((self.run / service.RUN_END_FILE).exists())
+        with self.assertRaises(explore.NotTheOrchestrator):
+            service.dispatch(self.run, "leaderboard", {}, self.session_dir("root-0"))
+        service.dispatch(self.run, "run_ended", {"state": "done"}, self.session_dir("root-0"))
+        self.assertEqual(json.loads((self.run / service.RUN_END_FILE).read_text()), {"state": "done"})
+
     def test_players_map_to_attempts_by_their_handoff(self) -> None:
         service.sync_players(self.run)
         ledger = explore.Ledger(self.run)

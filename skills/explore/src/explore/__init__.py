@@ -365,18 +365,32 @@ async def watch_players(
     player_state: str = "player",
     opener_state: str = "opener",
     poll_seconds: float = 5.0,
+    max_resumes: int = 3,
 ) -> None:
-    """Record every spawned player's session file into the ledger until the
-    run ends. Runs in the root kernel beside ``rlm.factory.run``."""
+    """Watch the run to its end from the root kernel, beside
+    ``rlm.factory.run``: resume a paused run (at most ``max_resumes``
+    times), and record every spawned player's session file into the ledger.
+
+    In service mode the service reads players from the daemon's spawn
+    ledger instead, and this reports the run's final status to it
+    (``run_ended``): the root ends its turn after starting the run (a child's
+    task prompt waits for the parent turn that spawned it, so a root that
+    watched in its own turn would delay every child by a minute), and the
+    driver waits for this report."""
     from rlm import rlm as _rlm  # the kernel namespace; imported late so tests can patch it
 
-    if os.environ.get("EXPLORE_SERVICE_URL") and run_dir is None:
-        return  # the service reads players from the daemon's spawn ledger
-    ledger = Ledger(run_dir)
+    remote = bool(os.environ.get("EXPLORE_SERVICE_URL")) and run_dir is None
+    ledger = None if remote else Ledger(run_dir)
     seen: set[str] = set()
+    resumes = 0
     while True:
         snapshot = await _rlm.factory.watch(run_id, poll_seconds)
-        for node in snapshot.get("nodes") or []:
+        state = snapshot.get("state")
+        if state == "paused" and resumes < max_resumes:
+            resumes += 1
+            await _rlm.factory.resume(run_id)
+            continue
+        for node in [] if ledger is None else snapshot.get("nodes") or []:
             state_id = node.get("id")
             for instance in node.get("instances") or []:
                 child = instance.get("child")
@@ -390,10 +404,21 @@ async def watch_players(
                     continue
                 seen.add(child)
                 ledger.add_player(attempt=attempt, child=str(child), session_file=session_file)
-        if snapshot.get("state") not in ("running", "stopping", "paused"):
-            return
+        if state not in ("running", "stopping") and not (state == "paused" and resumes < max_resumes):
+            break
         if not snapshot.get("changed", True):
             await asyncio.sleep(0)
+    if remote:
+        status = await _rlm.factory.status(run_id)
+        _remote(
+            "run_ended",
+            run_id=run_id,
+            state=status.get("state"),
+            resumes=resumes,
+            pause_reason=status.get("pause_reason"),
+            usage=status.get("usage"),
+            events=status.get("events"),
+        )
 
 
 async def run(machine: str = MACHINE_NAME, *, run_dir: str | Path | None = None, name: str | None = None) -> dict[str, Any]:

@@ -11,8 +11,8 @@ What it does, in order:
 1. writes <run-dir>/explore.json (the adapter config) and the archive dir;
 2. boots the attempt-0 game server through the adapter (the opener plays it);
 3. writes a private agent dir: settings.json with the attempt-0 MCP server,
-   `factory.enabled`, and symlinked skills (explore, nethack); the explore
-   machine library is pointed at through PRIME_AGENT_MACHINES_DIR;
+   `factory.enabled`, idle eviction off, symlinked skills (explore, nethack),
+   and the explore machine in the user machine library (`<agent dir>/machines`);
 4. runs `prime-agent --print` with a prompt that calls `explore.run("explore")`
    and watches the run to its end.
 
@@ -107,10 +107,23 @@ def run_daemon_session(*, prime_agent: str, run_dir: pathlib.Path, agent_dir: pa
         (run_dir / "root_session.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         client.command({"type": "prompt", "activeSessionId": session_id, "message": prompt, "source": "rpc"})
         print("prompt admitted; waiting for the run to end ...", flush=True)
-        client.command(
-            {"type": "wait_for_headless_completion", "activeSessionId": session_id, "waitForRlmQuiescence": True},
-            timeout_s=wait_hours * 3600,
-        )
+        # The root's turn ends right after it starts the run, so quiescence
+        # alone can return between one child's settle and the next spawn: the
+        # run is over when the root's watcher has reported it (run_end.json).
+        run_end = run_dir / "run_end.json"
+        deadline = time.time() + wait_hours * 3600
+        while True:
+            client.command(
+                {"type": "wait_for_headless_completion", "activeSessionId": session_id, "waitForRlmQuiescence": True},
+                timeout_s=max(60.0, deadline - time.time()),
+            )
+            if run_end.exists():
+                break
+            if time.time() > deadline:
+                raise RuntimeError(f"the run did not end within {wait_hours} h (no {run_end})")
+            time.sleep(5.0)
+        ended = json.loads(run_end.read_text(encoding="utf-8"))
+        print(f"run ended: state {ended.get('state')}, resumes {ended.get('resumes')}", flush=True)
         last = client.command({"type": "get_last_assistant_text", "activeSessionId": session_id})
         text = (last.get("data") or {}).get("text") if isinstance(last.get("data"), dict) else last.get("data")
         (run_dir / "root.log").write_text(json.dumps(text, indent=2) if not isinstance(text, str) else text, encoding="utf-8")
@@ -155,20 +168,23 @@ SKILLS_DIR = REPO / "skills"
 NETHACK_SKILL = REPO / "harnesses" / "nethack-prime-agent" / "nethack_prime_agent" / "skill"
 ENGINE = pathlib.Path(os.environ.get("NETHACK_ENGINE", "/root/NetHack-engine"))
 
-ROOT_PROMPT = """You run a checkpointed-exploration experiment. Do exactly this and nothing else.
+# The root starts the run and ENDS ITS TURN: a child's task prompt waits for
+# the parent turn that spawned it (Prime Agent's TURN_DONE_WAIT_SECS, 60 s), so
+# a root that watched the run inside its own turn delayed every child by a
+# minute. explore.run's watcher (in the root kernel) resumes a paused run and
+# reports the end to the service; the driver waits for that report.
+ROOT_PROMPT = """You start a checkpointed-exploration experiment. Do exactly this and nothing else.
 
 1. Run `result = await explore.run("explore")` and print `result["run_id"]`. Run it ONCE.
-2. Then loop: `snap = await rlm.factory.watch(result["run_id"], 60)`; print one line
-   with `snap["state"]` and the `entries_used` of each node in `snap["nodes"]`.
-   Stop looping when `snap["state"]` is not "running" and not "stopping".
-   If it is "paused", print `snap["pause_reason"]` and run
-   `await rlm.factory.resume(result["run_id"])`, then keep looping.
-3. When the run has ended, print the run's `rlm.factory.status(result["run_id"])["usage"]`
-   and `["events"]`. Then stop.
+2. Then end your turn with the single word: started
+
+The harness watches the run to its end; you do not. While the run goes on you
+will receive notices about child agents. Answer each one with the single word
+noted, and run no code: never call rlm.factory, never wait, never start a run.
 
 Rules. Never start a second run. Never install, upgrade, or remove Python
 packages. Never edit files. Do not try to repair anything: if something fails,
-print the error and the run's status and stop.
+print the error and stop.
 """
 
 
@@ -416,8 +432,10 @@ def main(argv=None) -> int:
         },
     )
 
-    # The machine with this run's attempt count (a copy of the library machine).
-    machines_dir = run_dir / "machines"
+    agent_dir = pathlib.Path(args.agent_dir).resolve() if args.agent_dir else run_dir / "agent"
+    # The machine with this run's attempt count, a copy of the library machine
+    # in the agent dir's user machine library (`<agent dir>/machines`).
+    machines_dir = agent_dir / "machines"
     source = SKILLS_DIR / "explore" / "machines" / "explore" / "MACHINE.md"
     text = source.read_text(encoding="utf-8")
     text = text.replace('"max_entries": 29', f'"max_entries": {max(1, args.attempts - 1)}')
@@ -443,7 +461,6 @@ def main(argv=None) -> int:
         machine = machines_dir / "explore" / "MACHINE.md"
         machine.write_text(control_opener_machine(machine.read_text(encoding="utf-8"), task["prompt"]), encoding="utf-8")
 
-    agent_dir = pathlib.Path(args.agent_dir).resolve() if args.agent_dir else run_dir / "agent"
     link(SKILLS_DIR / "explore", agent_dir / "skills" / "explore")
     link(NETHACK_SKILL, agent_dir / "skills" / "nethack")
     # Merge into the existing settings (a logged-in agent dir keeps its
@@ -462,6 +479,9 @@ def main(argv=None) -> int:
             "onboardingShown": True,
             "quietStartup": True,
             "factory": {"enabled": True},
+            # The factory's executor lives in the root kernel, and the root
+            # ends its turn while the run goes on: never evict the idle root.
+            "idleEvictionMinutes": "off",
             "autoRefine": {"enabled": False, "compact": False},
         }
     )
@@ -499,7 +519,6 @@ def main(argv=None) -> int:
             # ~/.prime/agent/kernel-venv the 0.3.3 install and other runs use
             # (it would rebuild it with its own runtime); one venv per run.
             "PRIME_AGENT_KERNEL_VENV": str((agent_dir / "kernel-venv") if args.agent_dir else (run_dir / "kernel-venv")),
-            "PRIME_AGENT_MACHINES_DIR": str(machines_dir),
             "EXPLORE_RUN_DIR": str(run_dir),
             # The adapter loads from its file: the kernel venv must NOT get a
             # PYTHONPATH into the repo (the env's nethack.py would shadow the
@@ -527,7 +546,7 @@ def main(argv=None) -> int:
             model_flags += [flag, value]
     # The Rust CLI takes the print-mode message right after --print (no `--` arm).
     command = [args.prime_agent, "--print", ROOT_PROMPT, *model_flags, *args.prime_agent_args]
-    (run_dir / "command.json").write_text(json.dumps({"mode": args.mode, "print_command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "PRIME_AGENT_MACHINES_DIR", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER")}}, indent=2) + "\n", encoding="utf-8")
+    (run_dir / "command.json").write_text(json.dumps({"mode": args.mode, "print_command": command, "env": {k: env[k] for k in ("PRIME_AGENT_CODING_AGENT_DIR", "PRIME_AGENT_KERNEL_VENV", "EXPLORE_RUN_DIR", "EXPLORE_ADAPTER")}}, indent=2) + "\n", encoding="utf-8")
     if args.mode == "print":
         print("prime-agent command:", " ".join([command[0], "--print", "<prompt>", *command[3:]]), flush=True)
     else:
