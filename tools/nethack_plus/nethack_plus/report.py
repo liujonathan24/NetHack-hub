@@ -68,7 +68,11 @@ def summary(run: Path) -> str:
     price = prime.prices(manifest["model"])
     lines = [
         f"run {run.name}: {manifest['mode']}, {manifest['model']}, seeds {manifest['seeds']}, reps {manifest['reps']}"
-        + (f", attempts {manifest['attempts']}" if manifest["mode"] == "explore" else "")
+        + (
+            f", attempts {manifest['attempts']}, {manifest.get('parallel', 1)} at a time"
+            if manifest["mode"] == "explore"
+            else ""
+        )
     ]
     for arm in arms(run):
         rows = [r for e in episodes(arm) if (r := run_row(e, price)) is not None]

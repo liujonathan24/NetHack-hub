@@ -9,7 +9,7 @@ uv tool install "nethack-plus @ git+https://github.com/liujonathan24/NetHack-hub
 prime login            # or export PRIME_API_KEY
 
 # 5 seeds, 1 run each, up to 15 explore attempts per run, both libraries, map revealed
-nethack-plus explore -n 5 -r 1 -a 15 --skills netcore,codehack --full-vision
+nethack-plus explore -n 5 -r 1 -a 15 -p 3 --skills netcore,codehack --full-vision
 
 # the same games played once each, 15 times per seed
 nethack-plus single -n 5 -r 15 --skills netcore,codehack --full-vision
@@ -41,6 +41,7 @@ It needs its own environment (`uv tool install`, or `uv sync` here): the Hub's o
 | `-n`, `--seeds` | 5 | seeds from `--seed-base` (0) |
 | `-r`, `--reps` | 1 | independent runs per seed |
 | `-a`, `--attempts` | 10 | explore only: most attempts per run |
+| `-p`, `--parallel` | 3 | explore only: attempts played at once, in rounds; the chooser picks a checkpoint and directive for each player of the next round. 1 is the Hub machine's one-at-a-time loop |
 | `-m`, `--model` | `deepseek/deepseek-v4.1-flash-1017` | a Prime inference model; in explore it also chooses |
 | `--skills` | `netcore` | `netcore`, `codehack`, or `netcore,codehack` |
 | `--full-vision` | off | reveal the whole map (off: fog of war) |
