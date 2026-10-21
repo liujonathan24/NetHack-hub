@@ -296,7 +296,7 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
     the skills' files (read-only), the workspace, and its OWN session
     directory. It does not see the run directory, the agent dir (other
     sessions, the shared memory store), /root/nld, or any other repo. The
-    root kernel (RLM_DEPTH=0) also sees the machines dir: it starts the
+    root kernel (its session dir sits directly under the agent dir) also sees the machines dir: it starts the
     factory. Network stays shared (the game's MCP server and the explore
     service are on localhost).
 
@@ -347,7 +347,11 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
         f'args+=(--bind "{workspace}" "{workspace}" --chdir "{workspace}")',
         'if [ -n "$RLM_SESSION_DIR" ]; then mkdir -p "$RLM_SESSION_DIR"; args+=(--bind "$RLM_SESSION_DIR" "$RLM_SESSION_DIR"); fi',
         'if [ -n "$RLM_HARNESS_STATE_DIR" ]; then mkdir -p "$RLM_HARNESS_STATE_DIR"; args+=(--bind "$RLM_HARNESS_STATE_DIR" "$RLM_HARNESS_STATE_DIR"); fi',
-        f'if [ "${{RLM_DEPTH:-0}}" = "0" ]; then args+=(--ro-bind "{machines_dir}" "{machines_dir}"); fi',
+        # Only the root's kernel sees the machines dir. RLM_DEPTH never reaches
+        # a kernel (the supervisor strips it), so the test is the session dir's
+        # place: the root's is <agent>/session-artifacts/<id>, a child's is one
+        # level deeper, under its root's.
+        f'if [ -n "$RLM_SESSION_DIR" ] && [ "$(dirname "$(dirname "$RLM_SESSION_DIR")")" = "{agent_dir}" ]; then args+=(--ro-bind "{machines_dir}" "{machines_dir}"); fi',
     ]
     if memory_gb:
         lines.append(f"ulimit -v {int(memory_gb * 1024 * 1024)}")
