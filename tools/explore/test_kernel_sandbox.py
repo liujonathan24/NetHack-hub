@@ -77,10 +77,11 @@ class KernelWrapperTest(unittest.TestCase):
         # A restart of the same session finds its copy, not a fresh one.
         self.start(player)
         self.assertEqual((own_player / "memory" / "notes.md").read_text(), "DIED on Dlvl 8\n")
-        # No session dir: a throwaway copy.
-        anonymous = pathlib.Path(self.bound_at(self.start(None), self.workspace))
-        self.assertTrue(anonymous.name.startswith("no-session-"))
-        self.assertTrue((anonymous / "AGENTS.md").is_file())
+        # No session dir (the kernel venv's setup probes): no workspace at all.
+        anonymous = self.start(None)
+        self.assertNotIn(str(self.workspace), anonymous)
+        self.assertEqual(anonymous[anonymous.index("--chdir") + 1], "/tmp")
+        self.assertEqual(sorted(path.name for path in (self.run / "workspaces").iterdir()), ["player-1", "player-2", "root-1"])
 
     def test_only_the_roots_kernel_sees_the_machines_dir(self) -> None:
         machines = str(self.agent / "machines")

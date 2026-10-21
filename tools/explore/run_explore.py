@@ -306,8 +306,8 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
     bound at the workspace's path, so the paths a kernel sees are the same
     as in the base arm. Nothing one agent writes reaches another (a shared
     workspace carried notes from attempt to attempt). A kernel restart of
-    the same session finds its copy again. A kernel without a session dir
-    (none is known to start one) gets a throwaway copy.
+    the same session finds its copy again. A process without a session dir
+    (the kernel venv's setup probes) gets no workspace at all.
 
     Each kernel also gets an address-space limit of `memory_gb` (0 = none).
     A cell that allocates past it gets a MemoryError and the kernel lives;
@@ -358,11 +358,15 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
         own_root = run_dir / "workspaces"
         lines += [
             f'mkdir -p "{own_root}"',
-            f'if [ -n "$RLM_SESSION_DIR" ]; then OWN="{own_root}/$(basename "$RLM_SESSION_DIR")"; else OWN="$(mktemp -d "{own_root}/no-session-XXXXXX")"; rmdir "$OWN"; fi',
             # Seed once, atomically: a concurrent start of the same session
             # loses the rename and drops its copy.
-            f'if [ ! -d "$OWN" ]; then seed="$OWN.seed-$$"; cp -a "{template}" "$seed"; mv -T "$seed" "$OWN" 2>/dev/null || rm -rf "$seed"; fi',
-            f'args+=(--bind "$OWN" "{workspace}" --chdir "{workspace}")',
+            f'if [ -n "$RLM_SESSION_DIR" ]; then OWN="{own_root}/$(basename "$RLM_SESSION_DIR")";',
+            f'  if [ ! -d "$OWN" ]; then seed="$OWN.seed-$$"; cp -a "{template}" "$seed"; mv -T "$seed" "$OWN" 2>/dev/null || rm -rf "$seed"; fi',
+            f'  args+=(--bind "$OWN" "{workspace}" --chdir "{workspace}")',
+            # No session: the kernel venv's setup probes (`python -c "import
+            # pandas"` and the like, about a hundred per run). They get no
+            # workspace, only the private /tmp.
+            'else args+=(--chdir /tmp); fi',
         ]
     lines += [
         'if [ -n "$RLM_SESSION_DIR" ]; then mkdir -p "$RLM_SESSION_DIR"; args+=(--bind "$RLM_SESSION_DIR" "$RLM_SESSION_DIR"); fi',
