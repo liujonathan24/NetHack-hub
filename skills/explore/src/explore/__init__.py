@@ -218,6 +218,38 @@ def validate_directive(directive: str, *, max_sentences: int = 2, max_chars: int
     return problems
 
 
+KERNEL_SNAPSHOT_FILES = ("kernel-state.dill", "kernel-state.json")
+
+
+def session_artifact_dir(session_file: Path) -> Path | None:
+    """Where Prime Agent keeps a session's artifacts, the kernel snapshot
+    among them: ``dirname(session dir)/session-artifacts/<header id>``."""
+    try:
+        with session_file.open(encoding="utf-8") as handle:
+            header = json.loads(handle.readline())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(header, dict) or header.get("type") != "session" or not header.get("id"):
+        return None
+    return session_file.parent.parent / "session-artifacts" / str(header["id"])
+
+
+def copy_kernel_snapshot(source: Path, copy: Path) -> bool:
+    """Put the source player's kernel snapshot where Prime Agent looks for
+    the COPY's, so ``fork_from`` on the copy also gives the player the
+    source's Python names. The file times are kept: the daemon compares the
+    snapshot's time with the conversation's last Python result to tell a
+    fresh snapshot from a stale one. No snapshot (the source never ran
+    Python, or its kernel died before a flush): nothing is copied."""
+    source_dir, copy_dir = session_artifact_dir(source), session_artifact_dir(copy)
+    if source_dir is None or copy_dir is None or not all((source_dir / name).is_file() for name in KERNEL_SNAPSHOT_FILES):
+        return False
+    copy_dir.mkdir(parents=True, exist_ok=True)
+    for name in KERNEL_SNAPSHOT_FILES:
+        shutil.copy2(source_dir / name, copy_dir / name)
+    return True
+
+
 def select(
     checkpoint_id: str,
     directive: str = "",
@@ -285,12 +317,14 @@ def select(
     # is gone, and its player's spawn fails before any model call instead of
     # replaying a finished attempt.
     session_ref = cut.fork_source()
+    kernel_snapshot = False
     if session_ref:
         source = Path(session_ref["session_file"] if isinstance(session_ref, dict) else session_ref)
         handoff = ledger.dir / "handoff" / f"attempt-{attempt}-{len(earlier) + 1}.jsonl"
         handoff.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, handoff)
-        session_ref = {**session_ref, "session_file": str(handoff)} if isinstance(session_ref, dict) else str(handoff)
+        kernel_snapshot = copy_kernel_snapshot(source, handoff)
+        session_ref ={**session_ref, "session_file": str(handoff)} if isinstance(session_ref, dict) else str(handoff)
         arm = getattr(adapter, "arm_handoff", None)
         if arm is not None:
             arm(ledger.dir, attempt, handoff)
@@ -314,6 +348,7 @@ def select(
             "blind": blind,
             "memory_ok": cut.ok,
             "memory": cut.as_dict(),
+            "kernel_snapshot": kernel_snapshot,
             "env_handle": restored.get("env_handle", chosen.env_handle),
         }
     )

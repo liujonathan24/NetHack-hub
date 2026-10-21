@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -178,6 +179,36 @@ class SelectTest(unittest.TestCase):
             self.assertIsNone(fresh["decision"]["next"]["session_ref"])
             selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
             self.assertIn("no player session recorded", selection["memory"]["reason"])
+
+    def test_the_handoff_carries_the_source_players_kernel_snapshot(self) -> None:
+        with TemporaryDirectory() as temp:
+            run = Path(temp)
+            # The daemon's layout: agent/sessions/<file>, agent/session-artifacts/<header id>/.
+            path = session_file(run / "agent" / "sessions", [tool_result("[call#9] saved here", ms=1000)])
+            source_dir = run / "agent" / "session-artifacts" / "sess-1"
+            source_dir.mkdir(parents=True)
+            for name, data in (("kernel-state.dill", b"\x80names"), ("kernel-state.json", b"{}")):
+                (source_dir / name).write_bytes(data)
+                os.utime(source_dir / name, (1_000, 1_000))
+            ledger = Ledger(run)
+            ledger.add_player(attempt=0, child="sub-a", session_file=str(path))
+            ledger.add_checkpoint(attempt=0, score={"dlvl": 4}, env_handle={"bundle": "c0"}, call=9, parent=None)
+            ledger.add_outcome(attempt=0, result="died", checkpoint_from=None)
+            nxt = explore.select("c0", "Go down.", run_dir=run, adapter=explore.ScriptedAdapter())["decision"]["next"]
+            handoff = Path(nxt["session_ref"]["session_file"])
+            # Prime Agent looks for the copy's snapshot by the copy's location.
+            copy_dir = explore.session_artifact_dir(handoff)
+            self.assertEqual(copy_dir, run / "session-artifacts" / "sess-1")
+            self.assertEqual((copy_dir / "kernel-state.dill").read_bytes(), b"\x80names")
+            # File times are kept, so the daemon's freshness check stays honest.
+            self.assertEqual((copy_dir / "kernel-state.json").stat().st_mtime, 1_000)
+            self.assertTrue([r for r in ledger.records() if r.get("kind") == "selection"][-1]["kernel_snapshot"])
+            # A source with no snapshot hands off none.
+            shutil.rmtree(copy_dir)
+            shutil.rmtree(source_dir)
+            explore.select("c0", "Go down.", run_dir=run, adapter=explore.ScriptedAdapter())
+            self.assertFalse(copy_dir.exists())
+            self.assertFalse([r for r in ledger.records() if r.get("kind") == "selection"][-1]["kernel_snapshot"])
             self.assertEqual(explore.stop("done")["decision"], {"stop": True, "reason": "done"})
             self.assertNotIn("next", explore.stop()["decision"])
 
