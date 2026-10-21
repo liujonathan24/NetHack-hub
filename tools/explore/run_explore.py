@@ -287,7 +287,7 @@ def build_kernel_venv(prime_agent: str, agent_dir: pathlib.Path, venv: pathlib.P
         socket_path.unlink(missing_ok=True)
 
 
-def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: pathlib.Path, workspace: pathlib.Path, machines_dir: pathlib.Path) -> pathlib.Path:
+def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: pathlib.Path, workspace: pathlib.Path, machines_dir: pathlib.Path, memory_gb: float = 8.0) -> pathlib.Path:
     """The kernel interpreter, wrapped in one bwrap per kernel process.
 
     Prime Agent runs every agent action in its python kernel (`python_repl`;
@@ -298,7 +298,13 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
     sessions, the shared memory store), /root/nld, or any other repo. The
     root kernel (RLM_DEPTH=0) also sees the machines dir: it starts the
     factory. Network stays shared (the game's MCP server and the explore
-    service are on localhost)."""
+    service are on localhost).
+
+    Each kernel also gets an address-space limit of `memory_gb` (0 = none).
+    A cell that allocates past it gets a MemoryError and the kernel lives;
+    without it, one runaway cell (a model's path search that never ends)
+    grows until the host's OOM killer takes the kernel, and the memory
+    pressure stalls every other process of the run."""
     site = next(venv.glob("lib/python*/site-packages"))
     code_dirs: set[str] = set()
     for pth in site.glob("*.pth"):
@@ -342,8 +348,10 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
         'if [ -n "$RLM_SESSION_DIR" ]; then mkdir -p "$RLM_SESSION_DIR"; args+=(--bind "$RLM_SESSION_DIR" "$RLM_SESSION_DIR"); fi',
         'if [ -n "$RLM_HARNESS_STATE_DIR" ]; then mkdir -p "$RLM_HARNESS_STATE_DIR"; args+=(--bind "$RLM_HARNESS_STATE_DIR" "$RLM_HARNESS_STATE_DIR"); fi',
         f'if [ "${{RLM_DEPTH:-0}}" = "0" ]; then args+=(--ro-bind "{machines_dir}" "{machines_dir}"); fi',
-        'exec bwrap "${args[@]}" "$REAL" "$@"',
     ]
+    if memory_gb:
+        lines.append(f"ulimit -v {int(memory_gb * 1024 * 1024)}")
+    lines.append('exec bwrap "${args[@]}" "$REAL" "$@"')
     wrapper = run_dir / "kernel-python"
     wrapper.write_text("\n".join(lines) + "\n", encoding="utf-8")
     wrapper.chmod(0o755)
@@ -386,6 +394,7 @@ def main(argv=None) -> int:
     parser.add_argument("--max-output-tokens", type=int, default=8192, help="with --context-window: the reply budget, so prompt + reply fits the window")
     parser.add_argument("--compaction-threshold-percent", type=float, default=80.0, help="with --context-window: compact at this share of the window")
     parser.add_argument("--no-sandbox", dest="sandbox", action="store_false", help="run the agents' kernels unsandboxed (default: one bwrap per kernel, which sees only the workspace and its own session)")
+    parser.add_argument("--kernel-memory-gb", type=float, default=8.0, help="with the sandbox: each kernel's address-space limit in GiB (ulimit -v); a cell past it gets a MemoryError instead of the host OOM killer. 0 = none")
     parser.add_argument("--dry-run", action="store_true", help="set everything up and print the command; do not start prime-agent")
     parser.add_argument("prime_agent_args", nargs="*", help="arguments after -- go to prime-agent")
     args = parser.parse_args(argv)
@@ -539,7 +548,7 @@ def main(argv=None) -> int:
     if args.sandbox:
         venv = pathlib.Path(env["PRIME_AGENT_KERNEL_VENV"])
         build_kernel_venv(args.prime_agent, agent_dir, venv, env, run_dir)
-        env["PRIME_AGENT_KERNEL_PYTHON"] = str(write_kernel_sandbox(run_dir, venv, agent_dir, workspace, machines_dir))
+        env["PRIME_AGENT_KERNEL_PYTHON"] = str(write_kernel_sandbox(run_dir, venv, agent_dir, workspace, machines_dir, args.kernel_memory_gb))
     model_flags = []
     for flag, value in (("--provider", args.provider), ("--model", args.model), ("--thinking", args.thinking)):
         if value:
