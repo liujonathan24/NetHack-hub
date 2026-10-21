@@ -3,11 +3,10 @@
 The **verifiers / Prime Intellect environment + LLM harness + research/eval
 tooling** for training and evaluating language-model agents on NetHack.
 
-This repo was extracted from the former `NetHackHarness` monorepo. It is
-**layer 2**: the RL/eval environment and everything built on top of it. It
-**depends on** the NetHack engine (**layer 1**, the repo `NetHack-engine`, the
-renamed engine half of `NetHackHarness`) and imports it under the
-`nethack_core` namespace. The engine never imports the Hub.
+It depends on the NetHack engine, the repo
+[`NetHack-engine`](https://github.com/liujonathan24/NetHack-engine), and
+imports it under the `nethack_core` namespace. The engine never imports the
+Hub.
 
 ```
 NetHack-engine  (nethack_core)  <-- external dependency (the fork engine + ctypes binding)
@@ -46,9 +45,6 @@ copy. `environments/nethack/pyproject.toml` declares:
 ```toml
 nethack-core @ git+https://github.com/liujonathan24/NetHack-engine.git
 ```
-
-(If that URL 404s because the engine repo is not yet populated, fall back to
-`git+https://github.com/liujonathan24/NetHackHarness.git`.)
 
 `nethack_core` wraps a compiled NetHack fork engine (`libnethack.so`). Installing
 the engine package builds/carries that binary; see the engine repo's README.
@@ -150,8 +146,7 @@ bash ../../tools/run_eval.sh
 ## The default task
 
 The env runs the **standard full NetHack ascension game** (`nethack.GameSpec` /
-`FULL_GAME_SPEC`). The former 13-tier named curriculum ladder has been removed
-(see the extraction notes). `nethack_harness/curriculum/` is kept as an empty
+`FULL_GAME_SPEC`). `nethack_harness/curriculum/` is kept as an empty
 seam for a future six-floor "primitives" curriculum that depends on unmerged
 fork hooks.
 
@@ -159,6 +154,4 @@ fork hooks.
 
 The env deploys to the Prime Hub as a wheel that carries the engine `.so` + data
 files (`hatch_build.py` build hook + the `artifacts` / `force-include` config in
-`environments/nethack/pyproject.toml`). That mechanism is preserved; note the
-build-time reconciliation with the external engine dependency described in the
-extraction notes.
+`environments/nethack/pyproject.toml`).
