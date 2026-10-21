@@ -147,6 +147,10 @@ class Server:
         self.trace = None
         self.stop_event = asyncio.Event()
         self.stop_reason = "server stopped"
+        # The player's recent kernel snapshots: a mirrored checkpoint keeps
+        # the newest one written before it (explore.checkpoint_kernel).
+        self.player_session: str | None = None
+        self.kernel_buffer = None
 
     # -- the ledger ------------------------------------------------------------
 
@@ -154,6 +158,42 @@ class Server:
         from explore.ledger import Ledger
 
         return Ledger(self.run_dir)
+
+    def watch_kernel(self) -> None:
+        """Buffer the attempt's player's kernel snapshot when it changes."""
+        from explore.checkpoint_kernel import KernelBuffer, attempt_player_session, session_artifact_dir
+
+        if self.kernel_buffer is None:
+            self.kernel_buffer = KernelBuffer(self.ready_path.with_suffix(".kernels"))
+        if self.player_session is None:
+            self.player_session = attempt_player_session(self.run_dir, self.args.attempt)
+            if self.player_session is None:
+                return
+        artifact_dir = session_artifact_dir(pathlib.Path(self.player_session))
+        if artifact_dir is not None:
+            self.kernel_buffer.watch(artifact_dir)
+
+    async def watch_kernel_loop(self, every: float = 0.5) -> None:
+        # Faster than the archive poll: a snapshot replaced within a poll
+        # would be lost, and the checkpoint would get an older kernel.
+        while not self.stop_event.is_set():
+            with contextlib.suppress(Exception):
+                self.watch_kernel()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.stop_event.wait(), timeout=every)
+
+    def store_checkpoint_kernel(self, checkpoint_id: str, created: float) -> None:
+        from explore.checkpoint_kernel import store_for_checkpoint
+
+        with contextlib.suppress(Exception):
+            self.watch_kernel()
+        try:
+            stored = store_for_checkpoint(self.run_dir, checkpoint_id, self.kernel_buffer, created, self.player_session)
+        except Exception as error:  # noqa: BLE001 - the checkpoint is kept without a kernel
+            self.log(f"checkpoint {checkpoint_id}: kernel not stored: {error!r}")
+            return
+        if not stored:
+            self.log(f"checkpoint {checkpoint_id}: no kernel snapshot before it")
 
     def mirror_archive(self) -> None:
         """Append this attempt's new checkpoints to the ledger."""
@@ -174,6 +214,9 @@ class Server:
             self.mirrored.add(directory.name)
             if checkpoint_id in known:
                 continue
+            # Before the ledger record: select() finds a checkpoint only
+            # through the ledger, and then its kernel is already stored.
+            self.store_checkpoint_kernel(checkpoint_id, created)
             ledger.add_checkpoint(
                 checkpoint_id=checkpoint_id,
                 attempt=self.args.attempt,
@@ -376,6 +419,7 @@ class Server:
         try:
             await self.boot()
             self.log("ready; serving")
+            self.kernel_task = asyncio.create_task(self.watch_kernel_loop())
             while not self.stop_event.is_set():
                 with contextlib.suppress(Exception):
                     self.mirror_archive()

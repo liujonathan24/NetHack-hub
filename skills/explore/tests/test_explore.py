@@ -179,17 +179,26 @@ class SelectTest(unittest.TestCase):
             self.assertIsNone(fresh["decision"]["next"]["session_ref"])
             selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
             self.assertIn("no player session recorded", selection["memory"]["reason"])
+            self.assertEqual(explore.stop("done")["decision"], {"stop": True, "reason": "done"})
+            self.assertNotIn("next", explore.stop()["decision"])
 
-    def test_the_handoff_carries_the_source_players_kernel_snapshot(self) -> None:
+    def test_the_handoff_carries_the_kernel_the_player_had_at_the_checkpoint(self) -> None:
         with TemporaryDirectory() as temp:
             run = Path(temp)
             # The daemon's layout: agent/sessions/<file>, agent/session-artifacts/<header id>/.
             path = session_file(run / "agent" / "sessions", [tool_result("[call#9] saved here", ms=1000)])
-            source_dir = run / "agent" / "session-artifacts" / "sess-1"
-            source_dir.mkdir(parents=True)
-            for name, data in (("kernel-state.dill", b"\x80names"), ("kernel-state.json", b"{}")):
-                (source_dir / name).write_bytes(data)
-                os.utime(source_dir / name, (1_000, 1_000))
+            # The source player's LATEST kernel knows how the attempt ended: never handed off.
+            latest = run / "agent" / "session-artifacts" / "sess-1"
+            latest.mkdir(parents=True)
+            (latest / "kernel-state.dill").write_bytes(b"msg = 'DIED on Dlvl 8'")
+            (latest / "kernel-state.json").write_bytes(b"{}")
+            # The kernel the game server stored when c0 was written.
+            stored = run / "checkpoint-kernels" / "c0"
+            stored.mkdir(parents=True)
+            (stored / "kernel-state.dill").write_bytes(b"helpers only")
+            (stored / "kernel-state.json").write_bytes(b"{}")
+            for name in ("kernel-state.dill", "kernel-state.json"):
+                os.utime(stored / name, (1_000, 1_000))
             ledger = Ledger(run)
             ledger.add_player(attempt=0, child="sub-a", session_file=str(path))
             ledger.add_checkpoint(attempt=0, score={"dlvl": 4}, env_handle={"bundle": "c0"}, call=9, parent=None)
@@ -199,18 +208,22 @@ class SelectTest(unittest.TestCase):
             # Prime Agent looks for the copy's snapshot by the copy's location.
             copy_dir = explore.session_artifact_dir(handoff)
             self.assertEqual(copy_dir, run / "session-artifacts" / "sess-1")
-            self.assertEqual((copy_dir / "kernel-state.dill").read_bytes(), b"\x80names")
-            # File times are kept, so the daemon's freshness check stays honest.
-            self.assertEqual((copy_dir / "kernel-state.json").stat().st_mtime, 1_000)
-            self.assertTrue([r for r in ledger.records() if r.get("kind") == "selection"][-1]["kernel_snapshot"])
-            # A source with no snapshot hands off none.
-            shutil.rmtree(copy_dir)
-            shutil.rmtree(source_dir)
+            self.assertEqual((copy_dir / "kernel-state.dill").read_bytes(), b"helpers only")
+            # A fresh file time: the daemon's freshness check must accept this
+            # deliberately older kernel.
+            self.assertGreater((copy_dir / "kernel-state.json").stat().st_mtime, 1_000)
+            selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
+            self.assertTrue(selection["kernel_snapshot"])
+            # A checkpoint without a stored kernel hands off none, and an
+            # earlier handoff's kernel does not linger for it.
+            shutil.rmtree(stored)
+            (stored.parent / "c0").mkdir()
+            (stored.parent / "c0" / "about.json").write_text(json.dumps({"ok": False, "reason": "no kernel snapshot written before the checkpoint"}))
             explore.select("c0", "Go down.", run_dir=run, adapter=explore.ScriptedAdapter())
-            self.assertFalse(copy_dir.exists())
-            self.assertFalse([r for r in ledger.records() if r.get("kind") == "selection"][-1]["kernel_snapshot"])
-            self.assertEqual(explore.stop("done")["decision"], {"stop": True, "reason": "done"})
-            self.assertNotIn("next", explore.stop()["decision"])
+            self.assertFalse((copy_dir / "kernel-state.dill").exists())
+            selection = [r for r in ledger.records() if r.get("kind") == "selection"][-1]
+            self.assertFalse(selection["kernel_snapshot"])
+            self.assertEqual(selection["kernel_reason"], "no kernel snapshot written before the checkpoint")
 
     def test_a_later_select_supersedes_the_earlier_one(self) -> None:
         class Recording(explore.ScriptedAdapter):
