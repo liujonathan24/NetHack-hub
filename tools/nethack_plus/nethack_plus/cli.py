@@ -1,7 +1,7 @@
 """nethack-plus: one command per NetHack experiment on Prime.
 
     nethack-plus single  -n 5 -r 15 --skills netcore,codehack --full-vision
-    nethack-plus explore -n 5 -r 1 -a 15 --skills netcore,codehack --full-vision
+    nethack-plus explore -n 5 -r 1 -a 15 -p 3 --skills netcore,codehack --full-vision
     nethack-plus status  runs/<name>
     nethack-plus summary runs/<name>
     nethack-plus resume  runs/<name>
@@ -72,10 +72,13 @@ def run_config(args, library: str, arm_dir: Path, concurrency: int) -> dict:
     if args.mode == "explore":
         taskset.update(
             attempts=args.attempts,
+            parallel=args.parallel,
             checkpoint_every=args.every,
             chooser=args.chooser,
             archive_dir=str(arm_dir / "archive"),
         )
+    # An explore run plays a round's attempts side by side: each is one agent of the run's episode.
+    agents = args.parallel if args.mode == "explore" else 1
     return {
         "model": args.model,
         "num_rollouts": args.reps,
@@ -87,7 +90,8 @@ def run_config(args, library: str, arm_dir: Path, concurrency: int) -> dict:
         "env": {
             "taskset": taskset,
             "agent": {"network_notice": False, "harness": {"id": args.harness}, "runtime": {"type": "prime"}},
-            "interception": {"multiplex": min(concurrency, 16)},
+            "interception": {"multiplex": min(concurrency * agents, 16)},
+            "max_concurrent_agents": agents,
         },
     }
 
@@ -151,6 +155,7 @@ def launch(args) -> int:
         "seed_base": args.seed_base,
         "reps": args.reps,
         "attempts": args.attempts if args.mode == "explore" else 1,
+        "parallel": args.parallel if args.mode == "explore" else 1,
         "libraries": libraries,
         "estimate": est,
         "balance_before": balance,
@@ -158,7 +163,8 @@ def launch(args) -> int:
     }
     (run / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"run directory: {run}")
-    peak = BOXES_PER_GAME * min(concurrency, args.seeds * args.reps) * len(libraries)
+    agents = args.parallel if args.mode == "explore" else 1
+    peak = BOXES_PER_GAME * agents * min(concurrency, args.seeds * args.reps) * len(libraries)
     print(f"sandboxes at peak: about {peak} (Prime has capped us near 56)")
     if args.dry_run:
         print("dry run: configs written, vf-eval not started")
@@ -208,6 +214,9 @@ def run_args(parser: argparse.ArgumentParser, mode: str) -> None:
     parser.add_argument("-r", "--reps", type=int, default=1, help="independent runs per seed (default 1)")
     if mode == "explore":
         parser.add_argument("-a", "--attempts", type=int, default=10, help="most attempts per run (default 10)")
+        parser.add_argument(
+            "-p", "--parallel", type=int, default=3, help="attempts of a run played at once, in rounds (default 3)"
+        )
         parser.add_argument("--every", type=int, default=20, help="checkpoint every N calls (default 20)")
         parser.add_argument(
             "--chooser",
@@ -264,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         args.attempts_given = "-a" in (argv or sys.argv) or "--attempts" in (argv or sys.argv)
         args.attempts = getattr(args, "attempts", 1)
         args.every = getattr(args, "every", 20)
+        args.parallel = getattr(args, "parallel", 1)
         args.chooser = getattr(args, "chooser", "model")
         unknown = set(args.skills.split(",")) - set(PROFILES)
         if unknown:

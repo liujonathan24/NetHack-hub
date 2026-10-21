@@ -6,7 +6,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
     # The verifiers taskset: the nethack env, its tool server and DEFAULT_IMAGE. The commit
     # and the game image move together (the image refuses a different game.py).
-    "nethack @ git+https://github.com/RL-Residency/residency-environments.git@9c8d044#subdirectory=environments/nethack",
+    "nethack @ git+https://github.com/RL-Residency/residency-environments.git@9dca4c4#subdirectory=environments/nethack",
 ]
 
 [project.scripts]
