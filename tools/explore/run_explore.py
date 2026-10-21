@@ -287,7 +287,7 @@ def build_kernel_venv(prime_agent: str, agent_dir: pathlib.Path, venv: pathlib.P
         socket_path.unlink(missing_ok=True)
 
 
-def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: pathlib.Path, workspace: pathlib.Path, machines_dir: pathlib.Path, memory_gb: float = 8.0) -> pathlib.Path:
+def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: pathlib.Path, workspace: pathlib.Path, machines_dir: pathlib.Path, memory_gb: float = 8.0, template: pathlib.Path | None = None) -> pathlib.Path:
     """The kernel interpreter, wrapped in one bwrap per kernel process.
 
     Prime Agent runs every agent action in its python kernel (`python_repl`;
@@ -299,6 +299,15 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
     root kernel (its session dir sits directly under the agent dir) also sees the machines dir: it starts the
     factory. Network stays shared (the game's MCP server and the explore
     service are on localhost).
+
+    With a `template` (the default; see main), every session works in its
+    OWN copy of the workspace: `<run>/workspaces/<session id>`, seeded from
+    the pristine template the first time that session's kernel starts, and
+    bound at the workspace's path, so the paths a kernel sees are the same
+    as in the base arm. Nothing one agent writes reaches another (a shared
+    workspace carried notes from attempt to attempt). A kernel restart of
+    the same session finds its copy again. A kernel without a session dir
+    (none is known to start one) gets a throwaway copy.
 
     Each kernel also gets an address-space limit of `memory_gb` (0 = none).
     A cell that allocates past it gets a MemoryError and the kernel lives;
@@ -343,8 +352,19 @@ def write_kernel_sandbox(run_dir: pathlib.Path, venv: pathlib.Path, agent_dir: p
     # and the NAME of its token variable): the runtime reads factory.enabled
     # and similar switches from it.
     lines.append(f'args+=(--ro-bind "{agent_dir / "settings.json"}" "{agent_dir / "settings.json"}")')
+    if template is None:
+        lines.append(f'args+=(--bind "{workspace}" "{workspace}" --chdir "{workspace}")')
+    else:
+        own_root = run_dir / "workspaces"
+        lines += [
+            f'mkdir -p "{own_root}"',
+            f'if [ -n "$RLM_SESSION_DIR" ]; then OWN="{own_root}/$(basename "$RLM_SESSION_DIR")"; else OWN="$(mktemp -d "{own_root}/no-session-XXXXXX")"; rmdir "$OWN"; fi',
+            # Seed once, atomically: a concurrent start of the same session
+            # loses the rename and drops its copy.
+            f'if [ ! -d "$OWN" ]; then seed="$OWN.seed-$$"; cp -a "{template}" "$seed"; mv -T "$seed" "$OWN" 2>/dev/null || rm -rf "$seed"; fi',
+            f'args+=(--bind "$OWN" "{workspace}" --chdir "{workspace}")',
+        ]
     lines += [
-        f'args+=(--bind "{workspace}" "{workspace}" --chdir "{workspace}")',
         'if [ -n "$RLM_SESSION_DIR" ]; then mkdir -p "$RLM_SESSION_DIR"; args+=(--bind "$RLM_SESSION_DIR" "$RLM_SESSION_DIR"); fi',
         'if [ -n "$RLM_HARNESS_STATE_DIR" ]; then mkdir -p "$RLM_HARNESS_STATE_DIR"; args+=(--bind "$RLM_HARNESS_STATE_DIR" "$RLM_HARNESS_STATE_DIR"); fi',
         # Only the root's kernel sees the machines dir. RLM_DEPTH never reaches
@@ -467,6 +487,13 @@ def main(argv=None) -> int:
     adapter = explore_adapter.NetHackAdapter()
     print(f"booting the attempt-0 game server in {run_dir} ...", flush=True)
     opener = adapter.fresh(attempt=0, run_dir=run_dir)
+    # The attempt-0 server wrote the workspace: keep a pristine copy before
+    # any agent starts. Every sandboxed session works in its own copy of it
+    # (write_kernel_sandbox); the root session's cwd, where Prime Agent reads
+    # AGENTS.md, stays this untouched workspace.
+    template = run_dir / "workspace-template"
+    shutil.rmtree(template, ignore_errors=True)
+    shutil.copytree(workspace, template, symlinks=True)
     server = opener["mcp_servers"][0]
     print(f"attempt 0: {server['url']}", flush=True)
     if taskset_json is not None:
@@ -552,7 +579,7 @@ def main(argv=None) -> int:
     if args.sandbox:
         venv = pathlib.Path(env["PRIME_AGENT_KERNEL_VENV"])
         build_kernel_venv(args.prime_agent, agent_dir, venv, env, run_dir)
-        env["PRIME_AGENT_KERNEL_PYTHON"] = str(write_kernel_sandbox(run_dir, venv, agent_dir, workspace, machines_dir, args.kernel_memory_gb))
+        env["PRIME_AGENT_KERNEL_PYTHON"] = str(write_kernel_sandbox(run_dir, venv, agent_dir, workspace, machines_dir, args.kernel_memory_gb, template))
     model_flags = []
     for flag, value in (("--provider", args.provider), ("--model", args.model), ("--thinking", args.thinking)):
         if value:
