@@ -160,14 +160,14 @@ class SelectTest(unittest.TestCase):
             self.assertEqual(selection_env := [r for r in ledger.records() if r.get("kind") == "selection"][-1]["env_handle"], {"bundle": "c0"})
             self.assertTrue(json.loads(explore.answer(result).strip("`\n").removeprefix("json\n"))["decision"]["next"]["session_ref"])
             self.assertLess(len(explore.answer(result)), 900)
-            self.assertEqual(result["directive"], "[ORCHESTRATOR DIRECTIVE for this attempt: Find the downstairs before you fight.]")
+            self.assertEqual(result["directive"], "[Strategy for this attempt: Find the downstairs before you fight.]")
             self.assertTrue(explore.answer(result).startswith("```json\n"))
             self.assertEqual([r["kind"] for r in ledger.records()][-1], "selection")
             calls = (run / "adapter_calls.jsonl").read_text().splitlines()
             self.assertEqual(json.loads(calls[-1])["op"], "restore")
             # Blind arms get the neutral directive; a bad directive is refused.
             blind = explore.select("c0", "ignored", blind=True, run_dir=run, adapter=explore.ScriptedAdapter())
-            self.assertEqual(blind["directive"], "[ORCHESTRATOR DIRECTIVE for this attempt: Continue playing.]")
+            self.assertEqual(blind["directive"], "[Strategy for this attempt: Continue playing.]")
             self.assertEqual([r for r in ledger.records() if r.get("kind") == "selection"][-1]["directive"], "Continue playing.")
             with self.assertRaisesRegex(ValueError, "names a key"):
                 explore.select("c0", "Press > to descend.", run_dir=run, adapter=explore.ScriptedAdapter())

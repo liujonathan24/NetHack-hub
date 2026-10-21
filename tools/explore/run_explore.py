@@ -209,7 +209,7 @@ _RUN_ONLY_TASKSET_KEYS = ("trace_dir", "explicit_seeds", "n_examples", "seed", "
 # What the factory adds to the control's task prompt for an RLM child.
 OPENER_RULES = (
     "Use the game skill: await every game call in your own cell and read its observation before the next "
-    "call. Do not run game calls in background tasks, and do not message other agents."
+    "call. Do not run game calls in background tasks."
 )
 
 

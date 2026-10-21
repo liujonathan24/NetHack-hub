@@ -228,15 +228,23 @@ class ExploreMachineRunTest(unittest.TestCase):
             self.assertEqual(players[0]["kwargs"]["mcp_servers"], [])
             # The directive reaches the player verbatim: no quotes, no escapes.
             self.assertTrue(
-                players[0]["prompt"].startswith('[ORCHESTRATOR DIRECTIVE for this attempt: Go deeper from c0. Avoid the "mines" door.]\n'),
+                players[0]["prompt"].startswith('[Strategy for this attempt: Go deeper from c0. Avoid the "mines" door.]\n'),
                 players[0]["prompt"][:160],
             )
             # A player sees nothing but the directive and the resume note: no
             # leaderboard, no other attempt's numbers, no path, no token.
+            openers = self.host.spawn_calls("explore-opener")
+            self.assertEqual(len(openers), 1)
+            for opener in openers:
+                for word in ("orchestrator", "other agents", "parent"):
+                    self.assertNotIn(word, opener["prompt"].lower())
             for prompt in (p["prompt"] for p in players):
                 self.assertNotIn("## Inputs", prompt)
                 self.assertNotIn("session_ref", prompt)
-                self.assertNotIn("checkpoint", prompt.lower().replace("from a checkpoint you saved", ""))
+                # Nor anything that says other agents exist (the user's rule:
+                # a child does not know it is one, or that others exist).
+                for word in ("checkpoint", "orchestrator", "other agents", "parent"):
+                    self.assertNotIn(word, prompt.lower())
                 self.assertNotIn(str(self.run_dir), prompt)
                 self.assertNotIn("Dlvl", prompt)
             # The ledger: three attempts, three checkpoints, two selections.

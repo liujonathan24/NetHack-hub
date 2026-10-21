@@ -72,7 +72,7 @@ __all__ = [
     "NotTheOrchestrator",
 ]
 
-DIRECTIVE_BLOCK_FORMAT = "[ORCHESTRATOR DIRECTIVE for this attempt: {directive}]"
+DIRECTIVE_BLOCK_FORMAT = "[Strategy for this attempt: {directive}]"
 BLIND_DIRECTIVE = "Continue playing."
 MACHINE_NAME = "explore"
 

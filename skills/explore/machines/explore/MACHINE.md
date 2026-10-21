@@ -51,7 +51,7 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
       "failure_policy": "continue",
       "subagent": {
         "name": "explore-opener",
-        "prompt": "Play the game from the start. Use the game skill: await every game call in your own cell and read its observation before the next call. Do not run game calls in background tasks, and do not message other agents. Play until you die or the harness stops you. You do not need to report anything at the end."
+        "prompt": "Play the game from the start. Use the game skill: await every game call in your own cell and read its observation before the next call. Do not run game calls in background tasks. Play until you die or the harness stops you. You do not need to report anything at the end."
       }
     },
     {
@@ -87,7 +87,7 @@ Set `EXPLORE_RUN_DIR` and `EXPLORE_ADAPTER` first. Watch progress with
         "name": "explore-player",
         "fork_from": {"input": "decision", "path": "next.session_ref"},
         "mcp_servers": {"input": "decision", "path": "next.mcp_servers"},
-        "prompt": "{directive}\nYou continue your own game from a checkpoint you saved earlier. The game is restored to that saved state. Your memory of the moves after the save does not apply: request the current observation first and play from what you see. Await every game call in your own cell and read its observation before the next call; do not run game calls in background tasks, and do not message other agents. Play until you die or the harness stops you. When you stop, end your final answer with a fenced json block of the form {\"summary\": {\"outcome\": \"<alive|died|stopped>\", \"note\": \"<one line>\"}}."
+        "prompt": "{directive}\nThe game was restored to an earlier save. Your memory of the moves after that save does not apply: request the current observation first and play from what you see. Await every game call in your own cell and read its observation before the next call; do not run game calls in background tasks. Play until you die or the harness stops you. When you stop, end your final answer with a fenced json block of the form {\"summary\": {\"outcome\": \"<alive|died|stopped>\", \"note\": \"<one line>\"}}."
       }
     }
   ],
