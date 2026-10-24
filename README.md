@@ -52,7 +52,7 @@ the engine package builds/carries that binary; see the engine repo's README.
 ## Running experiments
 
 Experiments on Prime run the verifiers `nethack` env from
-[residency-environments](https://github.com/RL-Residency/residency-environments/tree/9dca4c4/environments/nethack)
+[residency-environments](https://github.com/RL-Residency/residency-environments/tree/adffc89/environments/nethack)
 (verifiers 0.4). There are two ways to run it. Both play the same game in
 the same Prime boxes, so their results are comparable.
 
@@ -100,7 +100,7 @@ no flag for. Every taskset field is documented in the env's README
 `parallel`, `chooser`, ...).
 
 ```bash
-uv pip install "nethack @ git+https://github.com/RL-Residency/residency-environments.git@9dca4c4#subdirectory=environments/nethack"
+uv pip install "nethack @ git+https://github.com/RL-Residency/residency-environments.git@adffc89#subdirectory=environments/nethack"
 
 # single games
 uv run vf-eval nethack \
