@@ -3,51 +3,6 @@
 The **verifiers / Prime Intellect environment + LLM harness + research/eval
 tooling** for training and evaluating language-model agents on NetHack.
 
-It depends on the NetHack engine, the repo
-[`NetHack-engine`](https://github.com/liujonathan24/NetHack-engine), and
-imports it under the `nethack_core` namespace. The engine never imports the
-Hub.
-
-```
-NetHack-engine  (nethack_core)  <-- external dependency (the fork engine + ctypes binding)
-        ▲
-        │ imports
-NetHack-Hub     (this repo: environments/nethack, approaches/, tools/, docs/)
-```
-
-## What's here
-
-- `environments/nethack/` — the verifiers environment (`nethack.py`), the LLM
-  harness (`nethack_harness/`: prompt, tools/skills, memory, navigation,
-  refiner), configs, experiments, tests, and the Prime Hub wheel-deploy
-  machinery (`hatch_build.py`, `pyproject.toml`).
-- `approaches/` — research agents built on the env: Go-Explore, Voyager, RLM,
-  Continuous-Harness.
-- `tools/` — research / evaluation tooling: `encoding_eval/`, `eval_instrument.py`,
-  `run_eval.sh`, `trace_analyze.py`, `export_trials.py`, `dashboard.py`,
-  `profile_env.py`, `build_valkyrie_model.py`, `build_wiki_index.py`,
-  `curriculum_demo.py`, `curriculum_gifs.py`, `knob_gifs.py`, `record_demo.py`,
-  `render_floor.py`.
-- `configs/endpoints.toml`, `wiki/snapshot.json`, `outputs/` (research outputs),
-  and `docs/` (reference docs: eval recipes, parity report, capabilities,
-  repo map, etc.).
-
-The web console (`play_server.py`, `tools/webconsole/`, `tools/rollout_view/`,
-`Dockerfile.console`, `deploy/wasm-web`, videos) lives in a separate
-`NetHack-console` repo. The engine (`nethack_core/`, `nethack_interface/`,
-`third_party/NetHack`) lives in `NetHack-engine`.
-
-## The engine dependency
-
-The env sources `nethack_core` from the engine package rather than a vendored
-copy. `environments/nethack/pyproject.toml` declares:
-
-```toml
-nethack-core @ git+https://github.com/liujonathan24/NetHack-engine.git
-```
-
-`nethack_core` wraps a compiled NetHack fork engine (`libnethack.so`). Installing
-the engine package builds/carries that binary; see the engine repo's README.
 
 ## Running experiments
 
@@ -124,24 +79,20 @@ with plain vf-eval: each run directory holds the config it ran,
 `runs/<name>/<library>/config.json`, and
 `vf-eval @ runs/<name>/<library>/config.json` runs it again.
 
-### The Hub's own env
+## Dependencies
 
-`environments/nethack` in this repo is the older Hub env (an earlier
-verifiers, built directly on the engine). It is kept for `approaches/` and
-the research tools:
+This repo depends on the NetHack engine, the repo
+[`NetHack-engine`](https://github.com/liujonathan24/NetHack-engine), and
+imports it under the `nethack_core` namespace. 
 
-```bash
-pip install -e environments/nethack
-cd environments/nethack
-vf-eval nethack -m <model> -n <num_episodes>
-# or the research eval harness:
-bash ../../tools/run_eval.sh
+```
+NetHack-engine  (nethack_core)  <-- external dependency (the fork engine + ctypes binding)
+        ▲
+        │ imports
+NetHack-Hub     (this repo: environments/nethack, approaches/, tools/, docs/)
 ```
 
-`approaches/` and `tools/` import both `nethack_core` (engine) and
-`nethack_harness` (this repo's harness package under
-`environments/nethack/nethack_harness`), so keep the env installed / on
-`PYTHONPATH` when running them.
+The env sources `nethack_core`, the default set of skills, from the engine package as well.
 
 ## The default task
 
